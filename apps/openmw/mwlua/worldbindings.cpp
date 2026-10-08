@@ -307,6 +307,22 @@ namespace MWLua
                 "_pushObjectsFromExplosion");
         };
 
+        // Physics fork: carrying and ragdolls, for scripted tests (the player does this with Activate/Attack).
+        // The queries read physics state: call them with "lua num threads = 0".
+        api["_grabObject"] = [context](const GObject& object) {
+            context.mLuaManager->addAction(
+                [object] { MWBase::Environment::get().getWorld()->grabObject(object.ptr()); }, "_grabObject");
+        };
+        api["_releaseGrabbedObject"] = [context](bool throwObject) {
+            context.mLuaManager->addAction(
+                [throwObject] { MWBase::Environment::get().getWorld()->releaseGrabbedObject(throwObject); },
+                "_releaseGrabbedObject");
+        };
+        api["_isGrabbingObject"] = []() { return MWBase::Environment::get().getWorld()->isGrabbingObject(); };
+        api["_ragdollBoneCount"] = [](const GObject& actor) {
+            return MWBase::Environment::get().getWorld()->getRagdollBonePoses(actor.ptr()).size();
+        };
+
         api["_runStandardActivationAction"] = [context](const GObject& object, const GObject& actor) {
             if (!object.ptr().getRefData().activate())
                 return;
