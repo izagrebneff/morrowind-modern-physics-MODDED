@@ -60,7 +60,7 @@ objects:
   items:
     wood:    { file: ["Fx/LEFTWOD1.wav", "Fx/LEFTWOD2.wav", "Fx/punch 2.wav"], volume: [0.8, 1.0], pitch: [0.9, 1.1] }
     metal:   { file: ["Fx/item/blunt.wav", "Fx/Light Armor Hit.wav", "Fx/Medium Armor Hit.wav"], volume: [0.5, 0.7], pitch: [0.9, 1.1] }
-    ceramic: { file: ["Fx/LEFTWK1.wav", "Fx/LEFTWK2.wav", "Fx/RIGHTWK1.wav", "Fx/item/ring.wav"], volume: [0.7, 0.9], pitch: [0.9, 1.1] }
+    ceramic: { file: ["Fx/LEFTWK1.wav", "Fx/LEFTWK2.wav", "Fx/RIGHTWK1.wav", "Fx/RIGHTWK2.wav"], volume: [0.7, 0.9], pitch: [0.9, 1.1] }
     stone:   { file: ["Fx/trans/drstn_lokd.wav", "Fx/item/blunt.wav"], volume: [0.8, 1.0], pitch: [0.8, 1.0] }
     cloth:   { file: ["Fx/punch 1.wav", "Fx/bodyfallSML.wav"], volume: [0.5, 0.7], pitch: [0.8, 1.0] }
     earth:   { file: ["Fx/bodyfallSML.wav", "Fx/FOOT/land_lt.wav"], volume: [0.6, 0.8], pitch: [0.9, 1.1] }
