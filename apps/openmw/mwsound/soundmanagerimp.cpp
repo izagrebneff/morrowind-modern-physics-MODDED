@@ -646,7 +646,7 @@ namespace MWSound
     }
 
     Sound* SoundManager::playSound3D(const osg::Vec3f& initialPos, const ESM::RefId& soundId, float volume, float pitch,
-        Type type, PlayMode mode, float offset)
+        Type type, PlayMode mode, float offset, float minDistance, float maxDistance)
     {
         if (!mOutput->isInitialized())
             return nullptr;
@@ -655,24 +655,26 @@ namespace MWSound
         SoundBuffer* sfx = mSoundBuffers.load(soundId);
         if (!sfx)
             return nullptr;
-        return playSound3D(initialPos, sfx, volume, pitch, type, mode, offset);
+        return playSound3D(initialPos, sfx, volume, pitch, type, mode, offset, minDistance, maxDistance);
     }
 
     Sound* SoundManager::playSound3D(const osg::Vec3f& initialPos, VFS::Path::NormalizedView fileName, float volume,
-        float pitch, Type type, PlayMode mode, float offset)
+        float pitch, Type type, PlayMode mode, float offset, float minDistance, float maxDistance)
     {
         if (!mOutput->isInitialized() || !mVFS->exists(fileName))
             return nullptr;
         SoundBuffer* const sfx = mSoundBuffers.load(fileName);
         if (!sfx)
             return nullptr;
-        return playSound3D(initialPos, sfx, volume, pitch, type, mode, offset);
+        return playSound3D(initialPos, sfx, volume, pitch, type, mode, offset, minDistance, maxDistance);
     }
 
     Sound* SoundManager::playSound3D(const osg::Vec3f& initialPos, SoundBuffer* sfx, float volume, float pitch,
-        Type type, PlayMode mode, float offset)
+        Type type, PlayMode mode, float offset, float minDistance, float maxDistance)
     {
         const float squaredDist = (mListenerPos - initialPos).length2();
+        const float minDist = minDistance > 0 ? minDistance : sfx->getMinDist();
+        const float maxDist = std::max(minDist, maxDistance > 0 ? maxDistance : sfx->getMaxDist());
 
         SoundPtr sound = getSoundRef();
         sound->init([&] {
@@ -680,10 +682,10 @@ namespace MWSound
             params.mPos = initialPos;
             params.mVolume = volume * sfx->getVolume();
             params.mBaseVolume = volumeFromType(type);
-            params.mFadeVolume = initialFadeVolume(squaredDist, sfx, type, mode);
+            params.mFadeVolume = squaredDist > maxDist * maxDist ? 0.f : initialFadeVolume(squaredDist, sfx, type, mode);
             params.mPitch = pitch;
-            params.mMinDistance = sfx->getMinDist();
-            params.mMaxDistance = sfx->getMaxDist();
+            params.mMinDistance = minDist;
+            params.mMaxDistance = maxDist;
             params.mFlags = mode | type | Play_3D;
             return params;
         }());

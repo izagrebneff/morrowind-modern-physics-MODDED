@@ -187,15 +187,18 @@ namespace MWBase
         ///< @param offset Number of seconds into the sound to start playback.
 
         virtual Sound* playSound3D(const osg::Vec3f& initialPos, const ESM::RefId& soundId, float volume, float pitch,
-            Type type = Type::Sfx, PlayMode mode = PlayMode::Normal, float offset = 0)
+            Type type = Type::Sfx, PlayMode mode = PlayMode::Normal, float offset = 0, float minDistance = 0,
+            float maxDistance = 0)
             = 0;
         ///< Play a 3D sound at \a initialPos. If the sound should be moving, it must be updated using
         ///< Sound::setPosition.
 
         virtual Sound* playSound3D(const osg::Vec3f& initialPos, VFS::Path::NormalizedView fileName, float volume,
-            float pitch, Type type = Type::Sfx, PlayMode mode = PlayMode::Normal, float offset = 0)
+            float pitch, Type type = Type::Sfx, PlayMode mode = PlayMode::Normal, float offset = 0,
+            float minDistance = 0, float maxDistance = 0)
             = 0;
         ///< Play a sound file (one without a sound record) at \a initialPos.
+        ///< minDistance, maxDistance: if not 0, instead of the sound's own (full volume within, silent beyond).
 
         virtual void stopSound(Sound* sound) = 0;
         ///< Stop the given sound from playing

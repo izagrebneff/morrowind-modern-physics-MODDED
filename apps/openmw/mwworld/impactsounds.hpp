@@ -54,6 +54,9 @@ namespace MWWorld
             float mObjectCooldown = 0.15f;
             int mMaxSounds = 6;
             float mMaxSoundsWindow = 0.4f;
+            float mMinDistance = 500.f; // full volume within
+            float mMaxDistance = 4000.f; // silent beyond
+            float mQuietest = 0.6f; // share of the volume for the softest impact that is heard
         };
 
         /// One kind of impact sound: any of these sound records or files (in the Sound folder), at a volume and

@@ -248,11 +248,12 @@ namespace MWSound
         ///< @param offset Number of seconds into the sound to start playback.
 
         Sound* playSound3D(const osg::Vec3f& initialPos, const ESM::RefId& soundId, float volume, float pitch,
-            Type type, PlayMode mode, float offset = 0) override;
+            Type type, PlayMode mode, float offset = 0, float minDistance = 0, float maxDistance = 0) override;
         Sound* playSound3D(const osg::Vec3f& initialPos, VFS::Path::NormalizedView fileName, float volume,
-            float pitch, Type type, PlayMode mode, float offset = 0) override;
+            float pitch, Type type, PlayMode mode, float offset = 0, float minDistance = 0,
+            float maxDistance = 0) override;
         Sound* playSound3D(const osg::Vec3f& initialPos, SoundBuffer* sfx, float volume, float pitch, Type type,
-            PlayMode mode, float offset);
+            PlayMode mode, float offset, float minDistance, float maxDistance);
         ///< Play a 3D sound at \a initialPos. If the sound should be moving, it must be updated using
         ///< Sound::setPosition.
         ///< @param offset Number of seconds into the sound to start playback.

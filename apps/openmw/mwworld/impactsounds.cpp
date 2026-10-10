@@ -159,6 +159,9 @@ namespace MWWorld
                 read(node, "object cooldown", limits.mObjectCooldown);
                 read(node, "max sounds", limits.mMaxSounds);
                 read(node, "max sounds window", limits.mMaxSoundsWindow);
+                read(node, "full volume within", limits.mMinDistance);
+                read(node, "heard up to", limits.mMaxDistance);
+                read(node, "quietest", limits.mQuietest);
             }
             float projectileLoudSpeed = 2500.f;
             ByMaterial projectileStick;
@@ -249,7 +252,7 @@ namespace MWWorld
             return;
         const Choice* choice = find(stuck ? mProjectileStick : mProjectileGlance, surface);
         const std::string result = choice != nullptr
-            ? play(*choice, position, std::clamp(speed / mProjectileLoudSpeed, 0.2f, 1.f), {})
+            ? play(*choice, position, std::clamp(speed / mProjectileLoudSpeed, 0.f, 1.f), {})
             : std::string("no sound for it");
         log(std::format("projectile {} {} {} speed {:.0f} at {:.0f} {:.0f} {:.0f}: {}", what,
             stuck ? "sticks in" : "glances off", getMaterialName(surface), speed, position.x(), position.y(),
@@ -265,7 +268,8 @@ namespace MWWorld
         const size_t count = choice.mSounds.size() + choice.mFiles.size();
         const size_t pick = std::min(count - 1,
             static_cast<size_t>(Misc::Rng::rollProbability(prng()) * count));
-        const float volume = between(choice.mVolume) * strength;
+        // Harder is louder, but even a soft knock is clearly heard.
+        const float volume = between(choice.mVolume) * (mLimits.mQuietest + (1 - mLimits.mQuietest) * strength);
         const float pitch = between(choice.mPitch);
         MWBase::SoundManager& sounds = *MWBase::Environment::get().getSoundManager();
         std::string name;
@@ -273,13 +277,15 @@ namespace MWWorld
         if (pick < choice.mSounds.size())
         {
             name = choice.mSounds[pick];
-            sound = sounds.playSound3D(position, ESM::RefId::stringRefId(name), volume, pitch);
+            sound = sounds.playSound3D(position, ESM::RefId::stringRefId(name), volume, pitch, MWSound::Type::Sfx,
+                MWSound::PlayMode::Normal, 0, mLimits.mMinDistance, mLimits.mMaxDistance);
         }
         else
         {
             name = choice.mFiles[pick - choice.mSounds.size()];
             const VFS::Path::Normalized file = Misc::ResourceHelpers::correctSoundPath(VFS::Path::Normalized(name));
-            sound = sounds.playSound3D(position, VFS::Path::NormalizedView(file), volume, pitch);
+            sound = sounds.playSound3D(position, VFS::Path::NormalizedView(file), volume, pitch, MWSound::Type::Sfx,
+                MWSound::PlayMode::Normal, 0, mLimits.mMinDistance, mLimits.mMaxDistance);
         }
         // Out of earshot is fine; a name that doesn't exist is worth knowing about.
         const bool unknown = sound == nullptr
@@ -288,7 +294,8 @@ namespace MWWorld
                         == nullptr
                     : !MWBase::Environment::get().getResourceSystem()->getVFS()->exists(
                         Misc::ResourceHelpers::correctSoundPath(VFS::Path::Normalized(name))));
-        return std::format("\"{}\" volume {:.2f} pitch {:.2f}{}", name, volume, pitch, unknown ? " (NO SUCH SOUND)" : "");
+        return std::format("\"{}\" volume {:.2f} pitch {:.2f}{}", name, volume, pitch,
+            unknown ? " (NO SUCH SOUND)" : (sound == nullptr ? " (not started)" : ""));
     }
 
     bool ImpactSounds::allow(std::initializer_list<const void*> keys, std::string& why)

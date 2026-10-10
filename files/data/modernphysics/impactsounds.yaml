@@ -16,6 +16,13 @@ limits:
   # At most this many impact sounds may start within "max sounds window" seconds; more are skipped.
   max sounds: 6
   max sounds window: 0.4
+  # How far impact sounds carry: full volume within this distance, fading beyond it (half volume at
+  # twice the distance, and so on), and silent past "heard up to". (Morrowind's own sounds mostly use
+  # 100 and 2000, which is too quiet for something hitting a wall across the room.)
+  full volume within: 500
+  heard up to: 4000
+  # The softest impact that still makes a sound plays at this share of its volume; the hardest at full.
+  quietest: 0.6
 
 # How a sound is given (here and below):
 #   sound:  a sound record, or a list of them   (e.g. "Hand to Hand Hit 2"; try one with PlaySound "..." in the console)
@@ -33,8 +40,8 @@ projectiles:
   # Stuck in what was hit: a thunk.
   stick:
     wood:    { file: "Fx/LEFTWOD1.wav", sound: "Hand to Hand Hit 2", volume: [0.8, 1.0], pitch: [1.1, 1.3] }
-    earth:   { sound: "Body Fall Small", volume: [0.4, 0.5], pitch: [1.3, 1.5] }
-    cloth:   { sound: "Hand To Hand Hit", volume: [0.4, 0.5], pitch: [1.2, 1.4] }
+    earth:   { sound: "Body Fall Small", volume: [0.8, 1.0], pitch: [1.3, 1.5] }
+    cloth:   { sound: "Hand To Hand Hit", volume: [0.7, 0.9], pitch: [1.2, 1.4] }
     default: { sound: "Hand to Hand Hit 2", volume: [0.7, 0.9], pitch: [1.1, 1.3] }
   # Glancing off: a clatter, or a clang off metal.
   glance:
