@@ -39,6 +39,7 @@
 
 #include "../mwworld/class.hpp"
 #include "../mwworld/esmstore.hpp"
+#include "../mwworld/impactsounds.hpp"
 #include "../mwworld/materials.hpp"
 #include "../mwworld/inventorystore.hpp"
 #include "../mwworld/manualref.hpp"
@@ -642,6 +643,7 @@ namespace MWWorld
                 // Fixed things made of something soft enough (wood, plants, earth) catch it. It glances off stone
                 // and metal, and off loose items, doors and water.
                 bool stick = false;
+                MWWorld::Material material = MWWorld::Material::Unknown;
                 osg::Vec3f stickPoint = hitPosition;
                 const bool hitTerrain = target.isEmpty() && !projectile->getHitWater();
                 const bool hitStatic
@@ -657,13 +659,22 @@ namespace MWWorld
                     const VFS::Path::Normalized model
                         = hitStatic ? target.getClass().getCorrectedModel(target) : VFS::Path::Normalized();
                     // Bare ground takes arrows unless it looks rocky; unrecognized objects deflect them.
-                    stick = MWWorld::isSoftMaterial(MWWorld::classifySurface(surface.mTexture, model.value(),
-                        hitTerrain || surface.mTerrain ? MWWorld::Material::Earth : MWWorld::Material::Stone));
+                    material = MWWorld::classifySurface(surface.mTexture, model.value(),
+                        hitTerrain || surface.mTerrain ? MWWorld::Material::Earth : MWWorld::Material::Stone);
+                    stick = MWWorld::isSoftMaterial(material);
                     if (surface.mHit)
                         stickPoint = surface.mPosition;
                 }
+                else if (!target.isEmpty() && target.getClass().isDoor())
+                    material = MWWorld::classifySurface(
+                        {}, target.getClass().getCorrectedModel(target).value(), MWWorld::Material::Wood);
                 placeMissedProjectile(projectileState, stick ? stickPoint : osg::Vec3f(hitPosition),
                     Misc::Convert::toOsg(projectile->getHitNormal()), stick);
+
+                // Heard where it hit. (Items and water have their own sounds.)
+                if (hitTerrain || hitStatic || material != MWWorld::Material::Unknown)
+                    ImpactSounds::get().projectileHit(stick ? stickPoint : osg::Vec3f(hitPosition), material, stick,
+                        projectileState.mVelocity.length(), projectilePtr.getCellRef().getRefId().toDebugString());
             }
 
             projectileState.mToDelete = true;

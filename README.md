@@ -78,6 +78,16 @@ They aren't in the in-game options or the launcher yet.
 | Setting | Default | What it does |
 |---|---|---|
 | `recoverable stuck projectiles` | `true` | Stuck arrows are real items, as described above. `false`: any hit shows an arrow stuck for a while, and the ones that stay go straight into the target's inventory (as in v1.0). |
+| `impact sounds` | `true` | All impact sounds below. `false` turns them all off. |
+| `projectile impact sounds` | `true` | Arrows, bolts and thrown weapons hitting the world: a thunk where they stick, a clatter or clang where they glance off. |
+| `object impact sounds` | `true` | Items and bodies landing, falling and knocking into things. |
+| `melee world impact sounds` | `true` | Melee swings hitting walls, the ground or furniture instead of someone. |
+| `extended water splashes` | `true` | Splashes for bodies and projectiles hitting water, scaled by size and speed. |
+| `impact sound debug` | `false` | Writes every impact to `openmw.log` (what hit what, the materials, the sound picked), and re-reads the sound file below as soon as it is saved. |
+
+Impact sounds use only Morrowind's own sounds, and play where the impact is. Which sounds, how loud, pitches and
+limits are in `resourcesfs\modernphysics\impactsounds.yaml` (explained inside), which you can edit without
+rebuilding anything.
 
 For example:
 ```

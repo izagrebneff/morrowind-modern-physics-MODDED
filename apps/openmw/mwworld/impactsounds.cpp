@@ -8,12 +8,18 @@
 #include <yaml-cpp/yaml.h>
 
 #include <components/debug/debuglog.hpp>
+#include <components/esm3/loadsoun.hpp>
+#include <components/misc/resourcehelpers.hpp>
+#include <components/misc/rng.hpp>
 #include <components/resource/resourcesystem.hpp>
 #include <components/sceneutil/positionattitudetransform.hpp>
 #include <components/settings/values.hpp>
 #include <components/vfs/manager.hpp>
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/soundmanager.hpp"
+
+#include "../mwworld/esmstore.hpp"
 
 #include "../mwphysics/physicssystem.hpp"
 
@@ -33,6 +39,79 @@ namespace MWWorld
         {
             if (const YAML::Node child = node[key])
                 value = child.as<T>();
+        }
+
+        std::vector<std::string> readStrings(const YAML::Node& node)
+        {
+            if (!node)
+                return {};
+            if (node.IsSequence())
+                return node.as<std::vector<std::string>>();
+            return { node.as<std::string>() };
+        }
+
+        void readRange(const YAML::Node& node, float (&range)[2])
+        {
+            if (!node)
+                return;
+            if (node.IsSequence() && node.size() == 2)
+            {
+                range[0] = node[0].as<float>();
+                range[1] = node[1].as<float>();
+            }
+            else
+                range[0] = range[1] = node.as<float>();
+        }
+
+        ImpactSounds::Choice readChoice(const YAML::Node& node)
+        {
+            ImpactSounds::Choice choice;
+            choice.mSounds = readStrings(node["sound"]);
+            choice.mFiles = readStrings(node["file"]);
+            readRange(node["volume"], choice.mVolume);
+            readRange(node["pitch"], choice.mPitch);
+            return choice;
+        }
+
+        Material readMaterial(const std::string& name)
+        {
+            for (Material material : { Material::Wood, Material::Stone, Material::Ceramic, Material::Metal,
+                     Material::Earth, Material::Cloth, Material::Flesh })
+                if (getMaterialName(material) == name)
+                    return material;
+            if (name != "default")
+                throw std::runtime_error("unknown material '" + name + "'");
+            return Material::Unknown;
+        }
+
+        ImpactSounds::ByMaterial readByMaterial(const YAML::Node& node)
+        {
+            ImpactSounds::ByMaterial result;
+            if (node)
+                for (const auto& entry : node)
+                    result[readMaterial(entry.first.as<std::string>())] = readChoice(entry.second);
+            return result;
+        }
+
+        const ImpactSounds::Choice* find(const ImpactSounds::ByMaterial& choices, Material material)
+        {
+            auto found = choices.find(material);
+            if (found == choices.end())
+                found = choices.find(Material::Unknown);
+            return found == choices.end() || found->second.empty() ? nullptr : &found->second;
+        }
+
+        // Not the game's: picking sounds shouldn't change the dice of the game itself.
+        Misc::Rng::Generator& prng()
+        {
+            static Misc::Rng::Generator generator(Misc::Rng::generateDefaultSeed());
+            return generator;
+        }
+
+        float between(const float (&range)[2])
+        {
+            return range[0]
+                + (range[1] - range[0]) * Misc::Rng::rollProbability(prng());
         }
 
         Material materialOf(const Ptr& ptr)
@@ -81,7 +160,19 @@ namespace MWWorld
                 read(node, "max sounds", limits.mMaxSounds);
                 read(node, "max sounds window", limits.mMaxSoundsWindow);
             }
+            float projectileLoudSpeed = 2500.f;
+            ByMaterial projectileStick;
+            ByMaterial projectileGlance;
+            if (const YAML::Node node = root["projectiles"])
+            {
+                read(node, "loud speed", projectileLoudSpeed);
+                projectileStick = readByMaterial(node["stick"]);
+                projectileGlance = readByMaterial(node["glance"]);
+            }
             mLimits = limits;
+            mProjectileLoudSpeed = projectileLoudSpeed;
+            mProjectileStick = std::move(projectileStick);
+            mProjectileGlance = std::move(projectileGlance);
             Log(Debug::Info) << "Impact sounds: loaded " << configPath;
         }
         catch (const std::exception& e)
@@ -149,6 +240,55 @@ namespace MWWorld
             nameOf(impact.mBody), getMaterialName(bodyMaterial), nameOf(impact.mOther), getMaterialName(otherMaterial),
             impact.mOtherSimulated ? ", simulated" : "", impact.mSpeed, impact.mBodyMass, impact.mPoint.x(),
             impact.mPoint.y(), impact.mPoint.z(), allowed ? "ok" : why));
+    }
+
+    void ImpactSounds::projectileHit(
+        const osg::Vec3f& position, Material surface, bool stuck, float speed, std::string_view what)
+    {
+        if (!Settings::modernPhysics().mImpactSounds || !Settings::modernPhysics().mProjectileImpactSounds)
+            return;
+        const Choice* choice = find(stuck ? mProjectileStick : mProjectileGlance, surface);
+        const std::string result = choice != nullptr
+            ? play(*choice, position, std::clamp(speed / mProjectileLoudSpeed, 0.2f, 1.f), {})
+            : std::string("no sound for it");
+        log(std::format("projectile {} {} {} speed {:.0f} at {:.0f} {:.0f} {:.0f}: {}", what,
+            stuck ? "sticks in" : "glances off", getMaterialName(surface), speed, position.x(), position.y(),
+            position.z(), result));
+    }
+
+    std::string ImpactSounds::play(
+        const Choice& choice, const osg::Vec3f& position, float strength, std::initializer_list<const void*> keys)
+    {
+        std::string why;
+        if (!allow(keys, why))
+            return why;
+        const size_t count = choice.mSounds.size() + choice.mFiles.size();
+        const size_t pick = std::min(count - 1,
+            static_cast<size_t>(Misc::Rng::rollProbability(prng()) * count));
+        const float volume = between(choice.mVolume) * strength;
+        const float pitch = between(choice.mPitch);
+        MWBase::SoundManager& sounds = *MWBase::Environment::get().getSoundManager();
+        std::string name;
+        MWSound::Sound* sound;
+        if (pick < choice.mSounds.size())
+        {
+            name = choice.mSounds[pick];
+            sound = sounds.playSound3D(position, ESM::RefId::stringRefId(name), volume, pitch);
+        }
+        else
+        {
+            name = choice.mFiles[pick - choice.mSounds.size()];
+            const VFS::Path::Normalized file = Misc::ResourceHelpers::correctSoundPath(VFS::Path::Normalized(name));
+            sound = sounds.playSound3D(position, VFS::Path::NormalizedView(file), volume, pitch);
+        }
+        // Out of earshot is fine; a name that doesn't exist is worth knowing about.
+        const bool unknown = sound == nullptr
+            && (pick < choice.mSounds.size()
+                    ? MWBase::Environment::get().getESMStore()->get<ESM::Sound>().search(ESM::RefId::stringRefId(name))
+                        == nullptr
+                    : !MWBase::Environment::get().getResourceSystem()->getVFS()->exists(
+                        Misc::ResourceHelpers::correctSoundPath(VFS::Path::Normalized(name))));
+        return std::format("\"{}\" volume {:.2f} pitch {:.2f}{}", name, volume, pitch, unknown ? " (NO SUCH SOUND)" : "");
     }
 
     bool ImpactSounds::allow(std::initializer_list<const void*> keys, std::string& why)

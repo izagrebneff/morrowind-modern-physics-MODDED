@@ -7,6 +7,8 @@
 
 #include <deque>
 #include <filesystem>
+#include <map>
+#include <string_view>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -37,6 +39,10 @@ namespace MWWorld
         /// impacts of simulated objects.
         void update(float duration, MWPhysics::PhysicsSystem& physics, MWRender::RenderingManager& rendering);
 
+        /// An arrow, bolt or thrown weapon hit the world (not someone, not an item, not water) at position, and stuck
+        /// in it or glanced off. speed: how fast it flew.
+        void projectileHit(const osg::Vec3f& position, Material surface, bool stuck, float speed, std::string_view what);
+
         /// The last impacts and what was done about them, newest last (for tests and tuning).
         const std::deque<std::string>& getLog() const { return mLog; }
         void clearLog() { mLog.clear(); }
@@ -50,6 +56,19 @@ namespace MWWorld
             float mMaxSoundsWindow = 0.4f;
         };
 
+        /// One kind of impact sound: any of these sound records or files (in the Sound folder), at a volume and
+        /// pitch picked between their limits.
+        struct Choice
+        {
+            std::vector<std::string> mSounds;
+            std::vector<std::string> mFiles;
+            float mVolume[2] = { 1.f, 1.f };
+            float mPitch[2] = { 1.f, 1.f };
+            bool empty() const { return mSounds.empty() && mFiles.empty(); }
+        };
+        /// Choices by the material hit; Material::Unknown is the default.
+        using ByMaterial = std::map<Material, Choice>;
+
     private:
         ImpactSounds() = default;
 
@@ -62,7 +81,15 @@ namespace MWWorld
 
         void log(std::string&& entry);
 
+        /// Play a choice at position, at strength (0 to 1: how hard the impact was) of its volume, if allowed for
+        /// these objects. Returns what was played, or why nothing was, for the log.
+        std::string play(const Choice& choice, const osg::Vec3f& position, float strength,
+            std::initializer_list<const void*> keys);
+
         Limits mLimits;
+        float mProjectileLoudSpeed = 2500.f;
+        ByMaterial mProjectileStick;
+        ByMaterial mProjectileGlance;
         bool mConfigLoaded = false;
         std::filesystem::file_time_type mConfigTime;
         float mConfigCheckTimer = 0;

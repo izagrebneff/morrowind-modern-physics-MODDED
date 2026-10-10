@@ -655,7 +655,23 @@ namespace MWSound
         SoundBuffer* sfx = mSoundBuffers.load(soundId);
         if (!sfx)
             return nullptr;
+        return playSound3D(initialPos, sfx, volume, pitch, type, mode, offset);
+    }
 
+    Sound* SoundManager::playSound3D(const osg::Vec3f& initialPos, VFS::Path::NormalizedView fileName, float volume,
+        float pitch, Type type, PlayMode mode, float offset)
+    {
+        if (!mOutput->isInitialized() || !mVFS->exists(fileName))
+            return nullptr;
+        SoundBuffer* const sfx = mSoundBuffers.load(fileName);
+        if (!sfx)
+            return nullptr;
+        return playSound3D(initialPos, sfx, volume, pitch, type, mode, offset);
+    }
+
+    Sound* SoundManager::playSound3D(const osg::Vec3f& initialPos, SoundBuffer* sfx, float volume, float pitch,
+        Type type, PlayMode mode, float offset)
+    {
         const float squaredDist = (mListenerPos - initialPos).length2();
 
         SoundPtr sound = getSoundRef();

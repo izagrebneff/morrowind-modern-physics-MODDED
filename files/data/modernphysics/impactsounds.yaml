@@ -16,3 +16,30 @@ limits:
   # At most this many impact sounds may start within "max sounds window" seconds; more are skipped.
   max sounds: 6
   max sounds window: 0.4
+
+# How a sound is given (here and below):
+#   sound:  a sound record, or a list of them   (e.g. "Hand to Hand Hit 2"; try one with PlaySound "..." in the console)
+#   file:   a file in Data Files/Sound, or a list (e.g. "Fx/LEFTWOD1.wav", one of Morrowind's unused sounds)
+#   volume: 0 to 1, or [lowest, highest]; it is also scaled by how hard the impact was
+#   pitch:  1 is normal, or [lowest, highest]; each time a value in between is picked
+# With several sounds and files, one of them is picked each time.
+# Materials: wood, stone, ceramic (pottery, glass), metal, earth (dirt, plants), cloth (also leather, paper),
+# flesh (bodies), and default (anything not listed).
+
+# Arrows, bolts and thrown weapons hitting the world (not people, items or water).
+projectiles:
+  # Flying this fast (or faster) is full volume.
+  loud speed: 2500
+  # Stuck in what was hit: a thunk.
+  stick:
+    wood:    { file: "Fx/LEFTWOD1.wav", sound: "Hand to Hand Hit 2", volume: [0.8, 1.0], pitch: [1.1, 1.3] }
+    earth:   { sound: "Body Fall Small", volume: [0.4, 0.5], pitch: [1.3, 1.5] }
+    cloth:   { sound: "Hand To Hand Hit", volume: [0.4, 0.5], pitch: [1.2, 1.4] }
+    default: { sound: "Hand to Hand Hit 2", volume: [0.7, 0.9], pitch: [1.1, 1.3] }
+  # Glancing off: a clatter, or a clang off metal.
+  glance:
+    metal:   { sound: ["Light Armor Hit", "Medium Armor Hit"], volume: [0.6, 0.8], pitch: [1.1, 1.3] }
+    stone:   { sound: "Item Ammo Down", volume: [0.8, 1.0], pitch: [0.9, 1.1] }
+    ceramic: { sound: "Item Ammo Down", volume: [0.7, 0.9], pitch: [1.1, 1.3] }
+    wood:    { file: "Fx/LEFTWOD1.wav", volume: [0.7, 0.9], pitch: [1.0, 1.2] }
+    default: { sound: "Item Ammo Down", volume: [0.8, 1.0], pitch: [0.9, 1.1] }
