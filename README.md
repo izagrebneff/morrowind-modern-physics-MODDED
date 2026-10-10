@@ -55,6 +55,8 @@ What this fork changes
   enchanted one) shows where it hit, and every one you see can be looted once the target is dead. Living
   enemies can't pull them out and shoot them back. Taking them (by looting, Take All or a script) removes them
   from the body, and they are kept through saves. Up to 8 show per body; any more are still there to loot.
+* Every plain arrow, bolt or thrown weapon shot into a dead body stays in it (and can be looted), and knocks
+  the ragdoll where it hits.
 
 **Ragdolls**
 * People and creatures go limp when they die, thrown by the killing blow, instead of playing a death animation.

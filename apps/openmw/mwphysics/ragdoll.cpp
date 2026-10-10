@@ -566,6 +566,26 @@ namespace MWPhysics
             mTaskScheduler->setAtRest(part->mBody);
     }
 
+    void Ragdoll::strike(const osg::Vec3f& point, const osg::Vec3f& impulse)
+    {
+        Part* nearest = nullptr;
+        float nearestDistance = std::numeric_limits<float>::max();
+        for (const auto& part : mParts)
+        {
+            btTransform bodyWorld;
+            part->mMotionState->getWorldTransform(bodyWorld);
+            const float distance = (Misc::Convert::toOsg(bodyWorld.getOrigin()) - point).length2();
+            if (distance < nearestDistance)
+            {
+                nearestDistance = distance;
+                nearest = part.get();
+            }
+        }
+        if (nearest != nullptr)
+            mTaskScheduler->applyImpulse(
+                nearest->mBody, Misc::Convert::toBullet(impulse), Misc::Convert::toBullet(point));
+    }
+
     std::vector<std::shared_ptr<PtrHolder>> Ragdoll::getParts() const
     {
         return { mParts.begin(), mParts.end() };

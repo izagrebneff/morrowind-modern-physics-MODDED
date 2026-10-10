@@ -819,6 +819,15 @@ namespace MWPhysics
         return mRagdolls.find(actor.mRef) != mRagdolls.end();
     }
 
+    bool PhysicsSystem::strikeRagdoll(const MWWorld::ConstPtr& actor, const osg::Vec3f& point, const osg::Vec3f& impulse)
+    {
+        const auto found = mRagdolls.find(actor.mRef);
+        if (found == mRagdolls.end())
+            return false;
+        found->second->strike(point, impulse);
+        return true;
+    }
+
     void PhysicsSystem::wakeNewObject(const MWWorld::Ptr& ptr)
     {
         const auto found = mObjects.find(ptr.mRef);

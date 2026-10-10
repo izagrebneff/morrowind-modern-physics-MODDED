@@ -68,6 +68,7 @@
 #include "../mwmechanics/actorutil.hpp"
 #include "../mwmechanics/aiavoiddoor.hpp" //Used to tell actors to avoid doors
 #include "../mwmechanics/combat.hpp"
+#include "../mwmechanics/stuckprojectiles.hpp"
 #include "../mwmechanics/creaturestats.hpp"
 #include "../mwmechanics/levelledlist.hpp"
 #include "../mwmechanics/npcstats.hpp"
@@ -3288,8 +3289,12 @@ namespace MWWorld
 
         if (result.mHit)
         {
-            MWMechanics::projectileHit(
-                actor, result.mHitObject, bow, projectile, result.mHitPos, attackStrength, attackWindUp);
+            if (MWMechanics::recoverableStuckProjectiles())
+                MWMechanics::projectileHitAndStick(actor, result.mHitObject, bow, projectile, result.mHitPos,
+                    orient * osg::Vec3f(0, 1, 0), attackStrength, attackWindUp);
+            else
+                MWMechanics::projectileHit(
+                    actor, result.mHitObject, bow, projectile, result.mHitPos, attackStrength, attackWindUp);
             return;
         }
 

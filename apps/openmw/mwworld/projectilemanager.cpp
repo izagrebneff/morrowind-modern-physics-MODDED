@@ -615,23 +615,26 @@ namespace MWWorld
                     hitPosition, hitPosition - direction * 100.f);
             }
 
-            bool stored = false;
-            const bool hitBody = MWMechanics::projectileHit(caster, target, bow, projectilePtr, hitPosition,
-                projectileState.mAttackStrength, projectileState.mAttackWindUp, &stored);
-
-            // One that stayed in the body is shown there, until it is taken out (not in the player's: it would
-            // clutter the first person view).
-            if (MWMechanics::recoverableStuckProjectiles())
+            // A dead body is knocked by it, the limb it hit most. (Harder than its momentum alone would: an arrow
+            // weighs next to nothing, but a hit should show.)
+            if (hitActor && target.getClass().getCreatureStats(target).isDead())
             {
-                if (stored && target != MWMechanics::getPlayer())
-                {
-                    osg::Vec3f direction = projectileState.mVelocity;
-                    direction.normalize();
-                    MWMechanics::showEmbeddedProjectile(target, projectilePtr, hitPosition, direction);
-                }
+                constexpr float corpseHitBoost = 3.f;
+                const float projectileMass = std::max(projectilePtr.getClass().getWeight(projectilePtr), 0.1f);
+                mPhysics->strikeRagdoll(target, hitPosition, projectileState.mVelocity * (projectileMass * corpseHitBoost));
             }
+
+            const bool recoverable = MWMechanics::recoverableStuckProjectiles();
+            osg::Vec3f flight = projectileState.mVelocity;
+            flight.normalize();
+            const bool hitBody = recoverable
+                ? MWMechanics::projectileHitAndStick(caster, target, bow, projectilePtr, hitPosition, flight,
+                    projectileState.mAttackStrength, projectileState.mAttackWindUp)
+                : MWMechanics::projectileHit(caster, target, bow, projectilePtr, hitPosition,
+                    projectileState.mAttackStrength, projectileState.mAttackWindUp);
+
             // A hit sticks in the body (not the player's: it would clutter the first person view).
-            else if (hitBody && target != MWMechanics::getPlayer())
+            if (!recoverable && hitBody && target != MWMechanics::getPlayer())
             {
                 if (MWRender::Animation* animation = MWBase::Environment::get().getWorld()->getAnimation(target))
                 {

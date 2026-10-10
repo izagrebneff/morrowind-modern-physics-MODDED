@@ -37,6 +37,12 @@ namespace MWMechanics
     /// victim's inventory.
     bool recoverableStuckProjectiles();
 
+    /// projectileHit (see combat.hpp), and what stays in a body is shown stuck there (it flew along direction,
+    /// normalized). A plain projectile hitting a dead body isn't an attack: it always stays in.
+    bool projectileHitAndStick(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, const MWWorld::Ptr& weapon,
+        const MWWorld::Ptr& projectile, const osg::Vec3f& hitPosition, const osg::Vec3f& direction,
+        float attackStrength, float attackWindUp);
+
     /// A stored projectile hit the victim: embedded in a living one, straight into the inventory of a dead one.
     void embedProjectile(const MWWorld::Ptr& victim, const ESM::RefId& ammo);
 

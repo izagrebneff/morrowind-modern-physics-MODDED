@@ -326,6 +326,13 @@ namespace MWLua
         api["_ragdollBoneCount"] = [](const GObject& actor) {
             return MWBase::Environment::get().getWorld()->getRagdollBonePoses(actor.ptr()).size();
         };
+        // Where the ragdoll's main part (the pelvis, say: bones are parents first) is; nil without a ragdoll.
+        api["_ragdollCenter"] = [](const GObject& actor) -> sol::optional<osg::Vec3f> {
+            const auto poses = MWBase::Environment::get().getWorld()->getRagdollBonePoses(actor.ptr());
+            if (poses.empty())
+                return sol::nullopt;
+            return osg::Vec3f(poses.front().second.getTrans());
+        };
         // Recoverable stuck projectiles: what a stored projectile hit does (without the hit and its chance), and how
         // many are shown in / embedded in an actor.
         api["_embedProjectile"] = [context](const GObject& actor, std::string_view ammo, const osg::Vec3f& hitPosition,
@@ -338,6 +345,23 @@ namespace MWLua
                     MWMechanics::showEmbeddedProjectile(actor.ptr(), ref.getPtr(), hitPosition, direction);
                 },
                 "_embedProjectile");
+        };
+        // Fire a projectile (an arrow, say, as if thrown: no bow) from a point along a direction (normalized).
+        api["_shootProjectile"] = [context](const GObject& shooter, std::string_view ammo, const osg::Vec3f& from,
+                                      const osg::Vec3f& direction, float speed) {
+            const ESM::RefId ammoId = ESM::RefId::deserializeText(ammo);
+            context.mLuaManager->addAction(
+                [shooter, ammoId, from, direction, speed] {
+                    MWWorld::ManualRef ref(*MWBase::Environment::get().getESMStore(), ammoId);
+                    MWWorld::Ptr actor = shooter.ptr();
+                    MWWorld::Ptr projectile = ref.getPtr();
+                    MWWorld::Ptr bow = projectile;
+                    osg::Quat orient;
+                    orient.makeRotate(osg::Vec3f(0, 1, 0), direction);
+                    MWBase::Environment::get().getWorld()->launchProjectile(
+                        actor, projectile, from, orient, bow, speed, 1.f, 1.f);
+                },
+                "_shootProjectile");
         };
         api["_stuckProjectiles"] = [](const GObject& actor) {
             MWMechanics::CreatureStats& stats = actor.ptr().getClass().getCreatureStats(actor.ptr());

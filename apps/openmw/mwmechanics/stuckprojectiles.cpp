@@ -22,6 +22,8 @@
 #include "../mwworld/manualref.hpp"
 #include "../mwworld/ptr.hpp"
 
+#include "actorutil.hpp"
+#include "combat.hpp"
 #include "creaturestats.hpp"
 
 namespace MWMechanics
@@ -99,6 +101,27 @@ namespace MWMechanics
     bool recoverableStuckProjectiles()
     {
         return Settings::modernPhysics().mRecoverableStuckProjectiles;
+    }
+
+    bool projectileHitAndStick(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, const MWWorld::Ptr& weapon,
+        const MWWorld::Ptr& projectile, const osg::Vec3f& hitPosition, const osg::Vec3f& direction,
+        float attackStrength, float attackWindUp)
+    {
+        bool stored = false;
+        bool hitBody = false;
+        if (!victim.isEmpty() && hasStats(victim) && victim.getClass().getCreatureStats(victim).isDead()
+            && projectile.getClass().getEnchantment(projectile).empty())
+        {
+            // By RefId: on a point-blank hit, projectile is the attacker's live ammo stack.
+            embedProjectile(victim, projectile.getCellRef().getRefId());
+            stored = hitBody = true;
+        }
+        else
+            hitBody = projectileHit(
+                attacker, victim, weapon, projectile, hitPosition, attackStrength, attackWindUp, &stored);
+        if (stored && victim != getPlayer())
+            showEmbeddedProjectile(victim, projectile, hitPosition, direction);
+        return hitBody;
     }
 
     void embedProjectile(const MWWorld::Ptr& victim, const ESM::RefId& ammo)

@@ -81,6 +81,8 @@ namespace MWPhysics
         void removeAction(btActionInterface* action);
         /// Stop a body and put it to sleep.
         void setAtRest(btRigidBody* body);
+        /// Wake the body and push it: impulse applied at point (world space).
+        void applyImpulse(btRigidBody* body, const btVector3& impulse, const btVector3& point);
 
         // Carrying a dynamic object: each physics step it is steered towards the hold target.
         /// steerRotation: also turn it to the target orientation. holdMass: if set, its mass while held (a heavier

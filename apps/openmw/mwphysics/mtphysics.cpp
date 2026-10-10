@@ -845,6 +845,13 @@ namespace MWPhysics
         body->forceActivationState(ISLAND_SLEEPING);
     }
 
+    void PhysicsTaskScheduler::applyImpulse(btRigidBody* body, const btVector3& impulse, const btVector3& point)
+    {
+        MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
+        body->activate(true);
+        body->applyImpulse(impulse, point - body->getCenterOfMassPosition());
+    }
+
     void PhysicsTaskScheduler::removeCollisionObject(btCollisionObject* collisionObject)
     {
         MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);

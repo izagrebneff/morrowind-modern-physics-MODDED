@@ -220,6 +220,8 @@ namespace MWPhysics
         void settleRagdoll(const MWWorld::ConstPtr& actor);
         void removeRagdoll(const MWWorld::ConstPtr& actor);
         bool hasRagdoll(const MWWorld::ConstPtr& actor) const;
+        /// Push the dead actor's ragdoll where it was hit (point, world space) with impulse. False without one.
+        bool strikeRagdoll(const MWWorld::ConstPtr& actor, const osg::Vec3f& point, const osg::Vec3f& impulse);
 
         /// A simulated object was just created in the world (dropped, spawned): settle it onto the surface and
         /// let it fall. Objects loaded with a cell stay asleep where they were.

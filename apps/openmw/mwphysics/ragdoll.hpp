@@ -95,6 +95,9 @@ namespace MWPhysics
         /// Still and asleep, as if it had been lying there (until something disturbs it).
         void setAtRest();
 
+        /// Push the part nearest point (world space) there with impulse (mass x velocity change).
+        void strike(const osg::Vec3f& point, const osg::Vec3f& impulse);
+
         /// The part closest to a view ray from eye along direction (normalized), for grabbing.
         std::shared_ptr<PtrHolder> findPart(const osg::Vec3f& eye, const osg::Vec3f& direction) const;
 
