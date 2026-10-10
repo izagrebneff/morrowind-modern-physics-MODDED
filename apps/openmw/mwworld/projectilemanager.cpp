@@ -159,6 +159,22 @@ namespace
 
     // Whether an arrow would stick in a surface (wood, plants, earth) or glance off it (stone, metal), judging by
     // its texture and model names. Hard materials win when names mention both.
+    /// Whether the projectile's enchantment bursts over an area where it lands (and so is spent wherever it hits).
+    bool hasAreaEnchantment(const MWWorld::Ptr& projectile)
+    {
+        const ESM::RefId& id = projectile.getClass().getEnchantment(projectile);
+        if (id.empty())
+            return false;
+        const ESM::Enchantment* enchantment
+            = MWBase::Environment::get().getESMStore()->get<ESM::Enchantment>().search(id);
+        if (enchantment == nullptr)
+            return false;
+        for (const ESM::IndexedENAMstruct& effect : enchantment->mEffects.mList)
+            if (effect.mData.mArea > 0)
+                return true;
+        return false;
+    }
+
     bool isSoftSurface(std::string_view texture, std::string_view model, bool unknownIsSoft)
     {
         static constexpr std::string_view hard[] = { "stone", "rock", "brick", "cobble", "marble", "granite", "slate",
@@ -646,8 +662,9 @@ namespace MWWorld
             }
 
             // Missed shots aren't lost: the arrow, bolt or thrown weapon lands where it hit and can be picked up,
-            // enchanted ones too. (Only one that hits a body is spent.)
-            if (!hitActor)
+            // enchanted ones too, unless their enchantment burst over an area there (then it is spent, as is one
+            // that hits a body).
+            if (!hitActor && !hasAreaEnchantment(projectilePtr))
             {
                 // Fixed things made of something soft enough (wood, plants, earth) catch it. It glances off stone
                 // and metal, and off loose items, doors and water.
