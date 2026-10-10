@@ -55,9 +55,15 @@ namespace MWWorld
         void meleeHitWorld(const Ptr& attacker, const osg::Vec3f& position, Material surface,
             std::string_view weaponClass, float strength, std::string_view what);
 
-        /// Something fell into water at position: a body (ragdoll) or a projectile, at speed, of size (a body's
-        /// length, a projectile's weight).
-        void splash(bool body, const Ptr& what, const osg::Vec3f& position, float speed, float size);
+        enum class SplashKind
+        {
+            Item,
+            Body,
+            Projectile
+        };
+        /// Something fell into water at position, at speed, of size (a body's length, an item's or a projectile's
+        /// weight).
+        void splash(SplashKind kind, const Ptr& what, const osg::Vec3f& position, float speed, float size);
 
         /// For the log: a melee swing that met nothing at all within reach.
         void meleeMissed(const Ptr& attacker, const osg::Vec3f& from, const osg::Vec3f& direction, float reach,
@@ -136,6 +142,7 @@ namespace MWWorld
             float mNormalSize = 1.f; // size at normal pitch
             float mCooldown = 1.f;
         };
+        Splash mItemSplash;
         Splash mBodySplash;
         Splash mProjectileSplash;
         float mBodyCooldown = 0.35f;

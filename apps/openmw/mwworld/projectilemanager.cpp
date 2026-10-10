@@ -592,7 +592,7 @@ namespace MWWorld
             {
                 mRendering->emitWaterRipple(hitPosition);
                 if (Settings::modernPhysics().mImpactSounds && Settings::modernPhysics().mExtendedWaterSplashes)
-                    ImpactSounds::get().splash(false, projectileRef.getPtr(), hitPosition, projectileState.mVelocity.length(),
+                    ImpactSounds::get().splash(ImpactSounds::SplashKind::Projectile, projectileRef.getPtr(), hitPosition, projectileState.mVelocity.length(),
                         std::max(projectileRef.getPtr().getClass().getWeight(projectileRef.getPtr()), 0.1f));
             }
 

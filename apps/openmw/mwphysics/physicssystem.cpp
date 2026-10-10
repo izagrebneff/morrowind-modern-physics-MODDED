@@ -1587,15 +1587,19 @@ namespace MWPhysics
         for (const auto& object : objects)
         {
             const float heightBefore = static_cast<float>(object->getTransform().getOrigin().z());
+            // From its origin down to its lowest point: it enters the water when that does (a floating one's
+            // middle may never go under).
+            const float bottomBelowOrigin = mWaterEnabled ? heightBefore - object->getDynamicShapeHeightRange().first : 0.f;
             const auto transform = object->takeSimulatedTransform(interpolation);
             if (!transform)
                 continue;
 
-            if (mWaterEnabled && heightBefore > mWaterHeight && transform->first.z() <= mWaterHeight)
+            if (mWaterEnabled && heightBefore - bottomBelowOrigin > mWaterHeight
+                && transform->first.z() - bottomBelowOrigin <= mWaterHeight)
             {
                 // Simulation steps are 1/mPhysicsDt per second.
                 const float speed = (heightBefore - transform->first.z()) / mPhysicsDt;
-                world->objectEnteredWater(
+                world->objectEnteredWater(object->getPtr(),
                     osg::Vec3f(transform->first.x(), transform->first.y(), mWaterHeight), speed);
             }
 

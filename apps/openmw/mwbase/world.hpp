@@ -320,7 +320,7 @@ namespace MWBase
         virtual void removeRagdoll(const MWWorld::ConstPtr& actor) = 0;
 
         /// A simulated object fell into water here, going down at speed: ripples, and a splash if fast.
-        virtual void objectEnteredWater(const osg::Vec3f& position, float speed) = 0;
+        virtual void objectEnteredWater(const MWWorld::Ptr& object, const osg::Vec3f& position, float speed) = 0;
         /// A dead body (its ragdoll) fell into water at position (on the surface); size: about its length.
         virtual void bodyEnteredWater(const MWWorld::Ptr& body, const osg::Vec3f& position, float speed, float size) = 0;
 

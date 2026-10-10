@@ -397,7 +397,7 @@ namespace MWWorld
         void rotateGrabbedObject(float yaw, float pitch) override;
         void setPlayerAttackSuppressed(bool suppressed) override { mPlayerAttackSuppressed = suppressed; }
         void pushObjectsFromExplosion(const osg::Vec3f& center, float radius) override;
-        void objectEnteredWater(const osg::Vec3f& position, float speed) override;
+        void objectEnteredWater(const MWWorld::Ptr& object, const osg::Vec3f& position, float speed) override;
         void bodyEnteredWater(const MWWorld::Ptr& body, const osg::Vec3f& position, float speed, float size) override;
         std::vector<std::pair<std::string, osg::Matrixf>> getRagdollBonePoses(
             const MWWorld::ConstPtr& actor) const override;

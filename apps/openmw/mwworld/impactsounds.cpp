@@ -20,6 +20,7 @@
 
 #include "../mwbase/environment.hpp"
 #include "../mwbase/soundmanager.hpp"
+#include "../mwbase/world.hpp"
 
 #include "../mwworld/esmstore.hpp"
 
@@ -235,10 +236,13 @@ namespace MWWorld
             };
             if (const YAML::Node node = root["water"])
             {
+                Splash itemSplash;
                 Splash bodySplash;
                 Splash projectileSplash;
+                readSplash(node["items"], itemSplash);
                 readSplash(node["bodies"], bodySplash);
                 readSplash(node["projectiles"], projectileSplash);
+                mItemSplash = std::move(itemSplash);
                 mBodySplash = std::move(bodySplash);
                 mProjectileSplash = std::move(projectileSplash);
             }
@@ -310,7 +314,11 @@ namespace MWWorld
         const float strength = std::clamp(
             (impact.mSpeed - mLimits.mMinSpeed) / std::max(mObjectLoudSpeed - mLimits.mMinSpeed, 1.f), 0.f, 1.f);
         std::string result;
-        if (impact.mOtherSimulated)
+        // Under water: the splash was what was heard.
+        const MWWorld::CellStore* cell = impact.mBody.getCell();
+        if (cell != nullptr && MWBase::Environment::get().getWorld()->isUnderwater(cell, impact.mPoint))
+            result = "under water";
+        else if (impact.mOtherSimulated)
         {
             // Two things hitting each other: mostly the harder one is heard (a book on a plate clacks). Two bodies
             // just thud.
@@ -436,9 +444,10 @@ namespace MWWorld
             what, weaponClass, getMaterialName(surface), strength, position.x(), position.y(), position.z(), result));
     }
 
-    void ImpactSounds::splash(bool body, const Ptr& what, const osg::Vec3f& position, float speed, float size)
+    void ImpactSounds::splash(SplashKind kind, const Ptr& what, const osg::Vec3f& position, float speed, float size)
     {
-        const Splash& splash = body ? mBodySplash : mProjectileSplash;
+        const bool body = kind == SplashKind::Body;
+        const Splash& splash = kind == SplashKind::Item ? mItemSplash : body ? mBodySplash : mProjectileSplash;
         std::string result;
         if (speed < splash.mMinSpeed)
             result = "too slow";
@@ -453,14 +462,17 @@ namespace MWWorld
             choice.mPitch[1] *= pitch;
             const float strength = std::clamp((speed - splash.mMinSpeed)
                     / std::max(splash.mLoudSpeed - splash.mMinSpeed, 1.f), 0.f, 1.f);
-            // Bodies by the body (its own splash, not held back by the thud it just made), projectiles all together
-            // (a volley doesn't make a wall of splashes).
+            // Each item or body by itself (its own splash, not held back by a thud it just made), projectiles all
+            // together (a volley doesn't make a wall of splashes).
             static const int projectilesKey = 0;
-            const void* key = body ? static_cast<const void*>(reinterpret_cast<const char*>(what.mRef) + 1)
-                                   : &projectilesKey;
-            result = play(choice, position, strength, { key }, body ? splash.mCooldown : 0.1f);
+            const void* key = kind == SplashKind::Projectile
+                ? static_cast<const void*>(&projectilesKey)
+                : static_cast<const void*>(reinterpret_cast<const char*>(what.mRef) + 1);
+            result = play(choice, position, strength, { key },
+                kind == SplashKind::Projectile ? 0.1f : splash.mCooldown);
         }
-        log(std::format("splash {} {} speed {:.0f} size {:.1f} at {:.0f} {:.0f} {:.0f}: {}", body ? "body" : "projectile",
+        log(std::format("splash {} {} speed {:.0f} size {:.1f} at {:.0f} {:.0f} {:.0f}: {}",
+            kind == SplashKind::Item ? "item" : body ? "body" : "projectile",
             nameOf(what), speed, size, position.x(), position.y(), position.z(), result));
     }
 

@@ -1488,13 +1488,12 @@ namespace MWWorld
         mPhysics->removeRagdoll(actor);
     }
 
-    void World::objectEnteredWater(const osg::Vec3f& position, float speed)
+    void World::objectEnteredWater(const MWWorld::Ptr& object, const osg::Vec3f& position, float speed)
     {
         mRendering->emitWaterRipple(position);
-        constexpr float minSplashSpeed = 150.f;
-        if (speed >= minSplashSpeed)
-            MWBase::Environment::get().getSoundManager()->playSound3D(position,
-                ESM::RefId::stringRefId("DefaultLandWater"), std::min(1.f, speed / 800.f), 1.0f);
+        // Items always splashed; how is tuned with the other splashes (water: items in impactsounds.yaml).
+        ImpactSounds::get().splash(ImpactSounds::SplashKind::Item, object, position, speed,
+            std::clamp(object.getClass().getWeight(object), 0.1f, 50.f));
     }
 
     void World::bodyEnteredWater(const MWWorld::Ptr& body, const osg::Vec3f& position, float speed, float size)
@@ -1505,7 +1504,7 @@ namespace MWWorld
         mRendering->emitWaterRipple(position);
         for (const osg::Vec3f& offset : { osg::Vec3f(30, 0, 0), osg::Vec3f(-20, 25, 0), osg::Vec3f(-15, -25, 0) })
             mRendering->emitWaterRipple(position + offset);
-        ImpactSounds::get().splash(true, body, position, speed, size);
+        ImpactSounds::get().splash(ImpactSounds::SplashKind::Body, body, position, speed, size);
     }
 
     void World::pushObjectsFromExplosion(const osg::Vec3f& center, float radius)

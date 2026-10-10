@@ -134,11 +134,22 @@ melee:
     earth:   { file: ["Fx/punch 1.wav", "Fx/bodyfallSML.wav"], volume: [0.3, 0.5], pitch: [0.9, 1.1] }
     cloth:   { file: "Fx/punch 1.wav", volume: [0.3, 0.5], pitch: [0.9, 1.1] }
 
-# Splashes ("extended water splashes" in settings.cfg) for dead bodies and projectiles falling into water.
-# (Items splash as they always have.) Bigger is deeper: the pitch follows (normal at / size) ^ 0.15, where
-# a body's size is about its length (a person about 150, a rat about 40) and a projectile's is its weight.
+# Splashes when things fall into water: items (always), and dead bodies and projectiles ("extended water
+# splashes" in settings.cfg). Nothing hitting the bottom under water is heard: just the splash. Bigger is deeper: the pitch follows (normal at / size) ^ 0.15, where
+# a body's size is about its length (a person or a big rat about 150) and an item's or a projectile's is its
+# weight.
 # Slower than "min speed" makes no splash; "loud speed" or faster is full volume.
 water:
+  items:
+    sound: "DefaultLandWater"
+    file: ["Fx/FOOT/splsh2.wav", "Fx/FOOT/splsh3.wav"]
+    volume: [0.5, 0.7]
+    pitch: [1.1, 1.3]
+    min speed: 40
+    loud speed: 600
+    # Weight at normal pitch: lighter splashes higher, heavier deeper.
+    normal at: 2
+    cooldown: 1
   bodies:
     sound: "DefaultLandWater"
     file: ["Fx/FOOT/splsh2.wav", "Fx/FOOT/splsh3.wav"]
