@@ -50,7 +50,8 @@ What this fork changes
 * Arrows, bolts, thrown weapons and spell projectiles knock items over; area spells push things away.
 * Melee swings knock items in their path when they land.
 * Missed arrows and bolts no longer vanish: they stick into soft things (wood, earth, flesh...) and bounce off
-  hard ones (stone, metal), and can be picked up again. Arrows also stick visibly in the people they hit.
+  hard ones (stone, metal), and can be picked up again, enchanted ones too. Arrows also stick visibly in the
+  people they hit.
 * Arrows, bolts and thrown weapons stuck in a body are real: one that stays in (the usual chance; never an
   enchanted one) shows where it hit, and every one you see can be looted once the target is dead. Living
   enemies can't pull them out and shoot them back. Taking them (by looting, Take All or a script) removes them

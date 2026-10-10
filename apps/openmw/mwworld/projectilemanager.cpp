@@ -645,9 +645,9 @@ namespace MWWorld
                 }
             }
 
-            // Missed shots aren't lost: the arrow, bolt or thrown weapon lands where it hit and can be picked up.
-            // Enchanted ones are spent, their enchantment having gone off.
-            if (!hitActor && projectilePtr.getClass().getEnchantment(projectilePtr).empty())
+            // Missed shots aren't lost: the arrow, bolt or thrown weapon lands where it hit and can be picked up,
+            // enchanted ones too. (Only one that hits a body is spent.)
+            if (!hitActor)
             {
                 // Fixed things made of something soft enough (wood, plants, earth) catch it. It glances off stone
                 // and metal, and off loose items, doors and water.
