@@ -1067,9 +1067,12 @@ namespace MWRender
         const osgUtil::LineSegmentIntersector::Intersection& intersection = intersector->getFirstIntersection();
         result.mHit = true;
         result.mPosition = intersection.getWorldIntersectPoint();
-        for (const osg::Node* node : intersection.nodePath)
+        for (osg::Node* node : intersection.nodePath)
+        {
             if (node->getNodeMask() & Mask_Terrain)
                 result.mTerrain = true;
+            SceneUtil::forEachUserData<MWWorld::Ptr>(*node, [&](const MWWorld::Ptr& ptr) { result.mObject = ptr; });
+        }
 
         // The base texture, looking from the drawable up towards the root, as rendering would apply it.
         const auto findTexture = [](const osg::StateSet* stateSet) -> std::string {

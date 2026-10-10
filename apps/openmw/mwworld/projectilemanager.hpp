@@ -128,8 +128,12 @@ namespace MWWorld
         std::vector<ProjectileState> mProjectiles;
 
         void cleanupProjectile(ProjectileState& state);
-        void placeMissedProjectile(
-            const ProjectileState& state, const osg::Vec3f& hitPosition, const osg::Vec3f& hitNormal, bool stick);
+        /// bounce: how much of its speed a projectile that doesn't stick keeps, glancing off.
+        void placeMissedProjectile(const ProjectileState& state, const osg::Vec3f& hitPosition,
+            const osg::Vec3f& hitNormal, bool stick, float bounce);
+        /// A simulated item hit by a projectile is knocked, and heard.
+        void strikeItem(const ProjectileState& state, const MWWorld::Ptr& projectile, const MWWorld::Ptr& item,
+            const osg::Vec3f& hitPosition);
         void cleanupMagicBolt(MagicBoltState& state);
         void periodicCleanup(float dt);
 
