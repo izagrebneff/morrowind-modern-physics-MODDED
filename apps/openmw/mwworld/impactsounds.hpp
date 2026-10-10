@@ -46,6 +46,10 @@ namespace MWWorld
         /// in it or glanced off. speed: how fast it flew.
         void projectileHit(const osg::Vec3f& position, Material surface, bool stuck, float speed, std::string_view what);
 
+        /// An item was struck at point by a projectile or a melee swing made of striker (Flesh for a fist), at
+        /// strength (0 to 1).
+        void itemStruck(const Ptr& item, const osg::Vec3f& point, Material striker, float strength, std::string_view by);
+
         /// The last impacts and what was done about them, newest last (for tests and tuning).
         const std::deque<std::string>& getLog() const { return mLog; }
         void clearLog() { mLog.clear(); }
@@ -92,6 +96,9 @@ namespace MWWorld
         std::string play(const Choice& choice, const osg::Vec3f& position, float strength,
             std::initializer_list<const void*> keys, float cooldown = -1);
 
+        /// Of two things hitting each other, the one mostly heard (the harder).
+        static Material louder(Material a, Material b);
+
         /// What an item hitting something sounds like: by its material, deeper the heavier it is.
         Choice getItemChoice(Material material, float mass) const;
 
@@ -106,6 +113,7 @@ namespace MWWorld
         float mPitchByMassLimits[2] = { 0.75f, 1.3f };
         ByMaterial mLandingOn; // volume and pitch factors by what is landed on
         float mEachOtherVolume = 0.8f; // objects hitting each other
+        float mStruckVolume = 1.f; // items struck by projectiles and swings
         float mBodyCooldown = 0.35f;
         float mBodyMediumSpeed = 250.f;
         float mBodyHardSpeed = 500.f;

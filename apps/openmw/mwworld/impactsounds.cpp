@@ -189,6 +189,8 @@ namespace MWWorld
                 fresh.mLandingOn = readByMaterial(node["landing on"]);
                 if (const YAML::Node eachOther = node["each other"])
                     read(eachOther, "volume", fresh.mEachOtherVolume);
+                if (const YAML::Node struck = node["struck"])
+                    read(struck, "volume", fresh.mStruckVolume);
                 if (const YAML::Node bodies = node["bodies"])
                 {
                     read(bodies, "cooldown", fresh.mBodyCooldown);
@@ -210,6 +212,7 @@ namespace MWWorld
             mPitchByMassLimits[1] = fresh.mPitchByMassLimits[1];
             mLandingOn = std::move(fresh.mLandingOn);
             mEachOtherVolume = fresh.mEachOtherVolume;
+            mStruckVolume = fresh.mStruckVolume;
             mBodyCooldown = fresh.mBodyCooldown;
             mBodyMediumSpeed = fresh.mBodyMediumSpeed;
             mBodyHardSpeed = fresh.mBodyHardSpeed;
@@ -288,25 +291,8 @@ namespace MWWorld
         {
             // Two things hitting each other: mostly the harder one is heard (a book on a plate clacks). Two bodies
             // just thud.
-            const auto hardness = [](Material material) {
-                switch (material)
-                {
-                    case Material::Metal:
-                        return 6;
-                    case Material::Ceramic:
-                        return 5;
-                    case Material::Stone:
-                        return 4;
-                    case Material::Wood:
-                        return 3;
-                    case Material::Unknown:
-                        return 2;
-                    default:
-                        return 1;
-                }
-            };
-            const Material louder = hardness(otherMaterial) > hardness(bodyMaterial) ? otherMaterial : bodyMaterial;
-            Choice choice = louder == Material::Flesh ? mBodySoft : getItemChoice(louder, impact.mBodyMass);
+            const Material heard = louder(otherMaterial, bodyMaterial);
+            Choice choice = heard == Material::Flesh ? mBodySoft : getItemChoice(heard, impact.mBodyMass);
             choice.mVolume[0] *= mEachOtherVolume;
             choice.mVolume[1] *= mEachOtherVolume;
             result = choice.empty()
@@ -340,6 +326,47 @@ namespace MWWorld
             nameOf(impact.mBody), getMaterialName(bodyMaterial), nameOf(impact.mOther), getMaterialName(otherMaterial),
             impact.mOtherSimulated ? ", simulated" : "", impact.mSpeed, impact.mBodyMass, impact.mPoint.x(),
             impact.mPoint.y(), impact.mPoint.z(), result));
+    }
+
+    Material ImpactSounds::louder(Material a, Material b)
+    {
+        const auto hardness = [](Material material) {
+            switch (material)
+            {
+                case Material::Metal:
+                    return 6;
+                case Material::Ceramic:
+                    return 5;
+                case Material::Stone:
+                    return 4;
+                case Material::Wood:
+                    return 3;
+                case Material::Unknown:
+                    return 2;
+                default:
+                    return 1;
+            }
+        };
+        return hardness(a) > hardness(b) ? a : b;
+    }
+
+    void ImpactSounds::itemStruck(
+        const Ptr& item, const osg::Vec3f& point, Material striker, float strength, std::string_view by)
+    {
+        if (!Settings::modernPhysics().mImpactSounds || !Settings::modernPhysics().mObjectImpactSounds)
+            return;
+        const Material material = classifyItem(item);
+        const Material heard = louder(material, striker);
+        // A fist on something soft is just a thud.
+        Choice choice = heard == Material::Flesh ? mBodySoft
+                                                 : getItemChoice(heard, std::clamp(item.getClass().getWeight(item), 0.2f, 50.f));
+        choice.mVolume[0] *= mStruckVolume;
+        choice.mVolume[1] *= mStruckVolume;
+        const std::string result
+            = choice.empty() ? std::string("no sound for it") : play(choice, point, strength, { item.mRef });
+        log(std::format("struck {} ({}) by {} ({}) strength {:.2f} at {:.0f} {:.0f} {:.0f}: {}", nameOf(item),
+            getMaterialName(material), by, getMaterialName(striker), strength, point.x(), point.y(), point.z(),
+            result));
     }
 
     ImpactSounds::Choice ImpactSounds::getItemChoice(Material material, float mass) const

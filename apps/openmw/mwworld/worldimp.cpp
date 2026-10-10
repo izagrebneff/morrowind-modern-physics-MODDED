@@ -1614,6 +1614,9 @@ namespace MWWorld
             const float objectWeight = std::clamp(object.getClass().getWeight(object), 0.2f, 50.f);
             const float speed = swingSpeed * std::clamp(0.7f * std::sqrt(weaponWeight / objectWeight), 0.3f, 2.f);
             mPhysics->strikeObject(object, knock * speed, center, eye);
+            ImpactSounds::get().itemStruck(object, center,
+                weapon.isEmpty() ? Material::Flesh : classifyItem(weapon), std::clamp(attackStrength, 0.f, 1.f),
+                weapon.isEmpty() ? std::string("fist") : weapon.getCellRef().getRefId().toDebugString());
             ++knocked;
         }
     }

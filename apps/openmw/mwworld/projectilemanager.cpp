@@ -603,6 +603,9 @@ namespace MWWorld
                 direction.normalize();
                 mPhysics->strikeObject(target, projectileState.mVelocity * (projectileMass / targetMass),
                     hitPosition, hitPosition - direction * 100.f);
+                ImpactSounds::get().itemStruck(target, hitPosition, MWWorld::classifyItem(projectilePtr),
+                    std::clamp(projectileState.mVelocity.length() / 2500.f, 0.f, 1.f),
+                    projectilePtr.getCellRef().getRefId().toDebugString());
             }
 
             // A dead body is knocked by it, the limb it hit most. (Harder than its momentum alone would: an arrow

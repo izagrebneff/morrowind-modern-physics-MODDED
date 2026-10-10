@@ -78,6 +78,10 @@ objects:
   # Two items (or an item and a body) hitting each other: the harder one's sound is played (metal, then
   # ceramic, stone, wood, cloth and earth), at this share of its volume.
   each other: { volume: 0.8 }
+  # An item hit by an arrow or a melee swing: the harder of the item and the weapon is heard (a sword on a
+  # pot clanks, an arrow into a book knocks like wood), at this share of its volume, louder for a
+  # fuller swing or draw.
+  struck: { volume: 1.0 }
   # Bodies: each part of a ragdoll hitting the ground or a wall. Soft below "medium speed", hard from
   # "hard speed". One body makes a sound at most every "cooldown" seconds.
   bodies:
