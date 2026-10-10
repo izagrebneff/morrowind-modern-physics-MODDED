@@ -405,6 +405,10 @@ namespace MWWorld
         void removeRagdoll(const MWWorld::ConstPtr& actor) override;
         void knockObjectsWithMeleeAttack(const MWWorld::Ptr& attacker, const MWWorld::Ptr& weapon, int attackType,
             float attackStrength) override;
+        /// A melee swing that hit no one and nothing loose: the sound of it meeting the world, if it does (from
+        /// eye, along direction, within reach).
+        void meleeHitWorld(const MWWorld::Ptr& attacker, const MWWorld::Ptr& weapon, osg::Vec3f direction,
+            const osg::Vec3f& eye, float reach, float attackStrength);
         bool isPlayerAttackSuppressed() const override { return mPlayerAttackSuppressed; }
 
         MWWorld::Ptr placeObject(

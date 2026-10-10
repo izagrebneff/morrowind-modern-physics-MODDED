@@ -219,6 +219,11 @@ namespace MWWorld
             mBodySoft = std::move(fresh.mBodySoft);
             mBodyMedium = std::move(fresh.mBodyMedium);
             mBodyHard = std::move(fresh.mBodyHard);
+            std::map<std::string, ByMaterial, std::less<>> melee;
+            if (const YAML::Node node = root["melee"])
+                for (const auto& entry : node)
+                    melee[entry.first.as<std::string>()] = readByMaterial(entry.second);
+            mMelee = std::move(melee);
             mLimits = limits;
             mProjectileLoudSpeed = projectileLoudSpeed;
             mProjectileStick = std::move(projectileStick);
@@ -398,6 +403,27 @@ namespace MWWorld
         log(std::format("projectile {} {} {} speed {:.0f} at {:.0f} {:.0f} {:.0f}: {}", what,
             stuck ? "sticks in" : "glances off", getMaterialName(surface), speed, position.x(), position.y(),
             position.z(), result));
+    }
+
+    void ImpactSounds::meleeHitWorld(const Ptr& attacker, const osg::Vec3f& position, Material surface,
+        std::string_view weaponClass, float strength, std::string_view what)
+    {
+        if (!Settings::modernPhysics().mImpactSounds || !Settings::modernPhysics().mMeleeWorldImpactSounds)
+            return;
+        const auto byClass = mMelee.find(weaponClass);
+        const Choice* choice = byClass == mMelee.end() ? nullptr : find(byClass->second, surface);
+        const std::string result = choice != nullptr ? play(*choice, position, strength, { attacker.mRef })
+                                                     : std::string("no sound for it");
+        log(std::format("melee {} with {} ({}) hit {} strength {:.2f} at {:.0f} {:.0f} {:.0f}: {}", nameOf(attacker),
+            what, weaponClass, getMaterialName(surface), strength, position.x(), position.y(), position.z(), result));
+    }
+
+    void ImpactSounds::meleeMissed(const Ptr& attacker, const osg::Vec3f& from, const osg::Vec3f& direction,
+        float reach, std::string_view weaponClass)
+    {
+        log(std::format("melee {} ({}) met nothing within {:.0f} from {:.0f} {:.0f} {:.0f} towards {:.2f} {:.2f} {:.2f}",
+            nameOf(attacker), weaponClass, reach, from.x(), from.y(), from.z(), direction.x(), direction.y(),
+            direction.z()));
     }
 
     std::string ImpactSounds::play(const Choice& choice, const osg::Vec3f& position, float strength,

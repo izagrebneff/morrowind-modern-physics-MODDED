@@ -50,6 +50,15 @@ namespace MWWorld
         /// strength (0 to 1).
         void itemStruck(const Ptr& item, const osg::Vec3f& point, Material striker, float strength, std::string_view by);
 
+        /// A melee swing by attacker that hit no one and nothing loose met the world at position: weaponClass is
+        /// "blade", "axe", "blunt", "spear" or "fist"; strength the swing's (0 to 1). Sound only.
+        void meleeHitWorld(const Ptr& attacker, const osg::Vec3f& position, Material surface,
+            std::string_view weaponClass, float strength, std::string_view what);
+
+        /// For the log: a melee swing that met nothing at all within reach.
+        void meleeMissed(const Ptr& attacker, const osg::Vec3f& from, const osg::Vec3f& direction, float reach,
+            std::string_view weaponClass);
+
         /// The last impacts and what was done about them, newest last (for tests and tuning).
         const std::deque<std::string>& getLog() const { return mLog; }
         void clearLog() { mLog.clear(); }
@@ -114,6 +123,7 @@ namespace MWWorld
         ByMaterial mLandingOn; // volume and pitch factors by what is landed on
         float mEachOtherVolume = 0.8f; // objects hitting each other
         float mStruckVolume = 1.f; // items struck by projectiles and swings
+        std::map<std::string, ByMaterial, std::less<>> mMelee; // by weapon class
         float mBodyCooldown = 0.35f;
         float mBodyMediumSpeed = 250.f;
         float mBodyHardSpeed = 500.f;

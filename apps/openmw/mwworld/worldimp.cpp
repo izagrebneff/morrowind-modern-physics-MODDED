@@ -1619,6 +1619,60 @@ namespace MWWorld
                 weapon.isEmpty() ? std::string("fist") : weapon.getCellRef().getRefId().toDebugString());
             ++knocked;
         }
+
+        // Nothing loose in the way either: maybe the swing meets a wall, the ground or furniture. A sound only.
+        if (knocked == 0)
+            meleeHitWorld(attacker, weapon, isPlayer ? view : forward, eye, reach + bodyRadius, attackStrength);
+    }
+
+    void World::meleeHitWorld(const MWWorld::Ptr& attacker, const MWWorld::Ptr& weapon, osg::Vec3f direction,
+        const osg::Vec3f& eye, float reach, float attackStrength)
+    {
+        // What it is swung with. Creatures without weapons (claws, teeth) make no such sound.
+        std::string_view weaponClass = "fist";
+        if (!weapon.isEmpty())
+        {
+            const ESM::RefId& type = weapon.get<ESM::Weapon>()->mBase->mData.mType;
+            if (type == ESM::WeaponType::BluntOneHand || type == ESM::WeaponType::BluntTwoClose
+                || type == ESM::WeaponType::BluntTwoWide)
+                weaponClass = "blunt";
+            else if (type == ESM::WeaponType::AxeOneHand || type == ESM::WeaponType::AxeTwoHand)
+                weaponClass = "axe";
+            else if (type == ESM::WeaponType::SpearTwoWide)
+                weaponClass = "spear";
+            else if (type == ESM::WeaponType::ShortBladeOneHand || type == ESM::WeaponType::LongBladeOneHand
+                || type == ESM::WeaponType::LongBladeTwoHand)
+                weaponClass = "blade";
+            else
+                return;
+        }
+        else if (!attacker.getClass().isNpc())
+            return;
+
+        // From the chest, the way the attacker faces (where the player looks), out to the weapon's reach.
+        if (direction.normalize() < 1e-4f)
+            return;
+        const osg::Vec3f from = eye - osg::Vec3f(0, 0, 25.f);
+        const MWPhysics::RayCastingResult hit = mPhysics->castRay(from, from + direction * reach, { attacker }, {},
+            MWPhysics::CollisionType_World | MWPhysics::CollisionType_Door | MWPhysics::CollisionType_HeightMap
+                | MWPhysics::CollisionType_DynamicDetail);
+        if (!hit.mHit)
+        {
+            ImpactSounds::get().meleeMissed(attacker, from, direction, reach, weaponClass);
+            return;
+        }
+
+        // What it looks like there: the texture, else the model; the ground unless it says otherwise.
+        const MWRender::RenderingManager::SurfaceResult surface
+            = mRendering->castRayForSurface(hit.mHitPos - direction * 10.f, hit.mHitPos + direction * 20.f);
+        const bool terrain = hit.mHitObject.isEmpty() || surface.mTerrain;
+        const std::string model
+            = hit.mHitObject.isEmpty() ? std::string() : std::string(hit.mHitObject.getClass().getCorrectedModel(hit.mHitObject));
+        const Material material = classifySurface(surface.mHit ? surface.mTexture : std::string(), model,
+            terrain ? Material::Earth : hit.mHitObject.getClass().isDoor() ? Material::Wood : Material::Stone);
+        ImpactSounds::get().meleeHitWorld(attacker, hit.mHitPos, material, weaponClass,
+            std::clamp(attackStrength, 0.f, 1.f),
+            weapon.isEmpty() ? std::string("fist") : weapon.getCellRef().getRefId().toDebugString());
     }
 
     void World::doPhysics(float duration, osg::Timer_t frameStart, unsigned int frameNumber, osg::Stats& stats)

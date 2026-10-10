@@ -380,6 +380,24 @@ namespace MWLua
             return std::vector<std::string>(log.begin(), log.end());
         };
         api["_clearImpactLog"] = []() { MWWorld::ImpactSounds::get().clearLog(); };
+        // What a melee swing that hits no one does to the world around it (knocks loose things, or sounds where it
+        // meets the world), as if swung with this weapon record (none: a fist), at strength (0 to 1).
+        api["_meleeSwing"] = [context](const GObject& attacker, sol::optional<std::string_view> weapon, float strength) {
+            const ESM::RefId weaponId = weapon ? ESM::RefId::deserializeText(*weapon) : ESM::RefId();
+            context.mLuaManager->addAction(
+                [attacker, weaponId, strength] {
+                    if (weaponId.empty())
+                    {
+                        MWBase::Environment::get().getWorld()->knockObjectsWithMeleeAttack(
+                            attacker.ptr(), MWWorld::Ptr(), ESM::Weapon::AT_Chop, strength);
+                        return;
+                    }
+                    MWWorld::ManualRef ref(*MWBase::Environment::get().getESMStore(), weaponId);
+                    MWBase::Environment::get().getWorld()->knockObjectsWithMeleeAttack(
+                        attacker.ptr(), ref.getPtr(), ESM::Weapon::AT_Chop, strength);
+                },
+                "_meleeSwing");
+        };
         api["_stuckProjectiles"] = [](const GObject& actor) {
             MWMechanics::CreatureStats& stats = actor.ptr().getClass().getCreatureStats(actor.ptr());
             int embedded = 0;
