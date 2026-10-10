@@ -1,6 +1,7 @@
 #include "impactsounds.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <exception>
 #include <format>
 #include <sstream>
@@ -178,9 +179,13 @@ namespace MWWorld
             if (const YAML::Node node = root["objects"])
             {
                 read(node, "loud speed", fresh.mObjectLoudSpeed);
-                if (const YAML::Node item = node["item"])
-                    fresh.mItem = readChoice(item);
-                fresh.mMisc = readByMaterial(node["misc"]);
+                fresh.mItems = readByMaterial(node["items"]);
+                if (const YAML::Node pitch = node["pitch by weight"])
+                {
+                    read(pitch, "normal at", fresh.mPitchMass);
+                    read(pitch, "amount", fresh.mPitchByMass);
+                    readRange(pitch["limits"], fresh.mPitchByMassLimits);
+                }
                 fresh.mLandingOn = readByMaterial(node["landing on"]);
                 if (const YAML::Node bodies = node["bodies"])
                 {
@@ -196,8 +201,11 @@ namespace MWWorld
                 }
             }
             mObjectLoudSpeed = fresh.mObjectLoudSpeed;
-            mItem = std::move(fresh.mItem);
-            mMisc = std::move(fresh.mMisc);
+            mItems = std::move(fresh.mItems);
+            mPitchMass = fresh.mPitchMass;
+            mPitchByMass = fresh.mPitchByMass;
+            mPitchByMassLimits[0] = fresh.mPitchByMassLimits[0];
+            mPitchByMassLimits[1] = fresh.mPitchByMassLimits[1];
             mLandingOn = std::move(fresh.mLandingOn);
             mBodyCooldown = fresh.mBodyCooldown;
             mBodyMediumSpeed = fresh.mBodyMediumSpeed;
@@ -286,7 +294,7 @@ namespace MWWorld
         }
         else
         {
-            Choice choice = getItemChoice(impact.mBody, bodyMaterial);
+            Choice choice = getItemChoice(bodyMaterial, impact.mBodyMass);
             // Duller and quieter on something soft.
             if (const Choice* on = find(mLandingOn, otherMaterial))
                 for (int i = 0; i < 2; ++i)
@@ -303,20 +311,20 @@ namespace MWWorld
             impact.mPoint.y(), impact.mPoint.z(), result));
     }
 
-    ImpactSounds::Choice ImpactSounds::getItemChoice(const Ptr& item, Material material) const
+    ImpactSounds::Choice ImpactSounds::getItemChoice(Material material, float mass) const
     {
-        if (item.getType() == ESM::Miscellaneous::sRecordId)
+        const Choice* found = find(mItems, material);
+        if (found == nullptr)
+            return {};
+        Choice choice = *found;
+        // Heavier is deeper, lighter is higher.
+        if (mass > 0)
         {
-            const auto found = mMisc.find(material);
-            if (found != mMisc.end() && !found->second.empty())
-                return found->second;
+            const float factor = std::clamp(std::pow(mPitchMass / mass, mPitchByMass), mPitchByMassLimits[0],
+                mPitchByMassLimits[1]);
+            choice.mPitch[0] *= factor;
+            choice.mPitch[1] *= factor;
         }
-        Choice choice = mItem;
-        choice.mSounds.clear();
-        choice.mFiles.clear();
-        const ESM::RefId& down = item.getClass().getDownSoundId(item);
-        if (!down.empty())
-            choice.mSounds.push_back(down);
         return choice;
     }
 

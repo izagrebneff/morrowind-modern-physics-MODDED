@@ -92,17 +92,18 @@ namespace MWWorld
         std::string play(const Choice& choice, const osg::Vec3f& position, float strength,
             std::initializer_list<const void*> keys, float cooldown = -1);
 
-        /// What an item hitting the world sounds like: its own "down" sound, or for misc items (which all share
-        /// one) the one for its material.
-        Choice getItemChoice(const Ptr& item, Material material) const;
+        /// What an item hitting something sounds like: by its material, deeper the heavier it is.
+        Choice getItemChoice(Material material, float mass) const;
 
         Limits mLimits;
         float mProjectileLoudSpeed = 2500.f;
         ByMaterial mProjectileStick;
         ByMaterial mProjectileGlance;
         float mObjectLoudSpeed = 600.f;
-        Choice mItem; // volume and pitch for items' own sounds
-        ByMaterial mMisc;
+        ByMaterial mItems;
+        float mPitchMass = 2.f; // mass at normal pitch
+        float mPitchByMass = 0.15f; // how much the pitch follows the mass
+        float mPitchByMassLimits[2] = { 0.75f, 1.3f };
         ByMaterial mLandingOn; // volume and pitch factors by what is landed on
         float mBodyCooldown = 0.35f;
         float mBodyMediumSpeed = 250.f;
