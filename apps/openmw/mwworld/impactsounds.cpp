@@ -8,6 +8,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include <components/debug/debuglog.hpp>
+#include <components/esm3/loadmisc.hpp>
 #include <components/esm3/loadsoun.hpp>
 #include <components/misc/resourcehelpers.hpp>
 #include <components/misc/rng.hpp>
@@ -66,7 +67,8 @@ namespace MWWorld
         ImpactSounds::Choice readChoice(const YAML::Node& node)
         {
             ImpactSounds::Choice choice;
-            choice.mSounds = readStrings(node["sound"]);
+            for (const std::string& sound : readStrings(node["sound"]))
+                choice.mSounds.push_back(ESM::RefId::stringRefId(sound));
             choice.mFiles = readStrings(node["file"]);
             readRange(node["volume"], choice.mVolume);
             readRange(node["pitch"], choice.mPitch);
@@ -172,6 +174,37 @@ namespace MWWorld
                 projectileStick = readByMaterial(node["stick"]);
                 projectileGlance = readByMaterial(node["glance"]);
             }
+            ImpactSounds fresh;
+            if (const YAML::Node node = root["objects"])
+            {
+                read(node, "loud speed", fresh.mObjectLoudSpeed);
+                if (const YAML::Node item = node["item"])
+                    fresh.mItem = readChoice(item);
+                fresh.mMisc = readByMaterial(node["misc"]);
+                fresh.mLandingOn = readByMaterial(node["landing on"]);
+                if (const YAML::Node bodies = node["bodies"])
+                {
+                    read(bodies, "cooldown", fresh.mBodyCooldown);
+                    read(bodies, "medium speed", fresh.mBodyMediumSpeed);
+                    read(bodies, "hard speed", fresh.mBodyHardSpeed);
+                    if (bodies["soft"])
+                        fresh.mBodySoft = readChoice(bodies["soft"]);
+                    if (bodies["medium"])
+                        fresh.mBodyMedium = readChoice(bodies["medium"]);
+                    if (bodies["hard"])
+                        fresh.mBodyHard = readChoice(bodies["hard"]);
+                }
+            }
+            mObjectLoudSpeed = fresh.mObjectLoudSpeed;
+            mItem = std::move(fresh.mItem);
+            mMisc = std::move(fresh.mMisc);
+            mLandingOn = std::move(fresh.mLandingOn);
+            mBodyCooldown = fresh.mBodyCooldown;
+            mBodyMediumSpeed = fresh.mBodyMediumSpeed;
+            mBodyHardSpeed = fresh.mBodyHardSpeed;
+            mBodySoft = std::move(fresh.mBodySoft);
+            mBodyMedium = std::move(fresh.mBodyMedium);
+            mBodyHard = std::move(fresh.mBodyHard);
             mLimits = limits;
             mProjectileLoudSpeed = projectileLoudSpeed;
             mProjectileStick = std::move(projectileStick);
@@ -237,12 +270,54 @@ namespace MWWorld
                 terrain ? Material::Earth : Material::Stone);
         }
 
-        std::string why;
-        const bool allowed = allow({ impact.mBody.mRef, impact.mOtherSimulated ? impact.mOther.mRef : nullptr }, why);
+        const float strength = std::clamp(
+            (impact.mSpeed - mLimits.mMinSpeed) / std::max(mObjectLoudSpeed - mLimits.mMinSpeed, 1.f), 0.f, 1.f);
+        std::string result;
+        if (impact.mOtherSimulated)
+            result = "objects hitting each other: not yet";
+        else if (impact.mBody.getClass().isActor())
+        {
+            // A body (a part of it) hitting the ground or a wall.
+            const Choice& choice = impact.mSpeed >= mBodyHardSpeed ? mBodyHard
+                : impact.mSpeed >= mBodyMediumSpeed               ? mBodyMedium
+                                                                  : mBodySoft;
+            result = choice.empty() ? std::string("no sound for it")
+                                    : play(choice, impact.mPoint, strength, { impact.mBody.mRef }, mBodyCooldown);
+        }
+        else
+        {
+            Choice choice = getItemChoice(impact.mBody, bodyMaterial);
+            // Duller and quieter on something soft.
+            if (const Choice* on = find(mLandingOn, otherMaterial))
+                for (int i = 0; i < 2; ++i)
+                {
+                    choice.mVolume[i] *= on->mVolume[i];
+                    choice.mPitch[i] *= on->mPitch[i];
+                }
+            result = choice.empty() ? std::string("no sound for it")
+                                    : play(choice, impact.mPoint, strength, { impact.mBody.mRef });
+        }
         log(std::format("object {} ({}) on {} ({}{}) speed {:.0f} mass {:.1f} at {:.0f} {:.0f} {:.0f}: {}",
             nameOf(impact.mBody), getMaterialName(bodyMaterial), nameOf(impact.mOther), getMaterialName(otherMaterial),
             impact.mOtherSimulated ? ", simulated" : "", impact.mSpeed, impact.mBodyMass, impact.mPoint.x(),
-            impact.mPoint.y(), impact.mPoint.z(), allowed ? "ok" : why));
+            impact.mPoint.y(), impact.mPoint.z(), result));
+    }
+
+    ImpactSounds::Choice ImpactSounds::getItemChoice(const Ptr& item, Material material) const
+    {
+        if (item.getType() == ESM::Miscellaneous::sRecordId)
+        {
+            const auto found = mMisc.find(material);
+            if (found != mMisc.end() && !found->second.empty())
+                return found->second;
+        }
+        Choice choice = mItem;
+        choice.mSounds.clear();
+        choice.mFiles.clear();
+        const ESM::RefId& down = item.getClass().getDownSoundId(item);
+        if (!down.empty())
+            choice.mSounds.push_back(down);
+        return choice;
     }
 
     void ImpactSounds::projectileHit(
@@ -259,11 +334,11 @@ namespace MWWorld
             position.z(), result));
     }
 
-    std::string ImpactSounds::play(
-        const Choice& choice, const osg::Vec3f& position, float strength, std::initializer_list<const void*> keys)
+    std::string ImpactSounds::play(const Choice& choice, const osg::Vec3f& position, float strength,
+        std::initializer_list<const void*> keys, float cooldown)
     {
         std::string why;
-        if (!allow(keys, why))
+        if (!allow(keys, cooldown >= 0 ? cooldown : mLimits.mObjectCooldown, why))
             return why;
         const size_t count = choice.mSounds.size() + choice.mFiles.size();
         const size_t pick = std::min(count - 1,
@@ -276,36 +351,39 @@ namespace MWWorld
         MWSound::Sound* sound;
         if (pick < choice.mSounds.size())
         {
-            name = choice.mSounds[pick];
-            sound = sounds.playSound3D(position, ESM::RefId::stringRefId(name), volume, pitch, MWSound::Type::Sfx,
+            name = choice.mSounds[pick].toDebugString();
+            sound = sounds.playSound3D(position, choice.mSounds[pick], volume, pitch, MWSound::Type::Sfx,
                 MWSound::PlayMode::Normal, 0, mLimits.mMinDistance, mLimits.mMaxDistance);
         }
         else
         {
-            name = choice.mFiles[pick - choice.mSounds.size()];
-            const VFS::Path::Normalized file = Misc::ResourceHelpers::correctSoundPath(VFS::Path::Normalized(name));
+            const std::string& fileName = choice.mFiles[pick - choice.mSounds.size()];
+            name = "\"" + fileName + "\"";
+            const VFS::Path::Normalized file
+                = Misc::ResourceHelpers::correctSoundPath(VFS::Path::Normalized(fileName));
             sound = sounds.playSound3D(position, VFS::Path::NormalizedView(file), volume, pitch, MWSound::Type::Sfx,
                 MWSound::PlayMode::Normal, 0, mLimits.mMinDistance, mLimits.mMaxDistance);
         }
         // Out of earshot is fine; a name that doesn't exist is worth knowing about.
         const bool unknown = sound == nullptr
             && (pick < choice.mSounds.size()
-                    ? MWBase::Environment::get().getESMStore()->get<ESM::Sound>().search(ESM::RefId::stringRefId(name))
+                    ? MWBase::Environment::get().getESMStore()->get<ESM::Sound>().search(choice.mSounds[pick])
                         == nullptr
                     : !MWBase::Environment::get().getResourceSystem()->getVFS()->exists(
-                        Misc::ResourceHelpers::correctSoundPath(VFS::Path::Normalized(name))));
-        return std::format("\"{}\" volume {:.2f} pitch {:.2f}{}", name, volume, pitch,
+                        Misc::ResourceHelpers::correctSoundPath(
+                            VFS::Path::Normalized(choice.mFiles[pick - choice.mSounds.size()]))));
+        return std::format("{} volume {:.2f} pitch {:.2f}{}", name, volume, pitch,
             unknown ? " (NO SUCH SOUND)" : (sound == nullptr ? " (not started)" : ""));
     }
 
-    bool ImpactSounds::allow(std::initializer_list<const void*> keys, std::string& why)
+    bool ImpactSounds::allow(std::initializer_list<const void*> keys, float cooldown, std::string& why)
     {
         for (const void* key : keys)
         {
             if (key == nullptr)
                 continue;
             const auto found = mLastSound.find(key);
-            if (found != mLastSound.end() && mTime - found->second < mLimits.mObjectCooldown)
+            if (found != mLastSound.end() && mTime - found->second < cooldown)
             {
                 why = "cooldown";
                 return false;

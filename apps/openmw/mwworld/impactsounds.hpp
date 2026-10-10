@@ -15,7 +15,10 @@
 
 #include <osg/Vec3f>
 
+#include <components/esm/refid.hpp>
+
 #include "materials.hpp"
+#include "ptr.hpp"
 
 namespace MWPhysics
 {
@@ -63,7 +66,7 @@ namespace MWWorld
         /// pitch picked between their limits.
         struct Choice
         {
-            std::vector<std::string> mSounds;
+            std::vector<ESM::RefId> mSounds;
             std::vector<std::string> mFiles;
             float mVolume[2] = { 1.f, 1.f };
             float mPitch[2] = { 1.f, 1.f };
@@ -80,19 +83,33 @@ namespace MWWorld
 
         /// Whether a sound from these objects (keys; null ones ignored) may start now: not too soon after their
         /// last, and not too many at once. Starts their cooldown if so.
-        bool allow(std::initializer_list<const void*> keys, std::string& why);
+        bool allow(std::initializer_list<const void*> keys, float cooldown, std::string& why);
 
         void log(std::string&& entry);
 
         /// Play a choice at position, at strength (0 to 1: how hard the impact was) of its volume, if allowed for
         /// these objects. Returns what was played, or why nothing was, for the log.
         std::string play(const Choice& choice, const osg::Vec3f& position, float strength,
-            std::initializer_list<const void*> keys);
+            std::initializer_list<const void*> keys, float cooldown = -1);
+
+        /// What an item hitting the world sounds like: its own "down" sound, or for misc items (which all share
+        /// one) the one for its material.
+        Choice getItemChoice(const Ptr& item, Material material) const;
 
         Limits mLimits;
         float mProjectileLoudSpeed = 2500.f;
         ByMaterial mProjectileStick;
         ByMaterial mProjectileGlance;
+        float mObjectLoudSpeed = 600.f;
+        Choice mItem; // volume and pitch for items' own sounds
+        ByMaterial mMisc;
+        ByMaterial mLandingOn; // volume and pitch factors by what is landed on
+        float mBodyCooldown = 0.35f;
+        float mBodyMediumSpeed = 250.f;
+        float mBodyHardSpeed = 500.f;
+        Choice mBodySoft;
+        Choice mBodyMedium;
+        Choice mBodyHard;
         bool mConfigLoaded = false;
         std::filesystem::file_time_type mConfigTime;
         float mConfigCheckTimer = 0;
