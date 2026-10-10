@@ -35,6 +35,7 @@
 #include "../mwworld/datetimemanager.hpp"
 #include "../mwworld/esmstore.hpp"
 #include "../mwworld/manualref.hpp"
+#include "../mwworld/materials.hpp"
 #include "../mwworld/store.hpp"
 #include "../mwworld/worldmodel.hpp"
 
@@ -362,6 +363,15 @@ namespace MWLua
                         actor, projectile, from, orient, bow, speed, 1.f, 1.f);
                 },
                 "_shootProjectile");
+        };
+        // What an object is made of, as impact sounds and arrows judge it ("wood", "metal"...): items by type and
+        // name, anything else as a surface by its model.
+        api["_material"] = [](const GObject& object) {
+            const MWWorld::Ptr ptr = object.ptr();
+            if (ptr.getClass().isItem(ptr))
+                return std::string(MWWorld::getMaterialName(MWWorld::classifyItem(ptr)));
+            return std::string(MWWorld::getMaterialName(
+                MWWorld::classifySurface({}, ptr.getClass().getCorrectedModel(ptr), MWWorld::Material::Unknown)));
         };
         api["_stuckProjectiles"] = [](const GObject& actor) {
             MWMechanics::CreatureStats& stats = actor.ptr().getClass().getCreatureStats(actor.ptr());

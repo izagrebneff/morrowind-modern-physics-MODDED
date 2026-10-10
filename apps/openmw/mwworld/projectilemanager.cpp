@@ -39,6 +39,7 @@
 
 #include "../mwworld/class.hpp"
 #include "../mwworld/esmstore.hpp"
+#include "../mwworld/materials.hpp"
 #include "../mwworld/inventorystore.hpp"
 #include "../mwworld/manualref.hpp"
 #include "../mwworld/worldmodel.hpp"
@@ -157,8 +158,6 @@ namespace
         return lightDiffuseColor;
     }
 
-    // Whether an arrow would stick in a surface (wood, plants, earth) or glance off it (stone, metal), judging by
-    // its texture and model names. Hard materials win when names mention both.
     /// Whether the projectile's enchantment bursts over an area where it lands (and so is spent wherever it hits).
     bool hasAreaEnchantment(const MWWorld::Ptr& projectile)
     {
@@ -173,32 +172,6 @@ namespace
             if (effect.mData.mArea > 0)
                 return true;
         return false;
-    }
-
-    bool isSoftSurface(std::string_view texture, std::string_view model, bool unknownIsSoft)
-    {
-        static constexpr std::string_view hard[] = { "stone", "rock", "brick", "cobble", "marble", "granite", "slate",
-            "metal", "iron", "steel", "bronze", "silver", "gold", "dwrv", "dwem", "glass", "crystal", "tile", "plaster",
-            "stucco", "chitin", "bone", "shell", "pave", "ice", "lava", "velothi", "daed", "ruin" };
-        static constexpr std::string_view soft[] = { "wood", "wd_", "bark", "tree", "log", "plank", "board", "timber",
-            "branch", "root", "crate", "barrel", "basket", "wicker", "straw", "thatch", "hay", "fabric", "cloth",
-            "banner", "rug", "carpet", "tapestry", "rope", "leather", "hide", "fur", "mushroom", "shroom", "fung",
-            "flora", "moss", "dirt", "mud", "sand", "grass", "soil", "ground", "kelp" };
-        const auto classify = [](std::string_view name) -> std::optional<bool> {
-            const std::string lower = Misc::StringUtils::lowerCase(name);
-            for (const std::string_view word : hard)
-                if (lower.find(word) != std::string::npos)
-                    return false;
-            for (const std::string_view word : soft)
-                if (lower.find(word) != std::string::npos)
-                    return true;
-            return std::nullopt;
-        };
-        if (const std::optional<bool> fromTexture = classify(texture))
-            return *fromTexture;
-        if (const std::optional<bool> fromModel = classify(model))
-            return *fromModel;
-        return unknownIsSoft;
     }
 
     osg::Quat lookAt(const osg::Vec3f& pos)
@@ -684,7 +657,8 @@ namespace MWWorld
                     const VFS::Path::Normalized model
                         = hitStatic ? target.getClass().getCorrectedModel(target) : VFS::Path::Normalized();
                     // Bare ground takes arrows unless it looks rocky; unrecognized objects deflect them.
-                    stick = isSoftSurface(surface.mTexture, model.value(), hitTerrain || surface.mTerrain);
+                    stick = MWWorld::isSoftMaterial(MWWorld::classifySurface(surface.mTexture, model.value(),
+                        hitTerrain || surface.mTerrain ? MWWorld::Material::Earth : MWWorld::Material::Stone));
                     if (surface.mHit)
                         stickPoint = surface.mPosition;
                 }
