@@ -32,6 +32,7 @@
 #include "pathfinding.hpp"
 #include "spellcasting.hpp"
 #include "spellresistance.hpp"
+#include "stuckprojectiles.hpp"
 
 namespace
 {
@@ -222,8 +223,11 @@ namespace MWMechanics
     }
 
     bool projectileHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, MWWorld::Ptr weapon,
-        const MWWorld::Ptr& projectile, const osg::Vec3f& hitPosition, float attackStrength, float attackWindUp)
+        const MWWorld::Ptr& projectile, const osg::Vec3f& hitPosition, float attackStrength, float attackWindUp,
+        bool* stored)
     {
+        if (stored != nullptr)
+            *stored = false;
         MWBase::World* world = MWBase::Environment::get().getWorld();
         const MWWorld::Store<ESM::GameSetting>& gmst = world->getStore().get<ESM::GameSetting>();
 
@@ -304,7 +308,14 @@ namespace MWMechanics
                 {
                     // On point-blank hits the projectile is the attacker's live ammo stack -
                     // adding it directly would duplicate its RefNum into the victim's inventory
-                    victim.getClass().getContainerStore(victim).add(projectile.getCellRef().getRefId(), 1);
+                    if (recoverableStuckProjectiles())
+                    {
+                        embedProjectile(victim, projectile.getCellRef().getRefId());
+                        if (stored != nullptr)
+                            *stored = true;
+                    }
+                    else
+                        victim.getClass().getContainerStore(victim).add(projectile.getCellRef().getRefId(), 1);
                 }
             }
 

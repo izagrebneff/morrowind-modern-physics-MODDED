@@ -53,6 +53,7 @@
 #include "../mwmechanics/combat.hpp"
 #include "../mwmechanics/creaturestats.hpp"
 #include "../mwmechanics/spellcasting.hpp"
+#include "../mwmechanics/stuckprojectiles.hpp"
 
 #include "../mwrender/animation.hpp"
 #include "../mwrender/renderingmanager.hpp"
@@ -614,11 +615,23 @@ namespace MWWorld
                     hitPosition, hitPosition - direction * 100.f);
             }
 
+            bool stored = false;
             const bool hitBody = MWMechanics::projectileHit(caster, target, bow, projectilePtr, hitPosition,
-                projectileState.mAttackStrength, projectileState.mAttackWindUp);
+                projectileState.mAttackStrength, projectileState.mAttackWindUp, &stored);
 
+            // One that stayed in the body is shown there, until it is taken out (not in the player's: it would
+            // clutter the first person view).
+            if (MWMechanics::recoverableStuckProjectiles())
+            {
+                if (stored && target != MWMechanics::getPlayer())
+                {
+                    osg::Vec3f direction = projectileState.mVelocity;
+                    direction.normalize();
+                    MWMechanics::showEmbeddedProjectile(target, projectilePtr, hitPosition, direction);
+                }
+            }
             // A hit sticks in the body (not the player's: it would clutter the first person view).
-            if (hitBody && target != MWMechanics::getPlayer())
+            else if (hitBody && target != MWMechanics::getPlayer())
             {
                 if (MWRender::Animation* animation = MWBase::Environment::get().getWorld()->getAnimation(target))
                 {

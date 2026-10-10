@@ -204,6 +204,22 @@ namespace ESM
             esm.getHNT(bone.mPose, "RAGP");
             mRagdoll.push_back(std::move(bone));
         }
+
+        mStuckProjectiles.clear();
+        while (esm.isNextSub("STKA"))
+        {
+            StuckProjectile projectile;
+            projectile.mAmmo = esm.getRefId();
+            projectile.mBone = esm.getHNString("STKB");
+            esm.getHNT(projectile.mTransform, "STKT");
+            mStuckProjectiles.push_back(std::move(projectile));
+        }
+        mEmbeddedAmmo.clear();
+        while (esm.isNextSub("EMBA"))
+        {
+            const RefId ammo = esm.getRefId();
+            esm.getHNT(mEmbeddedAmmo[ammo], "EMBC");
+        }
     }
 
     void CreatureStats::save(ESMWriter& esm) const
@@ -318,6 +334,18 @@ namespace ESM
             esm.writeHNString("RAGB", bone.mName);
             esm.writeHNT("RAGP", bone.mPose);
         }
+
+        for (const StuckProjectile& projectile : mStuckProjectiles)
+        {
+            esm.writeHNRefId("STKA", projectile.mAmmo);
+            esm.writeHNString("STKB", projectile.mBone);
+            esm.writeHNT("STKT", projectile.mTransform);
+        }
+        for (const auto& [ammo, count] : mEmbeddedAmmo)
+        {
+            esm.writeHNRefId("EMBA", ammo);
+            esm.writeHNT("EMBC", count);
+        }
     }
 
     void CreatureStats::blank()
@@ -344,6 +372,8 @@ namespace ESM
         mRecalcDynamicStats = false;
         mDrawState = 0;
         mRagdoll.clear();
+        mStuckProjectiles.clear();
+        mEmbeddedAmmo.clear();
         mDeathAnimation = -1;
         mLevel = 1;
         mCorprusSpells.clear();

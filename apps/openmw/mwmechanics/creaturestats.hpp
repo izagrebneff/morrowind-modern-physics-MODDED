@@ -18,6 +18,7 @@
 #include "magiceffects.hpp"
 #include "spells.hpp"
 #include "stat.hpp"
+#include "stuckprojectiles.hpp"
 
 #include <components/esm/attr.hpp>
 #include <components/esm/refid.hpp>
@@ -66,6 +67,8 @@ namespace MWMechanics
         bool mBlock = false;
         osg::Vec3f mDeathKick; // how the killing blow throws the body
         std::vector<std::pair<std::string, osg::Matrixf>> mRagdollPose;
+        std::vector<StuckProjectile> mStuckProjectiles;
+        std::map<ESM::RefId, int> mEmbeddedAmmo;
         unsigned int mMovementFlags = 0;
 
         float mFallHeight = 0.f;
@@ -249,6 +252,11 @@ namespace MWMechanics
             mRagdollPose = std::move(pose);
         }
         const std::vector<std::pair<std::string, osg::Matrixf>>& getRagdollPose() const { return mRagdollPose; }
+
+        /// Projectiles shown stuck in the body, oldest first (see stuckprojectiles.hpp).
+        std::vector<StuckProjectile>& getStuckProjectiles() { return mStuckProjectiles; }
+        /// Projectiles stuck in it while alive, not yet in its inventory: ammo -> count.
+        std::map<ESM::RefId, int>& getEmbeddedAmmo() { return mEmbeddedAmmo; }
 
         std::multimap<ESM::RefId, ESM::RefNum>& getSummonedCreatureMap(); // <Effect, summoned creature>
 

@@ -98,6 +98,18 @@ namespace ESM
         };
         std::vector<RagdollBone> mRagdoll;
 
+        /// A projectile stuck in the body, as shown: what it is, the bone it is in and where on that bone (a 4x4
+        /// matrix, row by row).
+        struct StuckProjectile
+        {
+            RefId mAmmo;
+            std::string mBone;
+            std::array<float, 16> mTransform;
+        };
+        std::vector<StuckProjectile> mStuckProjectiles;
+        /// Projectiles stuck in a living actor, not yet in its inventory: they are added when it dies.
+        std::map<RefId, int32_t> mEmbeddedAmmo;
+
         std::map<ESM::RefId, CorprusStats> mCorprusSpells;
         SpellState mSpells;
         ActiveSpells mActiveSpells;

@@ -51,6 +51,10 @@ What this fork changes
 * Melee swings knock items in their path when they land.
 * Missed arrows and bolts no longer vanish: they stick into soft things (wood, earth, flesh...) and bounce off
   hard ones (stone, metal), and can be picked up again. Arrows also stick visibly in the people they hit.
+* Arrows, bolts and thrown weapons stuck in a body are real: one that stays in (the usual chance; never an
+  enchanted one) shows where it hit, and every one you see can be looted once the target is dead. Living
+  enemies can't pull them out and shoot them back. Taking them (by looting, Take All or a script) removes them
+  from the body, and they are kept through saves. Up to 8 show per body; any more are still there to loot.
 
 **Ragdolls**
 * People and creatures go limp when they die, thrown by the killing blow, instead of playing a death animation.
@@ -61,6 +65,22 @@ What this fork changes
 * People's bodies float in water.
 * A ragdoll that goes wrong (for example with an unusual creature model from a mod) is replaced with the normal
   death pose.
+
+Settings
+--------
+
+The fork's own settings go in `settings.cfg` (in `Documents\My Games\OpenMW`), in a `[Modern Physics]` section.
+They aren't in the in-game options or the launcher yet.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `recoverable stuck projectiles` | `true` | Stuck arrows are real items, as described above. `false`: any hit shows an arrow stuck for a while, and the ones that stay go straight into the target's inventory (as in v1.0). |
+
+For example:
+```
+[Modern Physics]
+recoverable stuck projectiles = false
+```
 
 Known issues and limitations
 ----------------------------

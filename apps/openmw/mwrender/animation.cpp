@@ -63,6 +63,7 @@
 #include "../mwworld/esmstore.hpp"
 
 #include "../mwmechanics/character.hpp" // FIXME: for MWMechanics::Priority
+#include "../mwmechanics/stuckprojectiles.hpp"
 #include "../mwmechanics/weapontype.hpp"
 
 #include "actorutil.hpp"
@@ -1281,7 +1282,7 @@ namespace MWRender
         return result;
     }
 
-    void Animation::attachStuckProjectile(
+    std::optional<Animation::StuckProjectilePlacement> Animation::findStuckProjectilePlacement(
         VFS::Path::NormalizedView model, const osg::Vec3f& hitPosition, const osg::Vec3f& direction)
     {
         // The hit was on the actor's collision box, which is bigger than the body. Where the projectile's path
@@ -1315,6 +1316,7 @@ namespace MWRender
             aboveBody.insert(up);
 
         osg::MatrixTransform* bone = nullptr;
+        std::string boneName;
         osg::Matrixf boneToWorld;
         osg::Vec3f tipPosition;
         float closest = std::numeric_limits<float>::max();
@@ -1336,12 +1338,13 @@ namespace MWRender
             {
                 closest = distance;
                 bone = node.get();
+                boneName = name;
                 boneToWorld = toWorld;
                 tipPosition = onLine;
             }
         }
         if (bone == nullptr)
-            return;
+            return std::nullopt;
 
         osg::ref_ptr<osg::Node> projectile = mResourceSystem->getSceneManager()->getInstance(model);
         // Its tip is the far end along its Y axis, the direction projectile models point.
@@ -1358,14 +1361,40 @@ namespace MWRender
             direction.z(), 0.f, up.x(), up.y(), up.z(), 0.f, 0.f, 0.f, 0.f, 1.f);
         const osg::Vec3f origin = tipPosition - direction * tip;
         const osg::Matrixf projectileToWorld = rotation * osg::Matrixf::translate(origin);
+        return StuckProjectilePlacement{ boneName, projectileToWorld * osg::Matrixf::inverse(boneToWorld) };
+    }
 
-        osg::ref_ptr<osg::MatrixTransform> attached = new osg::MatrixTransform(
-            projectileToWorld * osg::Matrixf::inverse(boneToWorld));
-        // Not part of the body (for where the next one goes in; see above), though it shows.
+    bool Animation::showStuckProjectile(
+        VFS::Path::NormalizedView model, std::string_view boneName, const osg::Matrixf& onBone)
+    {
+        const NodeMap& nodes = getNodeMap();
+        const auto found = nodes.find(std::string(boneName));
+        if (found == nodes.end())
+            return false;
+        osg::ref_ptr<osg::MatrixTransform> attached = new osg::MatrixTransform(onBone);
+        // Not part of the body (for where the next one goes in; see findStuckProjectilePlacement), though it shows.
         attached->setNodeMask(Mask_Effect);
-        attached->addChild(projectile);
-        bone->addChild(attached);
-        mStuckProjectiles.emplace_back(bone, attached);
+        attached->addChild(mResourceSystem->getSceneManager()->getInstance(model));
+        found->second->addChild(attached);
+        mStuckProjectiles.emplace_back(found->second.get(), attached);
+        return true;
+    }
+
+    void Animation::removeStuckProjectiles()
+    {
+        for (const auto& [parent, node] : mStuckProjectiles)
+            if (osg::ref_ptr<osg::Group> group; parent.lock(group))
+                group->removeChild(node);
+        mStuckProjectiles.clear();
+    }
+
+    void Animation::attachStuckProjectile(
+        VFS::Path::NormalizedView model, const osg::Vec3f& hitPosition, const osg::Vec3f& direction)
+    {
+        const std::optional<StuckProjectilePlacement> placement
+            = findStuckProjectilePlacement(model, hitPosition, direction);
+        if (!placement || !showStuckProjectile(model, placement->mBone, placement->mOnBone))
+            return;
 
         constexpr size_t maxStuckProjectiles = 8;
         while (mStuckProjectiles.size() > maxStuckProjectiles)
@@ -1986,6 +2015,10 @@ namespace MWRender
         mObjectRoot->addCullCallback(mLightListCallback);
         if (mTransparencyUpdater)
             mObjectRoot->addCullCallback(mTransparencyUpdater);
+
+        // A new body: the projectiles stuck in it go back in.
+        if (!mPtr.isEmpty() && mPtr.getClass().isActor())
+            MWMechanics::restoreStuckProjectiles(mPtr, *this);
     }
 
     osg::Group* Animation::getObjectRoot()

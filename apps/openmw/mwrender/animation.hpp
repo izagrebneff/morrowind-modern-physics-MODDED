@@ -501,6 +501,20 @@ namespace MWRender
         void attachStuckProjectile(
             VFS::Path::NormalizedView model, const osg::Vec3f& hitPosition, const osg::Vec3f& direction);
 
+        /// Where attachStuckProjectile would put it: the bone, and the projectile's transform relative to it.
+        struct StuckProjectilePlacement
+        {
+            std::string mBone;
+            osg::Matrixf mOnBone;
+        };
+        std::optional<StuckProjectilePlacement> findStuckProjectilePlacement(
+            VFS::Path::NormalizedView model, const osg::Vec3f& hitPosition, const osg::Vec3f& direction);
+        /// Show a projectile model stuck in a bone, at a transform relative to it. False if there is no such bone.
+        bool showStuckProjectile(VFS::Path::NormalizedView model, std::string_view bone, const osg::Matrixf& onBone);
+        /// Remove all the stuck projectiles shown.
+        void removeStuckProjectiles();
+        size_t getStuckProjectileCount() const { return mStuckProjectiles.size(); }
+
         MWWorld::MovementDirectionFlags getSupportedMovementDirections(
             std::span<const std::string_view> prefixes) const;
 

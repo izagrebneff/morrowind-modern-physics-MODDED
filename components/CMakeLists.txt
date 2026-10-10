@@ -81,6 +81,7 @@ add_component_dir (settings
     categories/lua
     categories/map
     categories/models
+    categories/modernphysics
     categories/navigator
     categories/physics
     categories/postprocessing

@@ -26,6 +26,10 @@
 #include "../mwbase/statemanager.hpp"
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
+#include "../mwmechanics/creaturestats.hpp"
+#include "../mwmechanics/stuckprojectiles.hpp"
+#include "../mwrender/animation.hpp"
+
 #include "../mwworld/action.hpp"
 #include "../mwworld/class.hpp"
 #include "../mwworld/datetimemanager.hpp"
@@ -321,6 +325,28 @@ namespace MWLua
         api["_isGrabbingObject"] = []() { return MWBase::Environment::get().getWorld()->isGrabbingObject(); };
         api["_ragdollBoneCount"] = [](const GObject& actor) {
             return MWBase::Environment::get().getWorld()->getRagdollBonePoses(actor.ptr()).size();
+        };
+        // Recoverable stuck projectiles: what a stored projectile hit does (without the hit and its chance), and how
+        // many are shown in / embedded in an actor.
+        api["_embedProjectile"] = [context](const GObject& actor, std::string_view ammo, const osg::Vec3f& hitPosition,
+                                      const osg::Vec3f& direction) {
+            const ESM::RefId ammoId = ESM::RefId::deserializeText(ammo);
+            context.mLuaManager->addAction(
+                [actor, ammoId, hitPosition, direction] {
+                    MWWorld::ManualRef ref(*MWBase::Environment::get().getESMStore(), ammoId);
+                    MWMechanics::embedProjectile(actor.ptr(), ammoId);
+                    MWMechanics::showEmbeddedProjectile(actor.ptr(), ref.getPtr(), hitPosition, direction);
+                },
+                "_embedProjectile");
+        };
+        api["_stuckProjectiles"] = [](const GObject& actor) {
+            MWMechanics::CreatureStats& stats = actor.ptr().getClass().getCreatureStats(actor.ptr());
+            int embedded = 0;
+            for (const auto& [ammo, count] : stats.getEmbeddedAmmo())
+                embedded += count;
+            const MWRender::Animation* animation = MWBase::Environment::get().getWorld()->getAnimation(actor.ptr());
+            return std::make_tuple(static_cast<int>(stats.getStuckProjectiles().size()), embedded,
+                animation ? static_cast<int>(animation->getStuckProjectileCount()) : -1);
         };
 
         api["_runStandardActivationAction"] = [context](const GObject& object, const GObject& actor) {

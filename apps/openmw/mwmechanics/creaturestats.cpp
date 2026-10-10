@@ -555,6 +555,15 @@ namespace MWMechanics
                     static_cast<float>(rotation.y()), static_cast<float>(rotation.z()),
                     static_cast<float>(rotation.w()), scale.x() } });
         }
+        state.mStuckProjectiles.clear();
+        for (const StuckProjectile& projectile : mStuckProjectiles)
+        {
+            ESM::CreatureStats::StuckProjectile& saved
+                = state.mStuckProjectiles.emplace_back(ESM::CreatureStats::StuckProjectile{ projectile.mAmmo,
+                    projectile.mBone, {} });
+            std::copy(projectile.mOnBone.ptr(), projectile.mOnBone.ptr() + 16, saved.mTransform.begin());
+        }
+        state.mEmbeddedAmmo = { mEmbeddedAmmo.begin(), mEmbeddedAmmo.end() };
         // state.mHitAttemptActorId = mHitAttemptActorId;
 
         mSpells.writeState(state.mSpells);
@@ -615,6 +624,11 @@ namespace MWMechanics
                 osg::Matrixf::scale(p[7], p[7], p[7]) * osg::Matrixf::rotate(osg::Quat(p[3], p[4], p[5], p[6]))
                     * osg::Matrixf::translate(p[0], p[1], p[2]));
         }
+        mStuckProjectiles.clear();
+        for (const ESM::CreatureStats::StuckProjectile& projectile : state.mStuckProjectiles)
+            mStuckProjectiles.push_back(
+                { projectile.mAmmo, projectile.mBone, osg::Matrixf(projectile.mTransform.data()) });
+        mEmbeddedAmmo = { state.mEmbeddedAmmo.begin(), state.mEmbeddedAmmo.end() };
         // mHitAttemptActor = state.mHitAttemptActor;
 
         mSpells.readState(state.mSpells, this);

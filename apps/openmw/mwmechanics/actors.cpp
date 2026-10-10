@@ -52,6 +52,7 @@
 #include "character.hpp"
 #include "combat.hpp"
 #include "creaturestats.hpp"
+#include "stuckprojectiles.hpp"
 #include "greetingstate.hpp"
 #include "movement.hpp"
 #include "npcstats.hpp"
@@ -1737,6 +1738,7 @@ namespace MWMechanics
                 }
 
                 ctrl.update(duration);
+                updateStuckProjectiles(actor.getPtr());
 
                 updateVisibility(actor.getPtr(), ctrl);
             }
@@ -1786,6 +1788,8 @@ namespace MWMechanics
     void Actors::notifyDied(const MWWorld::Ptr& actor)
     {
         actor.getClass().getCreatureStats(actor).notifyDied();
+        // What is stuck in the body is its own to loot now.
+        releaseEmbeddedProjectiles(actor);
 
         ++mDeathCount[actor.getCellRef().getRefId()];
 
