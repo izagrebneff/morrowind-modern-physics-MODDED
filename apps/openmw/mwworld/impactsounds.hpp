@@ -105,6 +105,7 @@ namespace MWWorld
         float mPitchByMass = 0.15f; // how much the pitch follows the mass
         float mPitchByMassLimits[2] = { 0.75f, 1.3f };
         ByMaterial mLandingOn; // volume and pitch factors by what is landed on
+        float mEachOtherVolume = 0.8f; // objects hitting each other
         float mBodyCooldown = 0.35f;
         float mBodyMediumSpeed = 250.f;
         float mBodyHardSpeed = 500.f;

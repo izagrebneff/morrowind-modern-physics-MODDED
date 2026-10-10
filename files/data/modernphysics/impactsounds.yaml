@@ -75,6 +75,9 @@ objects:
   landing on:
     earth: { volume: 0.7, pitch: 0.85 }
     cloth: { volume: 0.6, pitch: 0.9 }
+  # Two items (or an item and a body) hitting each other: the harder one's sound is played (metal, then
+  # ceramic, stone, wood, cloth and earth), at this share of its volume.
+  each other: { volume: 0.8 }
   # Bodies: each part of a ragdoll hitting the ground or a wall. Soft below "medium speed", hard from
   # "hard speed". One body makes a sound at most every "cooldown" seconds.
   bodies:

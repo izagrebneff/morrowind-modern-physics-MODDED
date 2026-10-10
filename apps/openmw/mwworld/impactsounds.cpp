@@ -187,6 +187,8 @@ namespace MWWorld
                     readRange(pitch["limits"], fresh.mPitchByMassLimits);
                 }
                 fresh.mLandingOn = readByMaterial(node["landing on"]);
+                if (const YAML::Node eachOther = node["each other"])
+                    read(eachOther, "volume", fresh.mEachOtherVolume);
                 if (const YAML::Node bodies = node["bodies"])
                 {
                     read(bodies, "cooldown", fresh.mBodyCooldown);
@@ -207,6 +209,7 @@ namespace MWWorld
             mPitchByMassLimits[0] = fresh.mPitchByMassLimits[0];
             mPitchByMassLimits[1] = fresh.mPitchByMassLimits[1];
             mLandingOn = std::move(fresh.mLandingOn);
+            mEachOtherVolume = fresh.mEachOtherVolume;
             mBodyCooldown = fresh.mBodyCooldown;
             mBodyMediumSpeed = fresh.mBodyMediumSpeed;
             mBodyHardSpeed = fresh.mBodyHardSpeed;
@@ -282,7 +285,35 @@ namespace MWWorld
             (impact.mSpeed - mLimits.mMinSpeed) / std::max(mObjectLoudSpeed - mLimits.mMinSpeed, 1.f), 0.f, 1.f);
         std::string result;
         if (impact.mOtherSimulated)
-            result = "objects hitting each other: not yet";
+        {
+            // Two things hitting each other: mostly the harder one is heard (a book on a plate clacks). Two bodies
+            // just thud.
+            const auto hardness = [](Material material) {
+                switch (material)
+                {
+                    case Material::Metal:
+                        return 6;
+                    case Material::Ceramic:
+                        return 5;
+                    case Material::Stone:
+                        return 4;
+                    case Material::Wood:
+                        return 3;
+                    case Material::Unknown:
+                        return 2;
+                    default:
+                        return 1;
+                }
+            };
+            const Material louder = hardness(otherMaterial) > hardness(bodyMaterial) ? otherMaterial : bodyMaterial;
+            Choice choice = louder == Material::Flesh ? mBodySoft : getItemChoice(louder, impact.mBodyMass);
+            choice.mVolume[0] *= mEachOtherVolume;
+            choice.mVolume[1] *= mEachOtherVolume;
+            result = choice.empty()
+                ? std::string("no sound for it")
+                : play(choice, impact.mPoint, strength, { impact.mBody.mRef, impact.mOther.mRef },
+                    impact.mBody.getClass().isActor() ? mBodyCooldown : -1.f);
+        }
         else if (impact.mBody.getClass().isActor())
         {
             // A body (a part of it) hitting the ground or a wall.
