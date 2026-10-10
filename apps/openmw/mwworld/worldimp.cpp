@@ -1497,6 +1497,17 @@ namespace MWWorld
                 ESM::RefId::stringRefId("DefaultLandWater"), std::min(1.f, speed / 800.f), 1.0f);
     }
 
+    void World::bodyEnteredWater(const MWWorld::Ptr& body, const osg::Vec3f& position, float speed, float size)
+    {
+        if (!Settings::modernPhysics().mImpactSounds || !Settings::modernPhysics().mExtendedWaterSplashes)
+            return;
+        // A body is big: ripples around where it went in.
+        mRendering->emitWaterRipple(position);
+        for (const osg::Vec3f& offset : { osg::Vec3f(30, 0, 0), osg::Vec3f(-20, 25, 0), osg::Vec3f(-15, -25, 0) })
+            mRendering->emitWaterRipple(position + offset);
+        ImpactSounds::get().splash(true, body, position, speed, size);
+    }
+
     void World::pushObjectsFromExplosion(const osg::Vec3f& center, float radius)
     {
         mPhysics->explode(center, radius, 600.f);

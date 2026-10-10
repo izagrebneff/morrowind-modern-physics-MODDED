@@ -224,6 +224,24 @@ namespace MWWorld
                 for (const auto& entry : node)
                     melee[entry.first.as<std::string>()] = readByMaterial(entry.second);
             mMelee = std::move(melee);
+            const auto readSplash = [](const YAML::Node& node, Splash& splash) {
+                if (!node)
+                    return;
+                splash.mChoice = readChoice(node);
+                read(node, "min speed", splash.mMinSpeed);
+                read(node, "loud speed", splash.mLoudSpeed);
+                read(node, "normal at", splash.mNormalSize);
+                read(node, "cooldown", splash.mCooldown);
+            };
+            if (const YAML::Node node = root["water"])
+            {
+                Splash bodySplash;
+                Splash projectileSplash;
+                readSplash(node["bodies"], bodySplash);
+                readSplash(node["projectiles"], projectileSplash);
+                mBodySplash = std::move(bodySplash);
+                mProjectileSplash = std::move(projectileSplash);
+            }
             mLimits = limits;
             mProjectileLoudSpeed = projectileLoudSpeed;
             mProjectileStick = std::move(projectileStick);
@@ -418,6 +436,34 @@ namespace MWWorld
             what, weaponClass, getMaterialName(surface), strength, position.x(), position.y(), position.z(), result));
     }
 
+    void ImpactSounds::splash(bool body, const Ptr& what, const osg::Vec3f& position, float speed, float size)
+    {
+        const Splash& splash = body ? mBodySplash : mProjectileSplash;
+        std::string result;
+        if (speed < splash.mMinSpeed)
+            result = "too slow";
+        else if (splash.mChoice.empty())
+            result = "no sound for it";
+        else
+        {
+            // Bigger is deeper and fuller; faster is louder.
+            Choice choice = splash.mChoice;
+            const float pitch = std::clamp(std::pow(splash.mNormalSize / std::max(size, 0.01f), 0.15f), 0.7f, 1.4f);
+            choice.mPitch[0] *= pitch;
+            choice.mPitch[1] *= pitch;
+            const float strength = std::clamp((speed - splash.mMinSpeed)
+                    / std::max(splash.mLoudSpeed - splash.mMinSpeed, 1.f), 0.f, 1.f);
+            // Bodies by the body (its own splash, not held back by the thud it just made), projectiles all together
+            // (a volley doesn't make a wall of splashes).
+            static const int projectilesKey = 0;
+            const void* key = body ? static_cast<const void*>(reinterpret_cast<const char*>(what.mRef) + 1)
+                                   : &projectilesKey;
+            result = play(choice, position, strength, { key }, body ? splash.mCooldown : 0.1f);
+        }
+        log(std::format("splash {} {} speed {:.0f} size {:.1f} at {:.0f} {:.0f} {:.0f}: {}", body ? "body" : "projectile",
+            nameOf(what), speed, size, position.x(), position.y(), position.z(), result));
+    }
+
     void ImpactSounds::meleeMissed(const Ptr& attacker, const osg::Vec3f& from, const osg::Vec3f& direction,
         float reach, std::string_view weaponClass)
     {
@@ -500,7 +546,7 @@ namespace MWWorld
         if (Settings::modernPhysics().mImpactSoundDebug)
             Log(Debug::Info) << "[impact] " << entry;
         mLog.push_back(std::move(entry));
-        constexpr size_t maxLog = 64;
+        constexpr size_t maxLog = 512;
         while (mLog.size() > maxLog)
             mLog.pop_front();
     }

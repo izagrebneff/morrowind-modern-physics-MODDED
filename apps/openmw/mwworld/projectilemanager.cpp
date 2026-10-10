@@ -589,7 +589,12 @@ namespace MWWorld
             const auto hitPosition = Misc::Convert::toOsg(projectile->getHitPosition());
 
             if (projectile->getHitWater())
+            {
                 mRendering->emitWaterRipple(hitPosition);
+                if (Settings::modernPhysics().mImpactSounds && Settings::modernPhysics().mExtendedWaterSplashes)
+                    ImpactSounds::get().splash(false, projectileRef.getPtr(), hitPosition, projectileState.mVelocity.length(),
+                        std::max(projectileRef.getPtr().getClass().getWeight(projectileRef.getPtr()), 0.1f));
+            }
 
             const MWWorld::Ptr projectilePtr = projectileRef.getPtr();
             const bool hitActor = !target.isEmpty() && target.getClass().isActor();

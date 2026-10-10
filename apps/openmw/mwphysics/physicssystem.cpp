@@ -811,6 +811,7 @@ namespace MWPhysics
 
     void PhysicsSystem::removeRagdoll(const MWWorld::ConstPtr& actor)
     {
+        mBodyHeights.erase(actor.mRef);
         mRagdolls.erase(actor.mRef);
     }
 
@@ -1486,6 +1487,25 @@ namespace MWPhysics
                 if (!poses.empty())
                 {
                     const osg::Vec3f bodyPosition = poses.front().second.getTrans();
+
+                    // Falling into water (its main part going under; simulation steps are 1/mPhysicsDt a second).
+                    if (mWaterEnabled)
+                    {
+                        const auto previous = mBodyHeights.find(ptr);
+                        if (previous != mBodyHeights.end() && previous->second > mWaterHeight
+                            && bodyPosition.z() <= mWaterHeight)
+                        {
+                            // How big it is: how far its bones reach (about its length). Its mass or collision
+                            // box say little: a rat's are much like a guard's.
+                            float length = 0;
+                            for (const auto& [bone, matrix] : poses)
+                                length = std::max(length, static_cast<float>((matrix.getTrans() - bodyPosition).length()) * 2.f);
+                            world->bodyEnteredWater(actorPtr,
+                                osg::Vec3f(bodyPosition.x(), bodyPosition.y(), mWaterHeight),
+                                (previous->second - bodyPosition.z()) / mPhysicsDt, length);
+                        }
+                        mBodyHeights[ptr] = bodyPosition.z();
+                    }
 
                     // The actor is kept with its body, so if it is well away from it, something else moved it (a
                     // script, say). It stays there, in its death pose: the ragdoll would pull it back.

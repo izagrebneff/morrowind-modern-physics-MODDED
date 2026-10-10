@@ -55,6 +55,10 @@ namespace MWWorld
         void meleeHitWorld(const Ptr& attacker, const osg::Vec3f& position, Material surface,
             std::string_view weaponClass, float strength, std::string_view what);
 
+        /// Something fell into water at position: a body (ragdoll) or a projectile, at speed, of size (a body's
+        /// length, a projectile's weight).
+        void splash(bool body, const Ptr& what, const osg::Vec3f& position, float speed, float size);
+
         /// For the log: a melee swing that met nothing at all within reach.
         void meleeMissed(const Ptr& attacker, const osg::Vec3f& from, const osg::Vec3f& direction, float reach,
             std::string_view weaponClass);
@@ -124,6 +128,16 @@ namespace MWWorld
         float mEachOtherVolume = 0.8f; // objects hitting each other
         float mStruckVolume = 1.f; // items struck by projectiles and swings
         std::map<std::string, ByMaterial, std::less<>> mMelee; // by weapon class
+        struct Splash
+        {
+            Choice mChoice;
+            float mMinSpeed = 100.f;
+            float mLoudSpeed = 600.f;
+            float mNormalSize = 1.f; // size at normal pitch
+            float mCooldown = 1.f;
+        };
+        Splash mBodySplash;
+        Splash mProjectileSplash;
         float mBodyCooldown = 0.35f;
         float mBodyMediumSpeed = 250.f;
         float mBodyHardSpeed = 500.f;

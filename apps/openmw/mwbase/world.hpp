@@ -321,6 +321,8 @@ namespace MWBase
 
         /// A simulated object fell into water here, going down at speed: ripples, and a splash if fast.
         virtual void objectEnteredWater(const osg::Vec3f& position, float speed) = 0;
+        /// A dead body (its ragdoll) fell into water at position (on the surface); size: about its length.
+        virtual void bodyEnteredWater(const MWWorld::Ptr& body, const osg::Vec3f& position, float speed, float size) = 0;
 
         /// Blow simulated objects away from an area effect at center.
         virtual void pushObjectsFromExplosion(const osg::Vec3f& center, float radius) = 0;

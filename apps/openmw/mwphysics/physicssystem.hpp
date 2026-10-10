@@ -437,6 +437,8 @@ namespace MWPhysics
 
         std::vector<std::shared_ptr<Object>> mDynamicObjects; // subset of mObjects
         std::unordered_map<const MWWorld::LiveCellRefBase*, std::unique_ptr<Ragdoll>> mRagdolls;
+        // How high each ragdoll's main part was last frame (for falling into water).
+        std::unordered_map<const MWWorld::LiveCellRefBase*, float> mBodyHeights;
         bool mMovingDynamicObjects = false;
         float mHoldDistance = 0;
         btQuaternion mHoldRelativeRotation;
