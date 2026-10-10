@@ -86,7 +86,7 @@ They aren't in the in-game options or the launcher yet.
 | `impact sound debug` | `false` | Writes every impact to `openmw.log` (what hit what, the materials, the sound picked), and re-reads the sound file below as soon as it is saved. |
 
 Impact sounds use only Morrowind's own sounds, and play where the impact is. Which sounds, how loud, pitches and
-limits are in `resourcesfs\modernphysics\impactsounds.yaml` (explained inside), which you can edit without
+limits are in `resources\vfs\modernphysics\impactsounds.yaml` (explained inside), which you can edit without
 rebuilding anything.
 
 For example:
