@@ -13,7 +13,7 @@
 
 namespace MWPhysics
 {
-    class PtrHolder
+    class PtrHolder : public std::enable_shared_from_this<PtrHolder>
     {
     public:
         explicit PtrHolder(const MWWorld::Ptr& ptr, const osg::Vec3f& position)

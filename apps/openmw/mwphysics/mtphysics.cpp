@@ -10,6 +10,8 @@
 #include <variant>
 
 #include <BulletCollision/BroadphaseCollision/btDbvtBroadphase.h>
+#include <BulletCollision/BroadphaseCollision/btDispatcher.h>
+#include <BulletCollision/NarrowPhaseCollision/btPersistentManifold.h>
 #include <BulletCollision/CollisionDispatch/btCollisionObjectWrapper.h>
 #include <BulletCollision/CollisionShapes/btCollisionShape.h>
 #include <BulletDynamics/ConstraintSolver/btPoint2PointConstraint.h>
@@ -1237,6 +1239,86 @@ namespace MWPhysics
         mDynamicsWorld->stepSimulation(mPhysicsDt, 0);
 
         updateFlyingObjects(flying);
+        collectImpactsUnsafe();
+    }
+
+    void PhysicsTaskScheduler::collectImpactsUnsafe()
+    {
+        // Called with the collision world locked, after a step. A contact point made in this step (not one carried
+        // over: resting, rolling and sliding keep theirs) where the solver had to change the speed a lot is an
+        // impact. One per pair of objects per step: the hardest.
+        const float minSpeed = mImpactMinSpeed;
+        if (minSpeed <= 0)
+            return;
+        std::vector<Impact> found;
+        btDispatcher& dispatcher = *mDynamicsWorld->getDispatcher();
+        for (int i = 0; i < dispatcher.getNumManifolds(); ++i)
+        {
+            const btPersistentManifold& manifold = *dispatcher.getManifoldByIndexInternal(i);
+            const btCollisionObject* a = manifold.getBody0();
+            const btCollisionObject* b = manifold.getBody1();
+            const auto groupOf = [](const btCollisionObject* object) {
+                return object->getBroadphaseHandle() != nullptr
+                    ? object->getBroadphaseHandle()->m_collisionFilterGroup
+                    : 0;
+            };
+            const bool aSimulated = groupOf(a) & CollisionType_Dynamic;
+            const bool bSimulated = groupOf(b) & CollisionType_Dynamic;
+            if (!aSimulated && !bSimulated)
+                continue;
+            // Actors and projectiles have their own hits.
+            constexpr int ignored = CollisionType_Actor | CollisionType_Projectile;
+            if ((groupOf(a) | groupOf(b)) & ignored)
+                continue;
+            const btRigidBody* bodyA = btRigidBody::upcast(a);
+            const btRigidBody* bodyB = btRigidBody::upcast(b);
+            const btScalar invMass = (bodyA ? bodyA->getInvMass() : 0) + (bodyB ? bodyB->getInvMass() : 0);
+            if (invMass <= 0)
+                continue;
+            const btManifoldPoint* hardest = nullptr;
+            for (int p = 0; p < manifold.getNumContacts(); ++p)
+            {
+                const btManifoldPoint& point = manifold.getContactPoint(p);
+                if (point.getLifeTime() > 1)
+                    continue;
+                if (hardest == nullptr || point.getAppliedImpulse() > hardest->getAppliedImpulse())
+                    hardest = &point;
+            }
+            if (hardest == nullptr)
+                continue;
+            const btScalar speed = hardest->getAppliedImpulse() * invMass;
+            if (speed < minSpeed)
+                continue;
+            // The simulated one first; its normal points into it.
+            const bool swap = !aSimulated;
+            const btCollisionObject* body = swap ? b : a;
+            const btCollisionObject* other = swap ? a : b;
+            auto* bodyHolder = static_cast<PtrHolder*>(body->getUserPointer());
+            auto* otherHolder = static_cast<PtrHolder*>(other->getUserPointer());
+            if (bodyHolder == nullptr)
+                continue;
+            const btRigidBody* simulated = btRigidBody::upcast(body);
+            found.push_back({ bodyHolder->weak_from_this(),
+                otherHolder != nullptr ? otherHolder->weak_from_this() : std::weak_ptr<PtrHolder>(),
+                swap ? aSimulated : bSimulated, (groupOf(other) & CollisionType_HeightMap) != 0,
+                swap ? hardest->getPositionWorldOnA() : hardest->getPositionWorldOnB(),
+                swap ? -hardest->m_normalWorldOnB : hardest->m_normalWorldOnB, speed,
+                simulated != nullptr && simulated->getInvMass() > 0 ? 1 / simulated->getInvMass() : 0 });
+        }
+        if (found.empty())
+            return;
+        std::lock_guard impactsLock(mImpactsMutex);
+        // Nobody listening (the game paused, say): don't pile up.
+        constexpr size_t maxQueued = 256;
+        if (mImpacts.size() + found.size() > maxQueued)
+            return;
+        mImpacts.insert(mImpacts.end(), found.begin(), found.end());
+    }
+
+    std::vector<PhysicsTaskScheduler::Impact> PhysicsTaskScheduler::takeImpacts()
+    {
+        std::lock_guard impactsLock(mImpactsMutex);
+        return std::exchange(mImpacts, {});
     }
 
     void PhysicsTaskScheduler::setWaterHeight(std::optional<float> height)

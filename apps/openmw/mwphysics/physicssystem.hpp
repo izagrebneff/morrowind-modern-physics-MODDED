@@ -84,6 +84,19 @@ namespace MWPhysics
         float mSpeed;
     };
 
+    /// A simulated item or a ragdoll's part hitting something (see PhysicsSystem::takeImpacts).
+    struct Impact
+    {
+        MWWorld::Ptr mBody; // the item, or the dead actor
+        MWWorld::Ptr mOther; // the other item or body, or the static or door hit; empty for terrain
+        bool mOtherSimulated;
+        bool mOtherTerrain;
+        osg::Vec3f mPoint;
+        osg::Vec3f mNormal; // towards mBody
+        float mSpeed; // the change of speed at the contact
+        float mBodyMass;
+    };
+
     /// Inverse of Misc::Convert::makeOsgQuat: the ESM rotation (x, y, z) of an object with this orientation.
     osg::Vec3f quatToEsmRotation(const osg::Quat& quat);
 
@@ -264,6 +277,10 @@ namespace MWPhysics
 
         /// Actors hit by objects the player threw, since the last call.
         std::vector<ThrownObjectHit> takeThrownObjectHits();
+        /// Collect impacts with at least this change of speed (0: don't).
+        void setImpactMinSpeed(float speed);
+        /// Impacts since the last call.
+        std::vector<Impact> takeImpacts();
         void addActor(const MWWorld::Ptr& ptr, VFS::Path::NormalizedView mesh);
 
         int addProjectile(

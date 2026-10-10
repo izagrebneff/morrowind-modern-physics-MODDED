@@ -996,6 +996,28 @@ namespace MWPhysics
         mTaskScheduler->addFlyingObject(held, thrower != nullptr ? thrower->getCollisionObject() : nullptr);
     }
 
+    void PhysicsSystem::setImpactMinSpeed(float speed)
+    {
+        mTaskScheduler->setImpactMinSpeed(speed);
+    }
+
+    std::vector<Impact> PhysicsSystem::takeImpacts()
+    {
+        std::vector<Impact> result;
+        for (const PhysicsTaskScheduler::Impact& impact : mTaskScheduler->takeImpacts())
+        {
+            const std::shared_ptr<PtrHolder> body = impact.mBody.lock();
+            if (body == nullptr || body->getPtr().isEmpty())
+                continue;
+            const std::shared_ptr<PtrHolder> other = impact.mOther.lock();
+            result.push_back({ body->getPtr(), other != nullptr ? other->getPtr() : MWWorld::Ptr(),
+                impact.mOtherSimulated, impact.mOtherTerrain, Misc::Convert::toOsg(impact.mPoint),
+                Misc::Convert::toOsg(impact.mNormal), static_cast<float>(impact.mSpeed),
+                static_cast<float>(impact.mBodyMass) });
+        }
+        return result;
+    }
+
     std::vector<ThrownObjectHit> PhysicsSystem::takeThrownObjectHits()
     {
         std::vector<ThrownObjectHit> result;

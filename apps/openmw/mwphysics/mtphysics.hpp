@@ -128,6 +128,23 @@ namespace MWPhysics
         };
         /// Hits since the last call.
         std::vector<FlyingObjectHit> takeFlyingObjectHits();
+
+        /// A new contact of a simulated body (item or ragdoll part) with something, hard enough to be heard.
+        struct Impact
+        {
+            std::weak_ptr<PtrHolder> mBody; // the simulated one
+            std::weak_ptr<PtrHolder> mOther; // empty for terrain
+            bool mOtherSimulated;
+            bool mOtherTerrain;
+            btVector3 mPoint;
+            btVector3 mNormal; // towards mBody
+            btScalar mSpeed; // the change of speed at the contact
+            btScalar mBodyMass;
+        };
+        /// Collect impacts with at least this speed change (0: don't).
+        void setImpactMinSpeed(float speed) { mImpactMinSpeed = speed; }
+        /// Impacts since the last call.
+        std::vector<Impact> takeImpacts();
         void removeCollisionObject(btCollisionObject* collisionObject);
         void updateSingleAabb(const std::shared_ptr<PtrHolder>& ptr, bool immediate = false);
         bool getLineOfSight(const std::shared_ptr<Actor>& actor1, const std::shared_ptr<Actor>& actor2);
@@ -199,6 +216,10 @@ namespace MWPhysics
         std::vector<FlyingObject> mFlyingObjects;
         std::vector<FlyingObjectHit> mFlyingObjectHits;
         std::mutex mFlyingObjectsMutex;
+        std::atomic<float> mImpactMinSpeed{ 0.f };
+        std::vector<Impact> mImpacts;
+        std::mutex mImpactsMutex;
+        void collectImpactsUnsafe();
         mutable std::mutex mHeldObjectMutex;
         MWRender::DebugDrawer* mDebugDrawer;
         std::vector<LOSRequest> mLOSCache;

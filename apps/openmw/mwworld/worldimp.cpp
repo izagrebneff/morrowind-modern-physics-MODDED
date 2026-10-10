@@ -102,6 +102,7 @@
 #include "inventorystore.hpp"
 #include "manualref.hpp"
 #include "player.hpp"
+#include "impactsounds.hpp"
 #include "projectilemanager.hpp"
 #include "weather.hpp"
 
@@ -1661,6 +1662,8 @@ namespace MWWorld
             victim.getClass().onHit(victim, { { "fatigue", fatigue } }, hit.mObject.getCellRef().getRefId(),
                 getPlayerPtr(), true, MWMechanics::DamageSourceType::Ranged);
         }
+
+        ImpactSounds::get().update(duration, *mPhysics, *mRendering);
     }
 
     void World::updateNavigator()

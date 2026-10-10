@@ -35,6 +35,7 @@
 #include "../mwworld/datetimemanager.hpp"
 #include "../mwworld/esmstore.hpp"
 #include "../mwworld/manualref.hpp"
+#include "../mwworld/impactsounds.hpp"
 #include "../mwworld/materials.hpp"
 #include "../mwworld/store.hpp"
 #include "../mwworld/worldmodel.hpp"
@@ -373,6 +374,12 @@ namespace MWLua
             return std::string(MWWorld::getMaterialName(
                 MWWorld::classifySurface({}, ptr.getClass().getCorrectedModel(ptr), MWWorld::Material::Unknown)));
         };
+        // Impact sounds: the last impacts and what was done about them, oldest first.
+        api["_impactLog"] = []() {
+            const auto& log = MWWorld::ImpactSounds::get().getLog();
+            return std::vector<std::string>(log.begin(), log.end());
+        };
+        api["_clearImpactLog"] = []() { MWWorld::ImpactSounds::get().clearLog(); };
         api["_stuckProjectiles"] = [](const GObject& actor) {
             MWMechanics::CreatureStats& stats = actor.ptr().getClass().getCreatureStats(actor.ptr());
             int embedded = 0;

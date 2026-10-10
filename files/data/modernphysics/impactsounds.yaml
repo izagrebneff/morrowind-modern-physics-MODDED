@@ -1,0 +1,18 @@
+# Impact sounds for "Morrowind - Modern Physics": Morrowind's own sounds, played where things hit.
+#
+# Distances are in game units (about 70 to a meter), speeds in units per second, times in seconds.
+# Switches for each kind of impact sound are in settings.cfg, [Modern Physics]. With
+#   impact sound debug = true
+# there, every impact is written to openmw.log, and changes to this file are used as soon as it is saved.
+
+limits:
+  # How hard a contact must be to make a sound at all: the change of speed it caused. Below this it is
+  # resting, rolling, sliding or jitter.
+  min speed: 80
+  # The change of speed at which a sound is at full volume (quieter in between).
+  loud speed: 700
+  # How soon the same object can make another impact sound.
+  object cooldown: 0.15
+  # At most this many impact sounds may start within "max sounds window" seconds; more are skipped.
+  max sounds: 6
+  max sounds window: 0.4
