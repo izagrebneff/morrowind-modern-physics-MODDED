@@ -81,6 +81,8 @@ namespace MWPhysics
         void removeAction(btActionInterface* action);
         /// Stop a body and put it to sleep.
         void setAtRest(btRigidBody* body);
+        /// Moves a simulated body to transform, still.
+        void placeBody(btRigidBody* body, const btTransform& transform);
         /// Wake the body and push it: impulse applied at point (world space).
         void applyImpulse(btRigidBody* body, const btVector3& impulse, const btVector3& point);
 

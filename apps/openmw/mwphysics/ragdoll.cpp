@@ -566,6 +566,26 @@ namespace MWPhysics
             mTaskScheduler->setAtRest(part->mBody);
     }
 
+    void Ragdoll::liftStrayParts(const std::function<float(const osg::Vec3f&)>& groundAt, float depth)
+    {
+        for (const auto& part : mParts)
+        {
+            btTransform bodyWorld;
+            part->mMotionState->getWorldTransform(bodyWorld);
+            const osg::Vec3f position = Misc::Convert::toOsg(bodyWorld.getOrigin());
+            const float ground = groundAt(position);
+            if (position.z() >= ground - depth)
+                continue;
+            btVector3 aabbMin;
+            btVector3 aabbMax;
+            part->mShape->getAabb(btTransform::getIdentity(), aabbMin, aabbMax);
+            bodyWorld.getOrigin().setZ(ground + aabbMax.length() + 2.f);
+            part->mMotionState->setWorldTransform(bodyWorld);
+            part->mMotionState->setWorldTransform(bodyWorld); // no interpolation from under the ground
+            mTaskScheduler->placeBody(part->mBody, bodyWorld);
+        }
+    }
+
     void Ragdoll::strike(const osg::Vec3f& point, const osg::Vec3f& impulse)
     {
         Part* nearest = nullptr;

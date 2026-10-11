@@ -1,6 +1,7 @@
 #ifndef OPENMW_MWPHYSICS_RAGDOLL_H
 #define OPENMW_MWPHYSICS_RAGDOLL_H
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -94,6 +95,10 @@ namespace MWPhysics
 
         /// Still and asleep, as if it had been lying there (until something disturbs it).
         void setAtRest();
+
+        /// Puts each part that is more than depth under the ground (groundAt: its height there) back on top of it,
+        /// still: a small piece can slip through the ground on its own.
+        void liftStrayParts(const std::function<float(const osg::Vec3f&)>& groundAt, float depth);
 
         /// Push the part nearest point (world space) there with impulse (mass x velocity change).
         void strike(const osg::Vec3f& point, const osg::Vec3f& impulse);

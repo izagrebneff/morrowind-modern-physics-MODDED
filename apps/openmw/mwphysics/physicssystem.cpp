@@ -1518,12 +1518,27 @@ namespace MWPhysics
                     }
 
                     // Safety net: a body that slipped through the ground would fall forever, taking what it
-                    // carries with it. It goes back to where it died, in its death pose (without the ragdoll).
+                    // carries with it. It goes back to where it died, in its death pose (without the ragdoll) -
+                    // when most of it went through. A small piece of one that came apart (a scrib's leg) can slip
+                    // through on its own: it is lifted back on top, and the rest left lying where it is.
                     const MWWorld::CellStore* cell = actorPtr.getCell();
-                    const bool fallen = cell->isExterior()
-                        ? bodyPosition.z()
-                            < world->getTerrainHeightAt(bodyPosition, cell->getCell()->getWorldSpace()) - 100.f
-                        : bodyPosition.z() < ragdoll->second->getStartPosition().z() - 3000.f;
+                    bool fallen;
+                    if (cell->isExterior())
+                    {
+                        const ESM::RefId worldspace = cell->getCell()->getWorldSpace();
+                        const auto groundAt = [&](const osg::Vec3f& position) {
+                            return world->getTerrainHeightAt(position, worldspace);
+                        };
+                        size_t under = 0;
+                        for (const auto& [bone, matrix] : poses)
+                            if (matrix.getTrans().z() < groundAt(matrix.getTrans()) - 100.f)
+                                ++under;
+                        fallen = under * 2 > poses.size();
+                        if (!fallen && under > 0)
+                            ragdoll->second->liftStrayParts(groundAt, 100.f);
+                    }
+                    else
+                        fallen = bodyPosition.z() < ragdoll->second->getStartPosition().z() - 3000.f;
                     if (fallen)
                     {
                         Log(Debug::Warning) << "Body of " << actorPtr.getCellRef().getRefId()
