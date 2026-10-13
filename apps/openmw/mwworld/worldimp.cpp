@@ -113,6 +113,19 @@ namespace MWWorld
 {
     namespace
     {
+        // Where a carried thing is held from. In third person the camera is well behind the player, further than
+        // a carried thing may be from where it is held: it is held in front of the player instead, on the line the
+        // camera looks along (so it stays under the crosshair).
+        osg::Vec3f getHoldEye(const MWRender::Camera& camera)
+        {
+            const osg::Vec3f position = camera.getPosition();
+            if (camera.getMode() == MWRender::Camera::Mode::FirstPerson)
+                return position;
+            const osg::Vec3f direction = camera.getOrient() * osg::Vec3f(0, 1, 0);
+            const float ahead = (osg::Vec3f(camera.getTrackedPosition()) - position) * direction;
+            return position + direction * std::max(ahead, 0.f);
+        }
+
         std::vector<std::pair<GlobalVariableName, ESM::Variant>> generateDefaultGlobals()
         {
             return {
@@ -1407,7 +1420,7 @@ namespace MWWorld
             && !makeRagdoll(ptr, osg::Vec3f(), true, false))
             return false;
         const MWRender::Camera* camera = mRendering->getCamera();
-        return mPhysics->holdObject(ptr, camera->getPosition(), camera->getOrient() * osg::Vec3f(0, 1, 0));
+        return mPhysics->holdObject(ptr, getHoldEye(*camera), camera->getOrient() * osg::Vec3f(0, 1, 0));
     }
 
     void World::rotateGrabbedObject(float yaw, float pitch)
@@ -1690,7 +1703,7 @@ namespace MWWorld
         if (mPhysics->isHoldingObject())
         {
             const MWRender::Camera* camera = mRendering->getCamera();
-            mPhysics->setHoldView(camera->getPosition(), camera->getOrient() * osg::Vec3f(0, 1, 0));
+            mPhysics->setHoldView(getHoldEye(*camera), camera->getOrient() * osg::Vec3f(0, 1, 0));
         }
         processDoors(duration);
         mProjectileManager->update(duration);
