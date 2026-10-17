@@ -24,7 +24,7 @@ over, pick up and throw, projectiles that stick where they land, and ragdoll cor
 
 You need to own *The Elder Scrolls III: Morrowind* to play. This fork, like OpenMW, contains no game data.
 
-* Fork version: 1.0
+* Fork version: 1.1 (see the [changelog](#changelog))
 * Based on: OpenMW 0.52.0 (development version, upstream commit `628b6c2b72`, 2026-10-03)
 * Modified: October 2026, by sunspotdark (see [What this fork changes](#what-this-fork-changes) and the git
   history for the full list of changes)
@@ -45,6 +45,7 @@ What this fork changes
 * Press **Activate** again to put it down, or **Attack** to throw it. Thrown items can hit people (which counts
   as an attack, as it would be for any other hit).
 * Hold **Rotate Held Item** (default **C**) and move the mouse to turn what you're holding.
+* Works in third person too: what you carry is held in front of your character.
 
 **Combat knocks things about**
 * Arrows, bolts, thrown weapons and spell projectiles knock items over; area spells push things away.
@@ -58,6 +59,15 @@ What this fork changes
   from the body, and they are kept through saves. Up to 8 show per body; any more are still there to loot.
 * Every plain arrow, bolt or thrown weapon shot into a dead body stays in it (and can be looted), and knocks
   the ragdoll where it hits.
+* Arrows that hit an item glance off it lightly (and never stick in the wall behind it).
+
+**Impact sounds and splashes**
+* Things sound like what they are made of when they hit: arrows thunk into wood and clang off stone and
+  metal, dropped and thrown items knock, clatter or clink by material and weight, items knocking into each
+  other, bodies hitting the ground, and melee swings that hit a wall or the floor instead of someone.
+* Bodies, projectiles and items splash when they hit water, sized by how big and fast they are; nothing is
+  heard from under water.
+* Only Morrowind's own sounds are used. Everything can be turned off or tuned (see [Settings](#settings)).
 
 **Ragdolls**
 * People and creatures go limp when they die, thrown by the killing blow, instead of playing a death animation.
@@ -94,6 +104,22 @@ For example:
 [Modern Physics]
 recoverable stuck projectiles = false
 ```
+
+Changelog
+---------
+
+**v1.1**
+* Recoverable stuck projectiles: arrows, bolts and thrown weapons you see stuck in a body are real and can be
+  looted from the corpse (setting `recoverable stuck projectiles`). Shots into dead bodies stay in them and
+  knock the ragdoll; missed enchanted arrows can be picked up (except area-effect ones).
+* Impact sounds for projectiles, items, bodies and melee swings, by material (settings above).
+* Water splashes for bodies, projectiles and items.
+* Fixes: carrying in third person no longer drops the item straight away; a ragdoll piece that ends up under
+  the ground is lifted back instead of the whole body being reset; arrows no longer stick in a shelf behind
+  the item they hit.
+
+**v1.0** (2026-10-05)
+* First release.
 
 Known issues and limitations
 ----------------------------

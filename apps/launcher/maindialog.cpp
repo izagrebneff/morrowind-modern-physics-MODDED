@@ -27,7 +27,7 @@ namespace
 {
     constexpr const char* toolBarStyle = "QToolBar { border: 0px; } QToolButton { min-width: 70px }";
     // Version of the physics fork (matches the release tag), separate from OpenMW's own version
-    constexpr const char* forkVersion = "1.0";
+    constexpr const char* forkVersion = "1.1";
 }
 
 using namespace Process;
