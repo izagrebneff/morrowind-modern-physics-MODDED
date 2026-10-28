@@ -282,6 +282,8 @@ namespace MWPhysics
         mCollisionWorld->setGravity(btVector3(0, 0, -Constants::GravityConst * Constants::UnitsPerMeter));
         // Ragdolls are long chains of joints; more solver passes keep them from stretching.
         mCollisionWorld->getSolverInfo().m_numIterations = 20;
+        // Correct penetrations without causing a large rebound impulse.
+        mCollisionWorld->getSolverInfo().m_splitImpulse = true;
 
         // Don't update AABBs of all objects every frame. Most objects in MW are static, so we don't need this.
         // Should a "static" object ever be moved, we have to update its AABB manually using
@@ -1459,6 +1461,12 @@ namespace MWPhysics
             // modifies mTimeAccum
             mTaskScheduler->applyQueuedMovements(mTimeAccum, simulations, frameStart, frameNumber, stats);
         }
+
+        // Dead humanoids retain their final pose after three seconds. This also prevents
+        // prolonged contact jitter and player movement pushing corpses around.
+        if (!skipSimulation)
+            for (const auto& [_, ragdoll] : mRagdolls)
+                ragdoll->updateFreeze(dt);
     }
 
     std::vector<MWWorld::Ptr> PhysicsSystem::moveActors()
