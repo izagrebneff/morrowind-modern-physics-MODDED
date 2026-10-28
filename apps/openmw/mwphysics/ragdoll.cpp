@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <limits>
 #include <mutex>
 #include <string_view>
@@ -69,7 +70,7 @@ namespace MWPhysics
 
         void updateAction(btCollisionWorld*, btScalar timeStep) override
         {
-            constexpr btScalar rate = 14; // per second: about a fifth of the turning gone each step at 60 Hz
+            constexpr btScalar rate = 22; // heavier joints: reduce relative angular motion more quickly
             const btScalar fraction = 1 - std::exp(-rate * timeStep);
             for (const auto& [a, b] : mPairs)
             {
@@ -209,11 +210,12 @@ namespace MWPhysics
             makeBody(*part, bodyWorld, def.mMass, def.mRadius);
 
             // Falling as it was moving, the upper body thrown back by the killing blow.
-            btVector3 partVelocity = Misc::Convert::toBullet(velocity);
+            const btVector3 kickVelocity = Misc::Convert::toBullet(kick);
+            btVector3 partVelocity = Misc::Convert::toBullet(velocity) + kickVelocity * 0.25f;
             if (def.mBone == "Bip01 Spine1" || def.mBone == "Bip01 Head")
-                partVelocity += Misc::Convert::toBullet(kick);
+                partVelocity += kickVelocity * 0.85f;
             else if (def.mBone == "Bip01 Pelvis")
-                partVelocity += Misc::Convert::toBullet(kick) * 0.6f;
+                partVelocity += kickVelocity * 0.75f;
             part->mBody->setLinearVelocity(partVelocity);
 
             mParts.push_back(std::move(part));
@@ -437,13 +439,13 @@ namespace MWPhysics
         part.mShape->calculateLocalInertia(mass, inertia);
         part.mMotionState = std::make_unique<RagdollMotionState>(bodyWorld);
         btRigidBody::btRigidBodyConstructionInfo info(mass, part.mMotionState.get(), part.mShape.get(), inertia);
-        info.m_friction = 0.8f;
-        info.m_restitution = 0.05f;
-        info.m_linearDamping = 0.15f;
-        info.m_angularDamping = 0.7f;
+        info.m_friction = 0.95f;
+        info.m_restitution = 0.f;
+        info.m_linearDamping = 0.26f;
+        info.m_angularDamping = 0.86f;
         // In game units (~70 per meter), like the other simulated objects.
-        info.m_linearSleepingThreshold = 4.f;
-        info.m_angularSleepingThreshold = 1.f;
+        info.m_linearSleepingThreshold = 7.f;
+        info.m_angularSleepingThreshold = 2.5f;
         auto body = std::make_unique<btRigidBody>(info);
         if (thickness > 0)
         {
@@ -460,12 +462,31 @@ namespace MWPhysics
 
     void Ragdoll::addToWorld()
     {
-        // The parts don't collide with each other: they overlap at the joints.
+        // Adjacent parts necessarily overlap at the joint. Allow selected nonadjacent
+        // limb/torso pairs to collide unless their initial AABBs already overlap.
+        const bool humanoid = mParts.size() == std::size(sPartDefs)
+            && mParts[0]->mBone == "Bip01 Pelvis";
         for (size_t i = 0; i < mParts.size(); ++i)
             for (size_t j = i + 1; j < mParts.size(); ++j)
             {
-                mParts[i]->mBody->setIgnoreCollisionCheck(mParts[j]->mBody, true);
-                mParts[j]->mBody->setIgnoreCollisionCheck(mParts[i]->mBody, true);
+                const bool protectedPair = humanoid
+                    && ((i == 0 && (j == 3 || j == 4 || j == 5 || j == 6 || j == 8 || j == 10))
+                        || (i == 1 && (j == 4 || j == 6 || j == 7 || j == 8 || j == 9 || j == 10)));
+                bool overlapping = false;
+                if (protectedPair)
+                {
+                    btVector3 aMin, aMax, bMin, bMax;
+                    mParts[i]->mShape->getAabb(mParts[i]->mBody->getWorldTransform(), aMin, aMax);
+                    mParts[j]->mShape->getAabb(mParts[j]->mBody->getWorldTransform(), bMin, bMax);
+                    overlapping = aMin.x() <= bMax.x() && aMax.x() >= bMin.x()
+                        && aMin.y() <= bMax.y() && aMax.y() >= bMin.y()
+                        && aMin.z() <= bMax.z() && aMax.z() >= bMin.z();
+                }
+                if (!protectedPair || overlapping)
+                {
+                    mParts[i]->mBody->setIgnoreCollisionCheck(mParts[j]->mBody, true);
+                    mParts[j]->mBody->setIgnoreCollisionCheck(mParts[i]->mBody, true);
+                }
             }
         for (const auto& part : mParts)
             mTaskScheduler->addRigidBody(part->mBody, CollisionType_Dynamic,
@@ -485,7 +506,11 @@ namespace MWPhysics
         auto joint = std::make_unique<btConeTwistConstraint>(
             parent, child, parent.getWorldTransform().inverse() * jointWorld, childWorld.inverse() * jointWorld);
         // Firm limits (little give, quickly corrected), so joints don't stretch.
-        joint->setLimit(btRadians(swing1), btRadians(swing2), btRadians(twist), 0.9f, 0.6f, 1.f);
+        const bool humanoid = !mParts.empty() && mParts[0]->mBone == "Bip01 Pelvis";
+        const float scale = humanoid ? 0.85f : 1.f;
+        joint->setLimit(btRadians(swing1 * scale), btRadians(swing2 * scale),
+            btRadians(twist * scale), 0.9f, 0.55f, 0.9f);
+        joint->setOverrideNumSolverIterations(28);
         mTaskScheduler->addConstraint(joint.get());
         mJoints.push_back(std::move(joint));
     }
@@ -564,6 +589,18 @@ namespace MWPhysics
     {
         for (const auto& part : mParts)
             mTaskScheduler->setAtRest(part->mBody);
+    }
+
+    void Ragdoll::updateFreeze(float duration)
+    {
+        if (mFrozen || mParts.size() != std::size(sPartDefs) || mParts.front()->mBone != "Bip01 Pelvis")
+            return;
+        mFreezeAge += std::max(duration, 0.f);
+        if (mFreezeAge < 3.f)
+            return;
+        mFrozen = true;
+        for (const auto& part : mParts)
+            mTaskScheduler->freezeBody(part->mBody);
     }
 
     void Ragdoll::liftStrayParts(const std::function<float(const osg::Vec3f&)>& groundAt, float depth)
