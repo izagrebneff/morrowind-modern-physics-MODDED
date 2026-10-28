@@ -796,8 +796,8 @@ namespace MWClass
                 away.z() = 0;
                 if (away.normalize() > 0)
                 {
-                    away.z() = 0.3f;
-                    stats.setDeathKick(away * std::clamp(100.f + healthDamage * 5.f, 100.f, 320.f));
+                    away.z() = 0.32f;
+                    stats.setDeathKick(away * std::clamp(130.f + healthDamage * 5.f, 130.f, 360.f));
                 }
             }
 
