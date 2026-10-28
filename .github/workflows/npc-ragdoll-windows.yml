@@ -1,0 +1,19 @@
+name: NPC ragdoll Windows build
+
+on:
+  push:
+    branches:
+      - npc-ragdoll-stable-build
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  Windows:
+    uses: ./.github/workflows/windows.yml
+    with:
+      image: "2022"
+      msvc: "2022"
+      build-type: "RelWithDebInfo"
+      package: false
