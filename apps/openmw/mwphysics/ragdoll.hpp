@@ -96,6 +96,9 @@ namespace MWPhysics
         /// Still and asleep, as if it had been lying there (until something disturbs it).
         void setAtRest();
 
+        /// Permanently stabilize humanoid corpses three seconds after death.
+        void updateFreeze(float duration);
+
         /// Puts each part that is more than depth under the ground (groundAt: its height there) back on top of it,
         /// still: a small piece can slip through the ground on its own.
         void liftStrayParts(const std::function<float(const osg::Vec3f&)>& groundAt, float depth);
@@ -144,6 +147,8 @@ namespace MWPhysics
         // each part was at the last check.
         osg::Vec3f mStartPosition;
         float mAge = 0;
+        float mFreezeAge = 0.f;
+        bool mFrozen = false;
         float mCheckTimer = 0;
         std::vector<float> mStartDistances;
         std::vector<btVector3> mLastPositions;
