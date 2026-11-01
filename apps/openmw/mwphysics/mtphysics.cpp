@@ -856,6 +856,13 @@ namespace MWPhysics
         body->setActivationState(DISABLE_SIMULATION);
     }
 
+    void PhysicsTaskScheduler::setBodyGravity(btRigidBody* body, const btVector3& gravity)
+    {
+        MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
+        body->setGravity(gravity);
+        body->activate(true);
+    }
+
     void PhysicsTaskScheduler::placeBody(btRigidBody* body, const btTransform& transform)
     {
         MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
