@@ -1494,7 +1494,7 @@ namespace MWPhysics
 
                 if (!poses.empty())
                 {
-                    const osg::Vec3f bodyPosition = poses.front().second.getTrans();
+                    const osg::Vec3f bodyPosition = ragdoll->second->getMainPosition();
 
                     // Falling into water (its main part going under; simulation steps are 1/mPhysicsDt a second).
                     if (mWaterEnabled)
