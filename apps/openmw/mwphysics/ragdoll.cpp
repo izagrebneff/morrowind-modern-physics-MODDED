@@ -96,6 +96,26 @@ namespace MWPhysics
         void debugDraw(btIDebugDraw*) override {}
     };
 
+    // Damps aerial corpses without affecting gravity or locomotion of living flyers.
+    // Run every physics step so even large netches cannot acquire a one-frame fall spike.
+    class FlyingCorpseFall final : public btActionInterface
+    {
+    public:
+        std::vector<btRigidBody*> mBodies;
+        void updateAction(btCollisionWorld*, btScalar timeStep) override
+        {
+            const btScalar fraction = 1 - std::exp(-3.0f * timeStep);
+            for (btRigidBody* body : mBodies)
+            {
+                btVector3 v = body->getLinearVelocity();
+                if (v.z() < -95.f)
+                    v.setZ(-95.f + (v.z() + 95.f) * (1 - fraction));
+                body->setLinearVelocity(v);
+            }
+        }
+        void debugDraw(btIDebugDraw*) override {}
+    };
+
     struct Ragdoll::Part final : public PtrHolder
     {
         explicit Part(const MWWorld::Ptr& ptr)
@@ -339,6 +359,7 @@ namespace MWPhysics
             if (parent >= 0)
                 ragdoll->addJoint(parent, i, bones[chosen[i]].mWorld.getTrans(), 30, 30, 15);
         }
+        ragdoll->mMainPartIndex = static_cast<size_t>(root);
         ragdoll->addJointFriction();
 
         // Keep every weighted bone (even tiny wing tips and insect feelers)
@@ -519,8 +540,19 @@ namespace MWPhysics
                 CollisionType_DynamicSupport | CollisionType_Actor | CollisionType_Dynamic | CollisionType_Projectile);
 
         // Physics-only slow fall, never changes gravity for living flying actors.
-        if (!mParts.empty() && mParts.front()->getPtr().getClass().canFly(mParts.front()->getPtr()))
-            setGravityScale(0.30f);
+        mFlyingCorpse = !mParts.empty() && mParts.front()->getPtr().getClass().canFly(mParts.front()->getPtr());
+        if (mFlyingCorpse)
+        {
+            setGravityScale(0.12f);
+            auto controller = std::make_unique<FlyingCorpseFall>();
+            for (const auto& part : mParts)
+            {
+                part->mBody->setDamping(0.65f, 0.38f);
+                controller->mBodies.push_back(part->mBody);
+            }
+            mFlyingFallController = std::move(controller);
+            mTaskScheduler->addAction(mFlyingFallController.get());
+        }
     }
 
     void Ragdoll::setGravityScale(float scale)
@@ -544,7 +576,9 @@ namespace MWPhysics
             parent, child, parent.getWorldTransform().inverse() * jointWorld, childWorld.inverse() * jointWorld);
         // Firm limits (little give, quickly corrected), so joints don't stretch.
         const bool humanoid = !mParts.empty() && mParts[0]->mBone == "Bip01 Pelvis";
-        const float scale = humanoid ? 0.85f : 1.f;
+        const bool flying = mFlyingCorpse || (!mParts.empty()
+            && mParts.front()->getPtr().getClass().canFly(mParts.front()->getPtr()));
+        const float scale = humanoid ? 0.85f : (flying ? 1.4f : 1.f);
         joint->setLimit(btRadians(swing1 * scale), btRadians(swing2 * scale),
             btRadians(twist * scale), 0.9f, 0.55f, 0.9f);
         joint->setOverrideNumSolverIterations(28);
@@ -569,6 +603,13 @@ namespace MWPhysics
         // Kept from the start: a body picked up lying down lies off to one side of where the actor stands.
         if (!mActorOffset)
             mActorOffset = osg::Vec2f(actorPosition.x() - main.x(), actorPosition.y() - main.y());
+        if (mFlyingCorpse)
+        {
+            if (!mFlyingActorOffsetZ)
+                mFlyingActorOffsetZ = actorPosition.z() - main.z();
+            return osg::Vec3f(main.x() + mActorOffset->x(), main.y() + mActorOffset->y(),
+                main.z() + *mFlyingActorOffsetZ);
+        }
         return osg::Vec3f(main.x() + mActorOffset->x(), main.y() + mActorOffset->y(), main.z());
     }
 
@@ -614,7 +655,8 @@ namespace MWPhysics
             if ((positions[i] - mLastPositions[i]).length() > maxSpeed * mCheckTimer)
                 return true;
             if (isJointed()
-                && (positions[i] - positions.front()).length() > mStartDistances[i] * 2.f + 80.f)
+                && (positions[i] - positions.front()).length() > mStartDistances[i] * 2.f
+                    + (mFlyingCorpse ? 250.f : 80.f))
                 return true;
         }
         mLastPositions = std::move(positions);
@@ -712,6 +754,8 @@ namespace MWPhysics
 
     Ragdoll::~Ragdoll()
     {
+        if (mFlyingFallController != nullptr)
+            mTaskScheduler->removeAction(mFlyingFallController.get());
         if (mJointFriction != nullptr)
             mTaskScheduler->removeAction(mJointFriction.get());
         for (const auto& joint : mJoints)
@@ -733,7 +777,7 @@ namespace MWPhysics
                     * osg::Matrixf::translate(Misc::Convert::toOsg(bone.getOrigin())));
         }
         if (!poses.empty())
-            mLastMainBonePosition = poses.front().second.getTrans();
+            mLastMainBonePosition = poses.at(mMainPartIndex).second.getTrans();
         if (!mSkinnedBoneBindings.empty())
         {
             std::vector<std::pair<std::string, osg::Matrixf>> allBones;
