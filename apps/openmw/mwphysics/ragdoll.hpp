@@ -155,8 +155,12 @@ namespace MWPhysics
         std::vector<SkinnedBoneBinding> mSkinnedBoneBindings;
         mutable std::vector<std::pair<std::string, osg::Matrixf>> mLastPoses;
         mutable osg::Vec3f mLastMainBonePosition;
+        size_t mMainPartIndex = 0; // the torso/body, not the first wing bone
+        bool mFlyingCorpse = false;
         std::unique_ptr<btActionInterface> mJointFriction;
-        std::optional<osg::Vec2f> mActorOffset; // from the main part to the actor, along the ground
+        std::unique_ptr<btActionInterface> mFlyingFallController;
+        std::optional<osg::Vec2f> mActorOffset; // offset from main part to actor in X/Y
+        std::optional<float> mFlyingActorOffsetZ; // preserve flying height when bones are away from actor origin
         // For hasComeApart: how long it has been checked, how far each part started from the main one, and where
         // each part was at the last check.
         osg::Vec3f mStartPosition;
