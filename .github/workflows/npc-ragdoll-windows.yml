@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - npc-ragdoll-stable-build
+      - flying-creatures-slowfall-bones
   workflow_dispatch:
 
 permissions:
