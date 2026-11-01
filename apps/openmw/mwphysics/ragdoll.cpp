@@ -18,6 +18,9 @@
 #include <osg/Quat>
 
 #include <components/misc/convert.hpp>
+#include <components/misc/constants.hpp>
+
+#include "../mwworld/class.hpp"
 
 #include "collisiontype.hpp"
 #include "mtphysics.hpp"
@@ -337,6 +340,29 @@ namespace MWPhysics
                 ragdoll->addJoint(parent, i, bones[chosen[i]].mWorld.getTrans(), 30, 30, 15);
         }
         ragdoll->addJointFriction();
+
+        // Keep every weighted bone (even tiny wing tips and insect feelers)
+        // attached to the nearest physically simulated parent. Without this,
+        // only a subset is updated and the rest of a skinned mesh stretches
+        // upward as the ragdoll falls.
+        for (size_t i = 0; i < bones.size(); ++i)
+        {
+            int driver = partOfBone[i];
+            if (driver < 0)
+                for (int parent = bones[i].mParent; parent >= 0; parent = bones[parent].mParent)
+                    if (partOfBone[parent] >= 0)
+                    {
+                        driver = partOfBone[parent];
+                        break;
+                    }
+            if (driver < 0)
+                driver = root;
+            const size_t selectedBone = chosen[static_cast<size_t>(driver)];
+            const osg::Matrixf relative
+                = bones[i].mWorld * osg::Matrixf::inverse(bones[selectedBone].mWorld);
+            ragdoll->mSkinnedBoneBindings.push_back(
+                { bones[i].mName, static_cast<size_t>(driver), relative });
+        }
         return ragdoll;
     }
 
@@ -491,6 +517,17 @@ namespace MWPhysics
         for (const auto& part : mParts)
             mTaskScheduler->addRigidBody(part->mBody, CollisionType_Dynamic,
                 CollisionType_DynamicSupport | CollisionType_Actor | CollisionType_Dynamic | CollisionType_Projectile);
+
+        // Physics-only slow fall, never changes gravity for living flying actors.
+        if (!mParts.empty() && mParts.front()->getPtr().getClass().canFly(mParts.front()->getPtr()))
+            setGravityScale(0.30f);
+    }
+
+    void Ragdoll::setGravityScale(float scale)
+    {
+        const btVector3 gravity(0, 0, -Constants::GravityConst * Constants::UnitsPerMeter * scale);
+        for (const auto& part : mParts)
+            mTaskScheduler->setBodyGravity(part->mBody, gravity);
     }
 
     void Ragdoll::addJoint(size_t parentIndex, size_t childIndex, const osg::Vec3f& position, float swing1,
@@ -528,7 +565,7 @@ namespace MWPhysics
     {
         if (mLastPoses.empty())
             return std::nullopt;
-        const osg::Vec3f main = mLastPoses.front().second.getTrans();
+        const osg::Vec3f main = mLastMainBonePosition;
         // Kept from the start: a body picked up lying down lies off to one side of where the actor stands.
         if (!mActorOffset)
             mActorOffset = osg::Vec2f(actorPosition.x() - main.x(), actorPosition.y() - main.y());
@@ -694,6 +731,19 @@ namespace MWPhysics
             poses.emplace_back(part->mBone,
                 osg::Matrixf::scale(part->mBoneScale) * osg::Matrixf::rotate(Misc::Convert::toOsg(bone.getRotation()))
                     * osg::Matrixf::translate(Misc::Convert::toOsg(bone.getOrigin())));
+        }
+        if (!poses.empty())
+            mLastMainBonePosition = poses.front().second.getTrans();
+        if (!mSkinnedBoneBindings.empty())
+        {
+            std::vector<std::pair<std::string, osg::Matrixf>> allBones;
+            allBones.reserve(mSkinnedBoneBindings.size());
+            // Original skinned-bone order is parents first. Applying matrices in
+            // this order avoids invalid parent transforms for nested wing bones.
+            for (const auto& binding : mSkinnedBoneBindings)
+                allBones.emplace_back(binding.mName,
+                    binding.mRelativeToDriver * poses.at(binding.mDriverPart).second);
+            poses = std::move(allBones);
         }
         mLastPoses = poses;
         return poses;
