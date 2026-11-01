@@ -125,6 +125,9 @@ namespace MWPhysics
         /// What getBonePoses gave last (so the rest of the frame agrees with what the bones were set to).
         const std::vector<std::pair<std::string, osg::Matrixf>>& getLastBonePoses() const { return mLastPoses; }
 
+        /// Actual position of the main simulated body, independent of auxiliary skinned bones.
+        const osg::Vec3f& getMainPosition() const { return mLastMainBonePosition; }
+
         /// Where the actor (whose position is at its feet, actorPosition now) should be for its body to be where
         /// the ragdoll is: following the main part (the pelvis, say) along the ground, at its height. Empty
         /// before the bones were first posed.
@@ -136,11 +139,22 @@ namespace MWPhysics
         explicit Ragdoll(PhysicsTaskScheduler* scheduler);
         static void makeBody(Part& part, const btTransform& bodyWorld, float mass, float thickness);
         void addToWorld();
+        void setGravityScale(float scale);
         void addJointFriction(); // once all joints are made
         void addJoint(size_t parentIndex, size_t childIndex, const osg::Vec3f& position, float swing1, float swing2,
             float twist);
 
+        struct SkinnedBoneBinding
+        {
+            std::string mName;
+            size_t mDriverPart;
+            osg::Matrixf mRelativeToDriver;
+        };
+        // Every skinned bone, not just the ones that got a Bullet body; keeps small wings
+        // and appendages following their simulated parent instead of stretching vertically.
+        std::vector<SkinnedBoneBinding> mSkinnedBoneBindings;
         mutable std::vector<std::pair<std::string, osg::Matrixf>> mLastPoses;
+        mutable osg::Vec3f mLastMainBonePosition;
         std::unique_ptr<btActionInterface> mJointFriction;
         std::optional<osg::Vec2f> mActorOffset; // from the main part to the actor, along the ground
         // For hasComeApart: how long it has been checked, how far each part started from the main one, and where
