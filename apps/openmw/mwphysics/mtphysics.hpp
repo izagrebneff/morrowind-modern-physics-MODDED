@@ -81,6 +81,8 @@ namespace MWPhysics
         void removeAction(btActionInterface* action);
         /// Stop a body and put it to sleep.
         void setAtRest(btRigidBody* body);
+        /// Override gravity for an individual rigid body while holding the physics world lock.
+        void setBodyGravity(btRigidBody* body, const btVector3& gravity);
         /// Lock physics and permanently stop a corpse part from taking further impulses.
         void freezeBody(btRigidBody* body);
         /// Moves a simulated body to transform, still.
