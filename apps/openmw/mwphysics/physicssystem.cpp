@@ -1518,8 +1518,14 @@ namespace MWPhysics
                     // The actor is kept with its body, so if it is well away from it, something else moved it (a
                     // script, say). It stays there, in its death pose: the ragdoll would pull it back.
                     constexpr float maxDistance = 256.f;
-                    if ((bodyPosition - actorPtr.getRefData().getPosition().asVec3()).length2()
-                        > maxDistance * maxDistance)
+                    // For flying creatures the visual torso can be hundreds of units
+                    // above/below the actor origin. Compare the actor's tracked position
+                    // against the body's expected actor position, not the raw bone position.
+                    const osg::Vec3f actorPosition = actorPtr.getRefData().getPosition().asVec3();
+                    const std::optional<osg::Vec3f> expectedActorPosition
+                        = ragdoll->second->getActorPosition(actorPosition);
+                    if (expectedActorPosition
+                        && (*expectedActorPosition - actorPosition).length2() > maxDistance * maxDistance)
                     {
                         droppedBodies.push_back(ptr);
                         continue;
