@@ -108,8 +108,11 @@ namespace MWPhysics
             for (btRigidBody* body : mBodies)
             {
                 btVector3 v = body->getLinearVelocity();
-                if (v.z() < -95.f)
-                    v.setZ(-95.f + (v.z() + 95.f) * (1 - fraction));
+                // 2.5x faster than the original slow-fall profile (-95 units/s).
+                // Keep the same smoothing to avoid sudden downward acceleration.
+                constexpr btScalar maxFallSpeed = 237.5f;
+                if (v.z() < -maxFallSpeed)
+                    v.setZ(-maxFallSpeed + (v.z() + maxFallSpeed) * (1 - fraction));
                 body->setLinearVelocity(v);
             }
         }
@@ -543,7 +546,8 @@ namespace MWPhysics
         mFlyingCorpse = !mParts.empty() && mParts.front()->getPtr().getClass().canFly(mParts.front()->getPtr());
         if (mFlyingCorpse)
         {
-            setGravityScale(0.12f);
+            // 2.5x aerial corpse acceleration (formerly 0.12f).
+            setGravityScale(0.30f);
             auto controller = std::make_unique<FlyingCorpseFall>();
             for (const auto& part : mParts)
             {
