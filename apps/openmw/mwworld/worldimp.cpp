@@ -1401,7 +1401,7 @@ namespace MWWorld
     bool World::canRagdollCorpse(const MWWorld::ConstPtr& ptr) const
     {
         // Not the player (the death camera).
-        if (!ptr.getClass().isActor() || ptr == getPlayerConstPtr())
+        if (!ptr.getClass().isActor() || ptr.getClass().isBipedal(ptr) || ptr == getPlayerConstPtr())
             return false;
         // Only reads the stats, so stripping Const is fine.
         const MWWorld::Ptr mutablePtr(
@@ -1455,6 +1455,11 @@ namespace MWWorld
 
     bool World::makeRagdollBody(const MWWorld::Ptr& actor, const osg::Vec3f& kick, bool allowOnePiece)
     {
+        // NPCs and bipedal creatures retain their regular death animations.
+        if (actor.getClass().isBipedal(actor))
+            return false;
+        // Flying creatures that have no usable articulated rig still need to fall.
+        allowOnePiece = allowOnePiece || actor.getClass().canFly(actor);
         const MWRender::Animation* animation = mRendering->getAnimation(actor);
         if (animation == nullptr)
             return false;
