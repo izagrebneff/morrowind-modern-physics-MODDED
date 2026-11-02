@@ -21,6 +21,7 @@
 #include <components/misc/constants.hpp>
 
 #include "../mwworld/class.hpp"
+#include "../mwmechanics/creaturestats.hpp"
 
 #include "collisiontype.hpp"
 #include "mtphysics.hpp"
@@ -202,6 +203,7 @@ namespace MWPhysics
         : mTaskScheduler(scheduler)
     {
         const auto position = [&](std::string_view bone) { return bones.find(bone)->second.getTrans(); };
+        const std::string& severedBone = actor.getClass().getCreatureStats(actor).getSeveredBone();
 
         for (const PartDef& def : sPartDefs)
         {
@@ -242,6 +244,15 @@ namespace MWPhysics
                 partVelocity += kickVelocity * 0.85f;
             else if (def.mBone == "Bip01 Pelvis")
                 partVelocity += kickVelocity * 0.75f;
+            // A severed head/forearm/calf is a fully simulated, separate rigid body.
+            // Its visual part (including worn armor) still follows this bone.
+            if (!severedBone.empty() && def.mBone == severedBone)
+            {
+                mSeveredPartIndex = static_cast<int>(mParts.size());
+                partVelocity = Misc::Convert::toBullet(velocity + kick * 1.6f + osg::Vec3f(0, 0, 45.f));
+                const btScalar side = def.mBone.find(" R ") != std::string_view::npos ? -1.f : 1.f;
+                part->mBody->setAngularVelocity(btVector3(3.4f * side, 2.0f, 4.2f * side));
+            }
             part->mBody->setLinearVelocity(partVelocity);
 
             mParts.push_back(std::move(part));
@@ -252,7 +263,9 @@ namespace MWPhysics
         for (size_t i = 0; i < mParts.size(); ++i)
         {
             const PartDef& def = sPartDefs[i];
-            if (def.mParent >= 0)
+            // Breaking this joint, rather than just moving the limb, makes it
+            // independent in Bullet. No artificial visual-only limb animation.
+            if (def.mParent >= 0 && static_cast<int>(i) != mSeveredPartIndex)
                 addJoint(def.mParent, i, position(def.mBone), def.mSwing1, def.mSwing2, def.mTwist);
         }
         addJointFriction();
@@ -658,7 +671,7 @@ namespace MWPhysics
         {
             if ((positions[i] - mLastPositions[i]).length() > maxSpeed * mCheckTimer)
                 return true;
-            if (isJointed()
+            if (isJointed() && static_cast<int>(i) != mSeveredPartIndex
                 && (positions[i] - positions.front()).length() > mStartDistances[i] * 2.f
                     + (mFlyingCorpse ? 250.f : 80.f))
                 return true;
@@ -679,7 +692,7 @@ namespace MWPhysics
         if (mFrozen || mParts.size() != std::size(sPartDefs) || mParts.front()->mBone != "Bip01 Pelvis")
             return;
         mFreezeAge += std::max(duration, 0.f);
-        if (mFreezeAge < 3.f)
+        if (mFreezeAge < (mSeveredPartIndex >= 0 ? 8.f : 3.f))
             return;
         mFrozen = true;
         for (const auto& part : mParts)
