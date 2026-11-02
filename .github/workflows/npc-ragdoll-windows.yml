@@ -8,6 +8,7 @@ on:
       - flying-creatures-fall-2-5x
       - flying-creatures-fall-5x
       - flying-creatures-fall-10x
+      - npc-blade-dismemberment-physics
   workflow_dispatch:
 
 permissions:
