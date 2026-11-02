@@ -268,6 +268,7 @@ namespace MWMechanics
             mDynamic[0].setCurrent(mDynamic[0].getBase());
             mDead = false;
             mDeathAnimationFinished = false;
+            mSeveredBone.clear();
         }
     }
 
@@ -542,6 +543,7 @@ namespace MWMechanics
         state.mLevel = mLevel;
         state.mDeathAnimation = mDeathAnimation;
         state.mTimeOfDeath = mTimeOfDeath.toEsm();
+        state.mSeveredBone = mSeveredBone;
         state.mRagdoll.clear();
         for (const auto& [bone, matrix] : mRagdollPose)
         {
@@ -616,6 +618,7 @@ namespace MWMechanics
         mLevel = state.mLevel;
         mDeathAnimation = state.mDeathAnimation;
         mTimeOfDeath = MWWorld::TimeStamp(state.mTimeOfDeath);
+        mSeveredBone = state.mSeveredBone;
         mRagdollPose.clear();
         for (const ESM::CreatureStats::RagdollBone& bone : state.mRagdoll)
         {
