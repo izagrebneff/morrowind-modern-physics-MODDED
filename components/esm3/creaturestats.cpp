@@ -205,6 +205,10 @@ namespace ESM
             mRagdoll.push_back(std::move(bone));
         }
 
+        mSeveredBone.clear();
+        if (esm.isNextSub("SVBN"))
+            mSeveredBone = esm.getHString();
+
         mStuckProjectiles.clear();
         while (esm.isNextSub("STKA"))
         {
@@ -335,6 +339,9 @@ namespace ESM
             esm.writeHNT("RAGP", bone.mPose);
         }
 
+        if (!mSeveredBone.empty())
+            esm.writeHNString("SVBN", mSeveredBone);
+
         for (const StuckProjectile& projectile : mStuckProjectiles)
         {
             esm.writeHNRefId("STKA", projectile.mAmmo);
@@ -372,6 +379,7 @@ namespace ESM
         mRecalcDynamicStats = false;
         mDrawState = 0;
         mRagdoll.clear();
+        mSeveredBone.clear();
         mStuckProjectiles.clear();
         mEmbeddedAmmo.clear();
         mDeathAnimation = -1;
