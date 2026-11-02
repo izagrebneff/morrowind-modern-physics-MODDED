@@ -97,6 +97,7 @@ namespace ESM
             std::array<float, 8> mPose;
         };
         std::vector<RagdollBone> mRagdoll;
+        std::string mSeveredBone; // saved severed limb, if any; optional for older saves
 
         /// A projectile stuck in the body, as shown: what it is, the bone it is in and where on that bone (a 4x4
         /// matrix, row by row).
