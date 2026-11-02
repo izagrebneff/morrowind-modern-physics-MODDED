@@ -1401,7 +1401,10 @@ namespace MWWorld
     bool World::canRagdollCorpse(const MWWorld::ConstPtr& ptr) const
     {
         // Not the player (the death camera).
-        if (!ptr.getClass().isActor() || ptr.getClass().isBipedal(ptr) || ptr == getPlayerConstPtr())
+        if (!ptr.getClass().isActor() || ptr == getPlayerConstPtr()
+            || (ptr.getClass().isBipedal(ptr)
+                && (!ptr.getClass().isNpc()
+                    || ptr.getClass().getCreatureStats(mutablePtrPlaceholder).getSeveredBone().empty())))
             return false;
         // Only reads the stats, so stripping Const is fine.
         const MWWorld::Ptr mutablePtr(
