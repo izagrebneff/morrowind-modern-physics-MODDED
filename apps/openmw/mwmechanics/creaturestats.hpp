@@ -66,6 +66,7 @@ namespace MWMechanics
         bool mHitRecovery = false;
         bool mBlock = false;
         osg::Vec3f mDeathKick; // how the killing blow throws the body
+        std::string mSeveredBone; // one bone detached by a lethal bladed melee attack
         std::vector<std::pair<std::string, osg::Matrixf>> mRagdollPose;
         std::vector<StuckProjectile> mStuckProjectiles;
         std::map<ESM::RefId, int> mEmbeddedAmmo;
@@ -244,6 +245,9 @@ namespace MWMechanics
         /// How the killing blow throws the body (velocity change; not saved).
         void setDeathKick(const osg::Vec3f& kick) { mDeathKick = kick; }
         const osg::Vec3f& getDeathKick() const { return mDeathKick; }
+
+        void setSeveredBone(std::string bone) { mSeveredBone = std::move(bone); }
+        const std::string& getSeveredBone() const { return mSeveredBone; }
 
         /// Where a dead body's ragdoll bones lie (world matrices; so it lies the same after loading, or coming back
         /// to it). Parents first.
