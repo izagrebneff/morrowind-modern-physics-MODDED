@@ -17,6 +17,7 @@
 #include <components/esm3/loadmgef.hpp>
 #include <components/esm3/loadnpc.hpp>
 #include <components/esm3/loadrace.hpp>
+#include <components/esm3/loadweap.hpp>
 #include <components/esm3/loadsoun.hpp>
 #include <components/esm3/npcstate.hpp>
 #include <components/settings/values.hpp>
@@ -787,6 +788,34 @@ namespace MWClass
 
         if (!wasDead && getCreatureStats(ptr).isDead())
         {
+            // Fatal melee hits from cutting weapons can sever one head, forearm or lower leg.
+            // Armor and clothing on that segment stay bound to its skeleton and follow its Bullet body.
+            // Never dismember the player, or actors killed by spells, arrows and blunt weapons.
+            if (ptr != MWMechanics::getPlayer() && sourceType == MWMechanics::DamageSourceType::Melee
+                && hasHealthDamage && healthDamage >= 15.f && !object.empty())
+            {
+                const ESM::Weapon* weapon
+                    = MWBase::Environment::get().getWorld()->getStore().get<ESM::Weapon>().search(object);
+                if (weapon != nullptr)
+                {
+                    const ESM::RefId& type = weapon->mData.mType;
+                    if (type == ESM::WeaponType::ShortBladeOneHand || type == ESM::WeaponType::LongBladeOneHand
+                        || type == ESM::WeaponType::LongBladeTwoHand || type == ESM::WeaponType::AxeOneHand
+                        || type == ESM::WeaponType::AxeTwoHand)
+                    {
+                        // One part per killing blow. Randomized but guaranteed for eligible lethal cuts;
+                        // does not depend on armor, so a gauntlet or greave is detached with its limb.
+                        static constexpr std::string_view severable[] = {
+                            "Bip01 Head", "Bip01 L Forearm", "Bip01 R Forearm",
+                            "Bip01 L Calf", "Bip01 R Calf",
+                        };
+                        auto& rng = MWBase::Environment::get().getWorld()->getPrng();
+                        const int roll = Misc::Rng::roll0to99(rng);
+                        stats.setSeveredBone(std::string(severable[roll % 5]));
+                    }
+                }
+            }
+
             // The killing blow throws the body (its ragdoll) away from the attacker, harder for heavier blows,
             // within reason.
             if (!attacker.isEmpty() && hasHealthDamage)
