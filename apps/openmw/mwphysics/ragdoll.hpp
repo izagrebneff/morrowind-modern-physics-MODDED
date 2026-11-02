@@ -156,6 +156,7 @@ namespace MWPhysics
         mutable std::vector<std::pair<std::string, osg::Matrixf>> mLastPoses;
         mutable osg::Vec3f mLastMainBonePosition;
         size_t mMainPartIndex = 0; // the torso/body, not the first wing bone
+        int mSeveredPartIndex = -1; // physically detached humanoid body part
         bool mFlyingCorpse = false;
         std::unique_ptr<btActionInterface> mJointFriction;
         std::unique_ptr<btActionInterface> mFlyingFallController;
