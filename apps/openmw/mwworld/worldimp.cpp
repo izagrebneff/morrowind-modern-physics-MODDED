@@ -1401,15 +1401,14 @@ namespace MWWorld
     bool World::canRagdollCorpse(const MWWorld::ConstPtr& ptr) const
     {
         // Not the player (the death camera).
-        if (!ptr.getClass().isActor() || ptr == getPlayerConstPtr()
-            || (ptr.getClass().isBipedal(ptr)
-                && (!ptr.getClass().isNpc()
-                    || ptr.getClass().getCreatureStats(mutablePtrPlaceholder).getSeveredBone().empty())))
+        if (!ptr.getClass().isActor() || ptr == getPlayerConstPtr())
             return false;
         // Only reads the stats, so stripping Const is fine.
         const MWWorld::Ptr mutablePtr(
             const_cast<MWWorld::LiveCellRefBase*>(ptr.mRef), const_cast<MWWorld::CellStore*>(ptr.mCell));
         const MWMechanics::CreatureStats& stats = ptr.getClass().getCreatureStats(mutablePtr);
+        if (ptr.getClass().isBipedal(ptr) && (!ptr.getClass().isNpc() || stats.getSeveredBone().empty()))
+            return false;
         return stats.isDead() && stats.isDeathAnimationFinished();
     }
 
@@ -1458,8 +1457,11 @@ namespace MWWorld
 
     bool World::makeRagdollBody(const MWWorld::Ptr& actor, const osg::Vec3f& kick, bool allowOnePiece)
     {
-        // NPCs and bipedal creatures retain their regular death animations.
-        if (actor.getClass().isBipedal(actor))
+        // NPCs use the human rig only for actual bladed dismemberment.
+        // Other bipedal creatures retain their previous death animation behavior.
+        if (actor.getClass().isBipedal(actor)
+            && (!actor.getClass().isNpc()
+                || actor.getClass().getCreatureStats(actor).getSeveredBone().empty()))
             return false;
         // Flying creatures that have no usable articulated rig still need to fall.
         allowOnePiece = allowOnePiece || actor.getClass().canFly(actor);
