@@ -24,6 +24,10 @@ on:
         description: "Optional prepared source commit to build instead of the workflow's original commit"
         default: ""
         type: string
+      merge-official-rc1:
+        description: "Merge the exact upstream OpenMW 0.52 RC1 into this source tree before compiling"
+        default: false
+        type: boolean
 
 jobs:
   Windows:
@@ -42,6 +46,25 @@ jobs:
     - uses: actions/checkout@v6
       with:
         ref: ${{ inputs.source-ref || github.sha }}
+        fetch-depth: ${{ inputs.merge-official-rc1 && '0' || '1' }}
+
+    - name: Merge latest official OpenMW 0.52 RC1 with existing creature physics and magic light
+      if: ${{ inputs.merge-official-rc1 }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        git config user.name "OpenMW RC1 Build"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git remote add official https://github.com/OpenMW/openmw.git
+        git fetch --no-tags official refs/tags/openmw-52-rc1
+        official_sha=$(git rev-parse FETCH_HEAD^{commit})
+        test "$official_sha" = "4ff261bf7c0d42a6cc06dd1ebc5d451802cff055"
+        git merge --no-edit --no-ff -X ours "$official_sha"
+        grep -q "createSkinnedRagdoll" apps/openmw/mwworld/worldimp.cpp
+        grep -q "getMagicBoltLightDiffuseColor" apps/openmw/mwworld/projectilemanager.cpp
+        grep -q "getRequiredBones" apps/openmw/mwphysics/ragdoll.cpp
+        echo "Merged official RC1 into modern-physics sources: $(git rev-parse HEAD)"
+        git diff --check HEAD
 
     - shell: bash
       name: Add deps version env to GITHUB_ENV, stripping comments
