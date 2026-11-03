@@ -1139,17 +1139,33 @@ namespace MWPhysics
                     heldRef != nullptr && holder != nullptr && holder->getPtr().mRef == heldRef)
                     continue;
 
-                // Push horizontally, away from the actor. If the contact is (nearly) vertical, e.g. the actor is
-                // stepping over the object, push it along the actor's direction of movement instead.
+                // v1.1-style contact pushes: a loose item stays physical even if
+                // it came from an inventory or was previously asleep. The vertical
+                // contact of a foot on top of an item needs a horizontal direction.
+                const btVector3 horizontalVelocity(actorVelocity.x(), actorVelocity.y(), 0.f);
                 btVector3 direction = contact.mPushDirection;
-                direction.setZ(0);
+                direction.setZ(0.f);
                 if (direction.length2() < 0.25f)
-                    direction = btVector3(actorVelocity.x(), actorVelocity.y(), 0);
+                {
+                    if (horizontalVelocity.length2() > 1.f)
+                        direction = horizontalVelocity;
+                    else if (actorVelocity.z() < -20.f && contact.mPushDirection.z() < -0.55f)
+                    {
+                        // A vertical landing can nudge an item to one side instead
+                        // of pushing it through the floor.
+                        direction = contact.mBody->getCenterOfMassPosition()
+                            - Misc::Convert::toBullet(actor->getPosition());
+                        direction.setZ(0.f);
+                    }
+                }
                 if (direction.length2() < 1e-4f)
                     continue;
                 direction.normalize();
 
-                const btScalar approach = actorVelocity.dot(direction);
+                const btScalar fallingOntoItem = contact.mPushDirection.z() < -0.55f
+                    ? std::max(btScalar(0), -actorVelocity.z()) * btScalar(0.45f)
+                    : btScalar(0);
+                const btScalar approach = std::max(actorVelocity.dot(direction), fallingOntoItem);
                 if (approach <= 0)
                     continue;
                 const btVector3 relativePoint = contact.mPoint - contact.mBody->getCenterOfMassPosition();
@@ -1157,12 +1173,22 @@ namespace MWPhysics
                 if (deficit <= 0)
                     continue;
 
-                // A body (a ragdoll's part, not a simulated object) is a dead weight: walking into it only nudges it.
-                const auto* holder = static_cast<const PtrHolder*>(contact.mBody->getUserPointer());
-                const btScalar share = dynamic_cast<const Object*>(holder) == nullptr ? 0.25f : 1.f;
+                // Limit the kick from very fast movement without making clutter
+                // into an obstacle the actor can trip over. Ragdolls remain heavier.
+                auto* holder = static_cast<PtrHolder*>(contact.mBody->getUserPointer());
+                auto* item = dynamic_cast<Object*>(holder);
+                const btScalar share = item == nullptr ? 0.25f : 0.85f;
                 contact.mBody->activate(true);
                 contact.mBody->applyImpulse(
-                    direction * (deficit * share / contact.mBody->getInvMass()), relativePoint);            }
+                    direction * (std::min(deficit, btScalar(340.f)) * share / contact.mBody->getInvMass()),
+                    relativePoint);
+                if (item != nullptr && item->isLooseMeleeWeapon())
+                {
+                    // Otherwise the post-collision anti-jitter code would undo
+                    // the foot's impulse in this very same physics frame.
+                    item->deferGroundSettlingUntil(mDynamicsStepIndex + 24);
+                }
+            }
         }
     }
 
@@ -1171,6 +1197,7 @@ namespace MWPhysics
         if (mNumRigidBodies == 0)
             return;
 
+        ++mDynamicsStepIndex;
         // Locked object must outlive the collision world lock (its destructor takes the lock).
         std::shared_ptr<PtrHolder> held;
         btVector3 holdTarget;
@@ -1289,7 +1316,8 @@ namespace MWPhysics
                     return;
                 auto* holder = static_cast<PtrHolder*>(body->getUserPointer());
                 auto* item = dynamic_cast<Object*>(holder);
-                if (item == nullptr || !item->isLooseMeleeWeapon() || (held && held.get() == item))
+                if (item == nullptr || !item->isLooseMeleeWeapon() || (held && held.get() == item)
+                    || !item->maySettleOnGround(mDynamicsStepIndex))
                     return;
 
                 bool touchesGround = false;
