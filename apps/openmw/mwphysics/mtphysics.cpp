@@ -847,6 +847,22 @@ namespace MWPhysics
         body->forceActivationState(ISLAND_SLEEPING);
     }
 
+    void PhysicsTaskScheduler::freezeBody(btRigidBody* body)
+    {
+        MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
+        body->setLinearVelocity(btVector3(0, 0, 0));
+        body->setAngularVelocity(btVector3(0, 0, 0));
+        body->clearForces();
+        body->setActivationState(DISABLE_SIMULATION);
+    }
+
+    void PhysicsTaskScheduler::setBodyGravity(btRigidBody* body, const btVector3& gravity)
+    {
+        MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
+        body->setGravity(gravity);
+        body->activate(true);
+    }
+
     void PhysicsTaskScheduler::placeBody(btRigidBody* body, const btTransform& transform)
     {
         MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);

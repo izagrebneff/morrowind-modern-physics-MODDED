@@ -282,6 +282,8 @@ namespace MWPhysics
         mCollisionWorld->setGravity(btVector3(0, 0, -Constants::GravityConst * Constants::UnitsPerMeter));
         // Ragdolls are long chains of joints; more solver passes keep them from stretching.
         mCollisionWorld->getSolverInfo().m_numIterations = 20;
+        // Correct penetrations without causing a large rebound impulse.
+        mCollisionWorld->getSolverInfo().m_splitImpulse = true;
 
         // Don't update AABBs of all objects every frame. Most objects in MW are static, so we don't need this.
         // Should a "static" object ever be moved, we have to update its AABB manually using
@@ -1459,6 +1461,12 @@ namespace MWPhysics
             // modifies mTimeAccum
             mTaskScheduler->applyQueuedMovements(mTimeAccum, simulations, frameStart, frameNumber, stats);
         }
+
+        // Dead humanoids retain their final pose after three seconds. This also prevents
+        // prolonged contact jitter and player movement pushing corpses around.
+        if (!skipSimulation)
+            for (const auto& [_, ragdoll] : mRagdolls)
+                ragdoll->updateFreeze(dt);
     }
 
     std::vector<MWWorld::Ptr> PhysicsSystem::moveActors()
@@ -1486,7 +1494,7 @@ namespace MWPhysics
 
                 if (!poses.empty())
                 {
-                    const osg::Vec3f bodyPosition = poses.front().second.getTrans();
+                    const osg::Vec3f bodyPosition = ragdoll->second->getMainPosition();
 
                     // Falling into water (its main part going under; simulation steps are 1/mPhysicsDt a second).
                     if (mWaterEnabled)
@@ -1510,8 +1518,14 @@ namespace MWPhysics
                     // The actor is kept with its body, so if it is well away from it, something else moved it (a
                     // script, say). It stays there, in its death pose: the ragdoll would pull it back.
                     constexpr float maxDistance = 256.f;
-                    if ((bodyPosition - actorPtr.getRefData().getPosition().asVec3()).length2()
-                        > maxDistance * maxDistance)
+                    // For flying creatures the visual torso can be hundreds of units
+                    // above/below the actor origin. Compare the actor's tracked position
+                    // against the body's expected actor position, not the raw bone position.
+                    const osg::Vec3f actorPosition = actorPtr.getRefData().getPosition().asVec3();
+                    const std::optional<osg::Vec3f> expectedActorPosition
+                        = ragdoll->second->getActorPosition(actorPosition);
+                    if (expectedActorPosition
+                        && (*expectedActorPosition - actorPosition).length2() > maxDistance * maxDistance)
                     {
                         droppedBodies.push_back(ptr);
                         continue;
