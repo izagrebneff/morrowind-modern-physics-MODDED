@@ -2879,10 +2879,10 @@ namespace MWMechanics
         if (!mAnimation || mPtr == getPlayer())
             return false;
         CreatureStats& stats = mPtr.getClass().getCreatureStats(mPtr);
-        // Only dismembered NPCs use a humanoid ragdoll; other NPC deaths retain animations.
-        // Bipedal non-NPC creatures remain excluded as in the previous fork.
-        if (mPtr.getClass().isBipedal(mPtr)
-            && (!mPtr.getClass().isNpc() || stats.getSeveredBone().empty()))
+        // Ordinary humanoid NPCs now become ragdolls on death too; severed NPC limbs
+        // retain their independent physics. Leave non-NPC bipeds (skeletons/dremora)
+        // on the normal death animation, as in the previous fork.
+        if (mPtr.getClass().isBipedal(mPtr) && !mPtr.getClass().isNpc())
             return false;
         const osg::Vec3f kick = stats.getDeathKick();
         stats.setDeathKick(osg::Vec3f());
@@ -2929,9 +2929,7 @@ namespace MWMechanics
         const std::vector<std::pair<std::string, osg::Matrixf>>& pose
             = mPtr.getClass().getCreatureStats(mPtr).getRagdollPose();
         if (pose.empty() || mPtr == getPlayer()
-            || (mPtr.getClass().isBipedal(mPtr)
-                && (!mPtr.getClass().isNpc()
-                    || mPtr.getClass().getCreatureStats(mPtr).getSeveredBone().empty())))
+            || (mPtr.getClass().isBipedal(mPtr) && !mPtr.getClass().isNpc()))
             return;
         // Moved away since (by a script, say): it lies as it died there.
         constexpr float maxDistance = 256.f;
