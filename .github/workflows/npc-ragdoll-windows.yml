@@ -8,6 +8,7 @@ on:
       - flying-creatures-fall-2-5x
       - flying-creatures-fall-5x
       - flying-creatures-fall-10x
+      - creatures-sample-physics-colored-magic-bolts
   workflow_dispatch:
 
 permissions:
