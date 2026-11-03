@@ -58,6 +58,7 @@
 #include "../mwmechanics/stuckprojectiles.hpp"
 
 #include "../mwrender/animation.hpp"
+#include "../mwrender/magicvfx.hpp"
 #include "../mwrender/renderingmanager.hpp"
 #include "../mwrender/util.hpp"
 #include "../mwrender/vismask.hpp"
@@ -256,9 +257,19 @@ namespace MWWorld
             attachTo = rotateNode;
         }
 
-        osg::ref_ptr<osg::Node> projectile = mResourceSystem->getSceneManager()->getInstance(model, attachTo);
+        osg::ref_ptr<osg::Node> projectile;
+        if (createLight)
+        {
+            // Render magic bolts procedurally instead of loading animated
+            // NIF particle emitters and their texture atlases. The original
+            // model remains in use for physics and collision.
+            attachTo->addChild(MWRender::MagicVfx::create(lightDiffuseColor, 34.f,
+                MWRender::MagicVfx::Phase::Projectile));
+        }
+        else
+            projectile = mResourceSystem->getSceneManager()->getInstance(model, attachTo);
 
-        if (state.mIdMagic.size() > 1)
+        if (!createLight && state.mIdMagic.size() > 1)
         {
             for (size_t iter = 1; iter != state.mIdMagic.size(); ++iter)
             {
@@ -311,7 +322,8 @@ namespace MWWorld
         SceneUtil::AssignControllerSourcesVisitor assignVisitor(state.mEffectAnimationTime);
         state.mNode->accept(assignVisitor);
 
-        MWRender::overrideFirstRootTexture(texture, mResourceSystem, *projectile);
+        if (projectile)
+            MWRender::overrideFirstRootTexture(texture, mResourceSystem, *projectile);
     }
 
     void ProjectileManager::update(State& state, float duration)
