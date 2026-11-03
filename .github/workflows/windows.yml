@@ -20,6 +20,10 @@ on:
       release:
         default: false
         type: boolean
+      source-ref:
+        description: "Optional prepared source commit to build instead of the workflow's original commit"
+        default: ""
+        type: string
 
 jobs:
   Windows:
@@ -36,6 +40,8 @@ jobs:
       run: choco install nsis
 
     - uses: actions/checkout@v6
+      with:
+        ref: ${{ inputs.source-ref || github.sha }}
 
     - shell: bash
       name: Add deps version env to GITHUB_ENV, stripping comments
