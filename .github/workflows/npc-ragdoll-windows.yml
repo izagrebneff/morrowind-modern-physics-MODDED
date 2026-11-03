@@ -9,6 +9,7 @@ on:
       - flying-creatures-fall-5x
       - flying-creatures-fall-10x
       - creatures-sample-physics-colored-magic-bolts
+      - fix-dropped-weapons-vanilla-physics
   workflow_dispatch:
 
 permissions:
