@@ -10,6 +10,7 @@ on:
       - flying-creatures-fall-10x
       - creatures-sample-physics-colored-magic-bolts
       - fix-dropped-weapons-settle-on-contact
+      - walk-push-loose-items-v11
   workflow_dispatch:
 
 permissions:
