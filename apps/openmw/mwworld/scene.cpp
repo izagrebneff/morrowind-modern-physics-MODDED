@@ -15,6 +15,7 @@
 #include <components/esm/esmterrain.hpp>
 #include <components/esm/records.hpp>
 #include <components/esm3/loadcell.hpp>
+#include <components/esm3/loadweap.hpp>
 #include <components/loadinglistener/loadinglistener.hpp>
 #include <components/misc/convert.hpp>
 #include <components/misc/resourcehelpers.hpp>
@@ -162,9 +163,11 @@ namespace
             const DetourNavigator::ObjectTransform objectTransform{ ptr.getRefData().getPosition(),
                 ptr.getCellRef().getScale() };
 
-            if (object->isDynamic())
+            if (object->isDynamic() || ptr.getType() == ESM::Weapon::sRecordId)
             {
-                // Moving clutter is not part of the navmesh.
+                // Dynamic clutter and small static loose weapons are not navmesh obstacles.
+                // Otherwise switching weapons to vanilla collision would force navmesh
+                // rebuilds for every dropped sword and could hurt AI/FPS.
             }
             else if (ptr.getClass().isDoor() && !ptr.getCellRef().getTeleport())
             {
@@ -387,7 +390,8 @@ namespace MWWorld
                     if (object->getCollisionObject()->isActive())
                         ++awake;
                 }
-                if (object->getShapeInstance()->mVisualCollisionType == Resource::VisualCollisionType::None)
+                if (object->getShapeInstance()->mVisualCollisionType == Resource::VisualCollisionType::None
+                    && ptr.getType() != ESM::Weapon::sRecordId)
                     mNavigator.removeObject(DetourNavigator::ObjectId(object), navigatorUpdateGuard);
                 mPhysics->remove(ptr);
             }
