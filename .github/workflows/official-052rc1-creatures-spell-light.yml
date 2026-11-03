@@ -1,0 +1,61 @@
+name: Official OpenMW 0.52 RC1 with creature ragdolls and colored magic bolts
+
+on:
+  push:
+    branches:
+      - official-052rc1-creatures-spell-light
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    name: Merge official 0.52 RC1 into modern-physics source
+    runs-on: ubuntu-latest
+    outputs:
+      merged_sha: ${{ steps.merge.outputs.merged_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: merge
+        name: Incorporate official RC1 engine improvements, retaining custom physics on conflicts
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "OpenMW CI Merge"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add official https://github.com/OpenMW/openmw.git
+          git fetch --no-tags official refs/tags/openmw-52-rc1
+          official_sha=$(git rev-parse FETCH_HEAD^{commit})
+          test "$official_sha" = "4ff261bf7c0d42a6cc06dd1ebc5d451802cff055"
+          if ! git merge-base HEAD "$official_sha" >/dev/null; then
+            echo "::error::No common OpenMW ancestor. Refusing to replace the target with unrelated source."
+            exit 1
+          fi
+          echo "Official OpenMW RC1: $official_sha"
+          echo "Physics reference: $(git rev-parse HEAD)"
+          git merge --no-edit --no-ff -X ours "$official_sha"
+          # Verify that the parts requested from the reference still exist.
+          grep -q "createSkinnedRagdoll" apps/openmw/mwworld/worldimp.cpp
+          grep -q "getMagicBoltLightDiffuseColor" apps/openmw/mwworld/projectilemanager.cpp
+          grep -q "getRequiredBones" apps/openmw/mwphysics/ragdoll.cpp
+          git diff --check HEAD
+          sha=$(git rev-parse HEAD)
+          git push origin HEAD:refs/heads/official-052rc1-creatures-spell-light
+          echo "merged_sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Merged engine SHA: $sha"
+
+  Windows:
+    name: Windows exe from merged official engine
+    needs: prepare
+    permissions:
+      contents: read
+    uses: ./.github/workflows/windows.yml
+    with:
+      image: "2022"
+      msvc: "2022"
+      build-type: "RelWithDebInfo"
+      package: false
+      source-ref: ${{ needs.prepare.outputs.merged_sha }}
