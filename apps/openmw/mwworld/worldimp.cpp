@@ -1407,7 +1407,7 @@ namespace MWWorld
         const MWWorld::Ptr mutablePtr(
             const_cast<MWWorld::LiveCellRefBase*>(ptr.mRef), const_cast<MWWorld::CellStore*>(ptr.mCell));
         const MWMechanics::CreatureStats& stats = ptr.getClass().getCreatureStats(mutablePtr);
-        if (ptr.getClass().isBipedal(ptr) && (!ptr.getClass().isNpc() || stats.getSeveredBone().empty()))
+        if (ptr.getClass().isBipedal(ptr) && !ptr.getClass().isNpc())
             return false;
         return stats.isDead() && stats.isDeathAnimationFinished();
     }
@@ -1457,11 +1457,9 @@ namespace MWWorld
 
     bool World::makeRagdollBody(const MWWorld::Ptr& actor, const osg::Vec3f& kick, bool allowOnePiece)
     {
-        // NPCs use the human rig only for actual bladed dismemberment.
-        // Other bipedal creatures retain their previous death animation behavior.
-        if (actor.getClass().isBipedal(actor)
-            && (!actor.getClass().isNpc()
-                || actor.getClass().getCreatureStats(actor).getSeveredBone().empty()))
+        // Any human/humanoid NPC now uses the full body rig on death.
+        // Skeletons, dremora and other bipedal *creatures* remain excluded.
+        if (actor.getClass().isBipedal(actor) && !actor.getClass().isNpc())
             return false;
         // Flying creatures that have no usable articulated rig still need to fall.
         allowOnePiece = allowOnePiece || actor.getClass().canFly(actor);
