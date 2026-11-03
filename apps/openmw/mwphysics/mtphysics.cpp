@@ -1157,9 +1157,14 @@ namespace MWPhysics
                 if (deficit <= 0)
                     continue;
 
-                // A body (a ragdoll's part, not a simulated object) is a dead weight: walking into it only nudges it.
+                // Walking actors barely nudge loose items, and do not push dead ragdoll parts.
+                // This affects only actor movement; gravity, attacks and ordinary dynamics stay unchanged.
                 const auto* holder = static_cast<const PtrHolder*>(contact.mBody->getUserPointer());
-                const btScalar share = dynamic_cast<const Object*>(holder) == nullptr ? 0.25f : 1.f;
+                constexpr btScalar itemPushShare = 0.01f; // 1% of the original walking impulse
+                constexpr btScalar ragdollPushShare = 0.f; // no walking impulse for dead bodies
+                const btScalar share = dynamic_cast<const Object*>(holder) == nullptr ? ragdollPushShare : itemPushShare;
+                if (share <= 0.f)
+                    continue;
                 contact.mBody->activate(true);
                 contact.mBody->applyImpulse(
                     direction * (deficit * share / contact.mBody->getInvMass()), relativePoint);            }
