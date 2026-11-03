@@ -9,6 +9,7 @@ on:
       - flying-creatures-fall-5x
       - flying-creatures-fall-10x
       - npc-blade-dismemberment-physics
+      - npc-ragdoll-all-deaths-stronger-kick
   workflow_dispatch:
 
 permissions:
