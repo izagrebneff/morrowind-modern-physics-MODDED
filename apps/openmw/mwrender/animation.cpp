@@ -67,6 +67,7 @@
 #include "../mwmechanics/weapontype.hpp"
 
 #include "actorutil.hpp"
+#include "magicvfx.hpp"
 #include "rotatecontroller.hpp"
 #include "util.hpp"
 #include "vismask.hpp"
@@ -2152,10 +2153,14 @@ namespace MWRender
             std::shared_ptr<SceneUtil::ControllerSource>(params.mAnimTime));
         node->accept(assignVisitor);
 
+        // NIF controllers and bone attachment still determine effect timing;
+        // only the visible particles are replaced with a procedural shader.
+        node->setNodeMask(0u);
+        trans->addChild(MagicVfx::create(MagicVfx::colorFromName(model, texture),
+            loop ? 96.f : 72.f, loop ? MagicVfx::Phase::Persistent : MagicVfx::Phase::CastOrImpact));
+
         // Notify that this animation has attached magic effects
         mHasMagicEffects = true;
-
-        overrideFirstRootTexture(VFS::Path::toNormalized(texture), mResourceSystem, *node);
     }
 
     void Animation::removeEffect(std::string_view effectId)

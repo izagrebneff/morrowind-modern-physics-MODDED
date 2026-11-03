@@ -1,0 +1,19 @@
+name: Procedural magic VFX Windows build
+
+on:
+  push:
+    branches:
+      - procedural-magic-vfx-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  Windows:
+    uses: ./.github/workflows/windows.yml
+    with:
+      image: "2022"
+      msvc: "2022"
+      build-type: "RelWithDebInfo"
+      package: false

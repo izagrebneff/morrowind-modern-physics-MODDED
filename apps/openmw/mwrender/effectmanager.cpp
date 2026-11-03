@@ -8,6 +8,7 @@
 #include <components/sceneutil/controller.hpp>
 
 #include "animation.hpp"
+#include "magicvfx.hpp"
 #include "util.hpp"
 #include "vismask.hpp"
 
@@ -55,7 +56,13 @@ namespace MWRender
         node->accept(assignVisitor);
 
         if (isMagicVFX)
-            overrideFirstRootTexture(VFS::Path::toNormalized(textureOverride), mResourceSystem, *node);
+        {
+            // Keep NIF controllers for effect timing but replace the visible
+            // particle geometry with a single procedural shader quad.
+            node->setNodeMask(0u);
+            trans->addChild(MagicVfx::create(MagicVfx::colorFromName(textureOverride),
+                loop ? 92.f : 68.f, loop ? MagicVfx::Phase::Persistent : MagicVfx::Phase::CastOrImpact));
+        }
         else
             overrideTexture(VFS::Path::toNormalized(textureOverride), mResourceSystem, *node);
 
