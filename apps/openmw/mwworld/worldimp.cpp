@@ -1463,7 +1463,8 @@ namespace MWWorld
         if (actor.getClass().isBipedal(actor) && !actor.getClass().isNpc())
             return false;
         // Flying creatures that have no usable articulated rig still need to fall.
-        allowOnePiece = allowOnePiece || actor.getClass().canFly(actor);
+        // If a modded NPC has an incomplete humanoid rig, still give the corpse physics.
+        allowOnePiece = allowOnePiece || actor.getClass().canFly(actor) || actor.getClass().isNpc();
         const MWRender::Animation* animation = mRendering->getAnimation(actor);
         if (animation == nullptr)
             return false;
