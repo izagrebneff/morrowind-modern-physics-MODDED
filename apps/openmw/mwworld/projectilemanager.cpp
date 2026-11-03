@@ -278,17 +278,25 @@ namespace MWWorld
         if (createLight)
         {
             osg::ref_ptr<SceneUtil::Light> projectileLight(new SceneUtil::Light);
-            projectileLight->setAmbient(osg::Vec4(1.0f, 1.0f, 1.0f, 1.0f));
-            projectileLight->setDiffuse(lightDiffuseColor);
-            projectileLight->setSpecular(osg::Vec4(0.0f, 0.0f, 0.0f, 0.0f));
-            projectileLight->setConstantAttenuation(0.f);
-            projectileLight->setLinearAttenuation(0.1f);
-            projectileLight->setQuadraticAttenuation(0.f);
-            projectileLight->setPosition(osg::Vec4(pos, 1.0));
+            // Make magic projectiles illuminate nearby geometry in the actual color
+            // of their spell effects (including mod-added effects and mixed bolts).
+            // The old white ambient component washed the hue out, and the radius of
+            // 66 units with 0.1 linear attenuation made the light barely noticeable.
+            const osg::Vec4 color(
+                lightDiffuseColor.r(), lightDiffuseColor.g(), lightDiffuseColor.b(), 1.f);
+            projectileLight->setAmbient(osg::Vec4(color.r() * 0.55f, color.g() * 0.55f, color.b() * 0.55f, 1.f));
+            projectileLight->setDiffuse(osg::Vec4(color.r() * 1.45f, color.g() * 1.45f, color.b() * 1.45f, 1.f));
+            projectileLight->setSpecular(osg::Vec4(color.r() * 0.25f, color.g() * 0.25f, color.b() * 0.25f, 1.f));
+            projectileLight->setConstantAttenuation(1.f);
+            projectileLight->setLinearAttenuation(0.018f);
+            projectileLight->setQuadraticAttenuation(0.00015f);
+            // LightManager updates the world-space position from the projectile
+            // transform each frame; use a neutral initial local position.
+            projectileLight->setPosition(osg::Vec4(0.f, 0.f, 0.f, 1.f));
 
             SceneUtil::LightSource* projectileLightSource = new SceneUtil::LightSource;
             projectileLightSource->setNodeMask(MWRender::Mask_Lighting);
-            projectileLightSource->setRadius(66.f);
+            projectileLightSource->setRadius(190.f);
 
             state.mNode->addChild(projectileLightSource);
             projectileLightSource->setLight(projectileLight);
