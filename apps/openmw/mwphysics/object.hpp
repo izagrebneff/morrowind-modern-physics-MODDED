@@ -50,6 +50,9 @@ namespace MWPhysics
         ~Object() override;
 
         bool isDynamic() const { return mRigidBody != nullptr; }
+        /// A melee weapon allowed to fall under gravity, then settle promptly on solid ground.
+        /// Arrows, bolts and thrown weapons deliberately stay on the original physics path.
+        bool isLooseMeleeWeapon() const { return mIsLooseMeleeWeapon; }
 
         /// For static objects: collide with simulated objects using this (more detailed) shape instead.
         void setDetailShape(std::shared_ptr<Resource::BulletShapeInstance> shapeInstance);
@@ -130,6 +133,7 @@ namespace MWPhysics
         std::unique_ptr<btCollisionShape> mDynamicShape;
         std::unique_ptr<DynamicMotionState> mMotionState;
         btRigidBody* mRigidBody = nullptr; // same object as mCollisionObject
+        bool mIsLooseMeleeWeapon = false;
         btVector3 mCenterOffset; // center of mass relative to object origin, in object space
         osg::Vec3f mPlacedPosition;
         std::vector<const btCollisionObject*> mWedgedIn;
