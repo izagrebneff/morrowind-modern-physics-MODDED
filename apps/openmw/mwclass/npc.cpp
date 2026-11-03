@@ -825,8 +825,10 @@ namespace MWClass
                 away.z() = 0;
                 if (away.normalize() > 0)
                 {
-                    away.z() = 0.32f;
-                    stats.setDeathKick(away * std::clamp(130.f + healthDamage * 5.f, 130.f, 360.f));
+                    // Slightly stronger backward throw (roughly 20-25%), with less
+                    // vertical lift so the body falls naturally rather than jumping.
+                    away.z() = 0.25f;
+                    stats.setDeathKick(away * std::clamp(160.f + healthDamage * 6.f, 160.f, 440.f));
                 }
             }
 
