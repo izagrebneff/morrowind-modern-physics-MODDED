@@ -72,6 +72,20 @@ namespace MWWorld
             projectile = weaponType == ESM::WeaponType::Arrow || weaponType == ESM::WeaponType::Bolt
                 || weaponType == ESM::WeaponType::MarksmanThrown;
         }
+        // Normal dropped weapons are positioned by the game (or Lua mods), rather than
+        // being simulated by Bullet. Thin melee-weapon hulls can repeatedly collide with
+        // the floor and visibly jitter before sleeping. A static collision body avoids
+        // that feedback and preserves the weapon's scripted/vanilla final placement.
+        //
+        // Keep arrows, bolts and thrown weapons dynamic: those need their existing
+        // projectile embedding, deflection and bounce behavior.
+        if (type == ESM::Weapon::sRecordId && !projectile)
+        {
+            ptr.mRef->mData.mPhysicsPostponed = false;
+            physics.addObject(ptr, VFS::Path::toNormalized(mesh), rotation);
+            return;
+        }
+
         // Script-placed objects normally get collision only after the next cell change. Simulated objects
         // need it right away, or they would just hang in the air.
         ptr.mRef->mData.mPhysicsPostponed = false;
