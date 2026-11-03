@@ -3,6 +3,7 @@
 
 #include "ptrholder.hpp"
 #include <memory>
+#include <cstdint>
 
 #include <LinearMath/btTransform.h>
 #include <osg/Node>
@@ -53,6 +54,12 @@ namespace MWPhysics
         /// A melee weapon allowed to fall under gravity, then settle promptly on solid ground.
         /// Arrows, bolts and thrown weapons deliberately stay on the original physics path.
         bool isLooseMeleeWeapon() const { return mIsLooseMeleeWeapon; }
+
+        // An actor has just kicked/pushed this object. Allow the body to move
+        // under Bullet physics before the ground-contact stabilizer may sleep it.
+        // Used on the physics thread only.
+        void deferGroundSettlingUntil(std::uint64_t physicsStep) { mNextSettlingStep = physicsStep; }
+        bool maySettleOnGround(std::uint64_t physicsStep) const { return physicsStep >= mNextSettlingStep; }
 
         /// For static objects: collide with simulated objects using this (more detailed) shape instead.
         void setDetailShape(std::shared_ptr<Resource::BulletShapeInstance> shapeInstance);
@@ -134,6 +141,7 @@ namespace MWPhysics
         std::unique_ptr<DynamicMotionState> mMotionState;
         btRigidBody* mRigidBody = nullptr; // same object as mCollisionObject
         bool mIsLooseMeleeWeapon = false;
+        std::uint64_t mNextSettlingStep = 0;
         btVector3 mCenterOffset; // center of mass relative to object origin, in object space
         osg::Vec3f mPlacedPosition;
         std::vector<const btCollisionObject*> mWedgedIn;
