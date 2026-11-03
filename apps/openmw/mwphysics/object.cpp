@@ -6,6 +6,7 @@
 
 #include <components/bullethelpers/collisionobject.hpp>
 #include <components/debug/debuglog.hpp>
+#include <components/esm3/loadweap.hpp>
 #include <components/misc/constants.hpp>
 #include <components/misc/convert.hpp>
 #include <components/nifosg/particle.hpp>
@@ -131,6 +132,13 @@ namespace MWPhysics
         , mTaskScheduler(scheduler)
         , mCollidedWith(ScriptedCollisionType_None)
     {
+        if (ptr.getType() == ESM::Weapon::sRecordId)
+        {
+            const ESM::RefId& type = ptr.get<ESM::Weapon>()->mBase->mData.mType;
+            mIsLooseMeleeWeapon = type != ESM::WeaponType::Arrow && type != ESM::WeaponType::Bolt
+                && type != ESM::WeaponType::MarksmanThrown;
+        }
+
         mShapeInstance->setLocalScaling(mScale);
         btVector3 aabbMin;
         btVector3 aabbMax;
@@ -194,6 +202,18 @@ namespace MWPhysics
         // Bullet's defaults assume meters; these are in game units (~70 per meter).
         info.m_linearSleepingThreshold = 4.f;
         info.m_angularSleepingThreshold = 1.f;
+        if (mIsLooseMeleeWeapon)
+        {
+            // Keep gravity and initial falling! Only remove the energetic bouncing
+            // and endless micro-rotations of thin blade hulls when they touch ground.
+            info.m_friction = 1.05f;
+            info.m_rollingFriction = 0.30f;
+            info.m_restitution = 0.f;
+            info.m_linearDamping = 0.10f;
+            info.m_angularDamping = 0.78f;
+            info.m_linearSleepingThreshold = 12.f;
+            info.m_angularSleepingThreshold = 4.f;
+        }
 
         auto body = std::make_unique<btRigidBody>(info);
         mRigidBody = body.get();
