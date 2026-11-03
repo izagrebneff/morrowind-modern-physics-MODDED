@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -201,6 +202,8 @@ namespace MWPhysics
         btCollisionWorld* mCollisionWorld;
         btDiscreteDynamicsWorld* mDynamicsWorld; // same object as mCollisionWorld
         int mNumRigidBodies = 0;
+        // Physics substep index, used to avoid sleeping weapons immediately after a foot pushes them.
+        std::uint64_t mDynamicsStepIndex = 0;
         std::atomic<bool> mHasWater{ false };
         std::atomic<float> mWaterHeight{ 0.f };
         std::atomic<unsigned> mStepGeneration{ 0 };
