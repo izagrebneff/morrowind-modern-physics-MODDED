@@ -1268,6 +1268,62 @@ namespace MWPhysics
         // We are already called once per fixed physics step, so no substepping.
         mDynamicsWorld->stepSimulation(mPhysicsDt, 0);
 
+        // Loose swords and similar weapons need Bullet gravity until they reach the
+        // floor. Once a blade is supported by solid ground, damp its residual spin
+        // and put it to sleep promptly. This prevents repeated solver micro-impulses
+        // from making a fallen weapon twitch or hop on its collision hull.
+        // Do not affect arrows, bolts, thrown weapons, held objects or ragdolls.
+        btDispatcher& dispatcher = *mDynamicsWorld->getDispatcher();
+        for (int i = 0; i < dispatcher.getNumManifolds(); ++i)
+        {
+            const btPersistentManifold& manifold = *dispatcher.getManifoldByIndexInternal(i);
+            const btCollisionObject* sideA = manifold.getBody0();
+            const btCollisionObject* sideB = manifold.getBody1();
+            const auto settleOnSupport = [&](const btCollisionObject* candidate,
+                                             const btCollisionObject* support, bool candidateIsA) {
+                const btBroadphaseProxy* proxy = support->getBroadphaseHandle();
+                if (proxy == nullptr || !(proxy->m_collisionFilterGroup & CollisionType_DynamicSupport))
+                    return;
+                btRigidBody* body = btRigidBody::upcast(const_cast<btCollisionObject*>(candidate));
+                if (body == nullptr || !body->isActive() || body->getUserPointer() == nullptr)
+                    return;
+                auto* holder = static_cast<PtrHolder*>(body->getUserPointer());
+                auto* item = dynamic_cast<Object*>(holder);
+                if (item == nullptr || !item->isLooseMeleeWeapon() || (held && held.get() == item))
+                    return;
+
+                bool touchesGround = false;
+                for (int j = 0; j < manifold.getNumContacts(); ++j)
+                {
+                    const btManifoldPoint& point = manifold.getContactPoint(j);
+                    const btScalar up = candidateIsA ? point.m_normalWorldOnB.z() : -point.m_normalWorldOnB.z();
+                    if (point.getDistance() <= 0.5f && up > 0.55f)
+                    {
+                        touchesGround = true;
+                        break;
+                    }
+                }
+                if (!touchesGround)
+                    return;
+
+                // A brief impact and a natural fall still occur; suppress only
+                // the unwanted tiny angular oscillations at the floor.
+                body->setAngularVelocity(body->getAngularVelocity() * 0.35f);
+                constexpr btScalar maxSettleSpeed = 110.f;
+                constexpr btScalar maxSettleSpin = 8.f;
+                if (body->getLinearVelocity().length2() <= maxSettleSpeed * maxSettleSpeed
+                    && body->getAngularVelocity().length2() <= maxSettleSpin * maxSettleSpin)
+                {
+                    body->setLinearVelocity(btVector3(0, 0, 0));
+                    body->setAngularVelocity(btVector3(0, 0, 0));
+                    body->clearForces();
+                    body->forceActivationState(ISLAND_SLEEPING);
+                }
+            };
+            settleOnSupport(sideA, sideB, true);
+            settleOnSupport(sideB, sideA, false);
+        }
+
         updateFlyingObjects(flying);
         collectImpactsUnsafe();
     }
