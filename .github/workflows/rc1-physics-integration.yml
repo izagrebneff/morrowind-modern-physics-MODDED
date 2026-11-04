@@ -1,0 +1,27 @@
+name: One-shot RC1 physics source integration
+
+on:
+  push:
+    branches:
+      - openmw-052-rc1-creature-ragdoll-colored-spells
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    if: contains(github.event.head_commit.message, '[integrate-rc1-physics]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Merge tested creature physics source into exact upstream RC1
+        shell: bash
+        run: |
+          git config user.name "openmw-rc1-integration"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin +refs/heads/openmw4-creatures-spelllight-only:refs/remotes/origin/openmw4-creatures-spelllight-only
+          git merge --no-ff --no-edit -X ours origin/openmw4-creatures-spelllight-only -m "Port creature ragdoll and colored spell lights to OpenMW 0.52 RC1"
+          git push origin HEAD:openmw-052-rc1-creature-ragdoll-colored-spells
