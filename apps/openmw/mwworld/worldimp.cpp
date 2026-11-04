@@ -1404,7 +1404,7 @@ namespace MWWorld
     bool World::canRagdollCorpse(const MWWorld::ConstPtr& ptr) const
     {
         // Not the player (the death camera).
-        if (!ptr.getClass().isActor() || ptr == getPlayerConstPtr())
+        if (!ptr.getClass().isActor() || ptr.getType() != ESM::Creature::sRecordId || ptr == getPlayerConstPtr())
             return false;
         // Only reads the stats, so stripping Const is fine.
         const MWWorld::Ptr mutablePtr(
@@ -1458,6 +1458,9 @@ namespace MWWorld
 
     bool World::makeRagdollBody(const MWWorld::Ptr& actor, const osg::Vec3f& kick, bool allowOnePiece)
     {
+        // CREATURE records only: human NPCs keep their animated deaths (no NPC Bullet ragdoll).
+        if (actor.getType() != ESM::Creature::sRecordId)
+            return false;
         const MWRender::Animation* animation = mRendering->getAnimation(actor);
         if (animation == nullptr)
             return false;
