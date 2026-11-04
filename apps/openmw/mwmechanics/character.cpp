@@ -893,7 +893,7 @@ namespace MWMechanics
         // how the corpse lies after loading a save). Only as it dies; a ragdoll already going keeps going.
         if (mRagdoll)
             return;
-        if (mDying && startRagdoll())
+        if (mDying && mPtr.getType() != ESM::NPC::sRecordId && startRagdoll())
         {
             mCurrentDeath = deathStateToAnimGroup(mDeathState);
             CreatureStats& stats = mPtr.getClass().getCreatureStats(mPtr);
@@ -2463,6 +2463,61 @@ namespace MWMechanics
                 mRagdollRestored = true;
                 restoreRagdoll();
             }
+            // Hybrid NPC death: keep the complete death animation (including Hit Reactions Animated)
+            // before constructing the Bullet ragdoll from the exact last animated bone transforms.
+            if (mHybridDeathPending && !mRagdoll && mAnimation != nullptr
+                && cls.getCreatureStats(mPtr).isDeathAnimationFinished())
+            {
+                // HRA 2.0.7 leaves custom death clips on their final frame (autoDisable=false).
+                // Wait for the selected clip to reach its stop key; the vanilla death may end earlier.
+                constexpr std::array<std::string_view, 27> customDeathClips = {
+                    "deathback",
+                    "deathback1",
+                    "deathback2",
+                    "deathbackfar",
+                    "deathbackfarflip",
+                    "deathdremora1",
+                    "deathdremora2",
+                    "deathdremora3",
+                    "deathdremora4",
+                    "deathdremora5",
+                    "deathbackhigh",
+                    "deathbackhighface",
+                    "deathdown",
+                    "deathdownleft",
+                    "deathdownleft1",
+                    "deathdownleft2",
+                    "deathdownright",
+                    "deathdownright2",
+                    "deathforwardflipfar",
+                    "deathforward",
+                    "deathleftfar",
+                    "deathrightfar",
+                    "deathstepback",
+                    "deathlongforward",
+                    "deathright",
+                    "deathstepleft",
+                    "deathwalkleft"
+                };
+                bool clipFinished = true;
+                for (const std::string_view clip : customDeathClips)
+                {
+                    float completion = 0.f;
+                    if (mAnimation->getInfo(clip, &completion, nullptr, nullptr) && completion < 0.999f)
+                    {
+                        clipFinished = false;
+                        break;
+                    }
+                }
+                if (clipFinished)
+                {
+                    mHybridDeathPending = false;
+                    // No second death kick: the animation has already performed the fall.
+                    cls.getCreatureStats(mPtr).setDeathKick(osg::Vec3f());
+                    if (startRagdoll())
+                        mAnimation->stopAllAnimations();
+                }
+            }
             if (mRagdoll || mAnimation != nullptr)
                 driveRagdoll();
 
@@ -2842,6 +2897,7 @@ namespace MWMechanics
             mDying = true;
             playRandomDeath();
             mDying = false;
+            mHybridDeathPending = mPtr.getType() == ESM::NPC::sRecordId && mAnimation != nullptr;
             resetCurrentIdleState();
             return Result_DeathAnimStarted;
         }
@@ -2859,6 +2915,7 @@ namespace MWMechanics
 
     void CharacterController::resurrect()
     {
+        mHybridDeathPending = false;
         if (mRagdoll)
         {
             MWBase::Environment::get().getWorld()->removeRagdoll(mPtr);
@@ -2876,7 +2933,8 @@ namespace MWMechanics
     bool CharacterController::startRagdoll()
     {
         // Anyone with a skeleton; the rest play their death animation. Not the player (the death camera).
-        if (!mAnimation || mPtr == getPlayer() || mPtr.getClass().isBipedal(mPtr))
+        if (!mAnimation || mPtr == getPlayer()
+            || (mPtr.getClass().isBipedal(mPtr) && mPtr.getType() != ESM::NPC::sRecordId))
             return false;
         CreatureStats& stats = mPtr.getClass().getCreatureStats(mPtr);
         const osg::Vec3f kick = stats.getDeathKick();
@@ -2923,7 +2981,8 @@ namespace MWMechanics
     {
         const std::vector<std::pair<std::string, osg::Matrixf>>& pose
             = mPtr.getClass().getCreatureStats(mPtr).getRagdollPose();
-        if (pose.empty() || mPtr == getPlayer() || mPtr.getClass().isBipedal(mPtr))
+        if (pose.empty() || mPtr == getPlayer()
+            || (mPtr.getClass().isBipedal(mPtr) && mPtr.getType() != ESM::NPC::sRecordId))
             return;
         // Moved away since (by a script, say): it lies as it died there.
         constexpr float maxDistance = 256.f;
