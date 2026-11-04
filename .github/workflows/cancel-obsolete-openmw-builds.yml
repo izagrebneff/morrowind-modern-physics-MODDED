@@ -1,0 +1,38 @@
+name: Cancel obsolete builds
+
+on:
+  push:
+    branches:
+      - openmw-052-rc1-creatures-only-deathknockback
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cancel-obsolete:
+    if: contains(github.event.head_commit.message, '[clear-ci-queue]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Cancel all older queued and running builds; preserve current source revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Keeping GitHub Actions runs for commit ${GITHUB_SHA}"
+          filter=".workflow_runs[] | select((.status == \"queued\" or .status == \"in_progress\" or .status == \"waiting\" or .status == \"pending\" or .status == \"requested\") and .head_sha != \"${GITHUB_SHA}\") | .id"
+          mapfile -t obsolete < <(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs?per_page=100" --jq "$filter")
+          echo "Found ${#obsolete[@]} obsolete runs"
+          failed=0
+          for id in "${obsolete[@]}"; do
+            if [[ -n "${id}" ]]; then
+              echo "Canceling obsolete workflow run ${id}"
+              if ! gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/cancel" >/dev/null; then
+                failed=$((failed + 1))
+                echo "Cancellation may have raced with run completion: ${id}"
+              fi
+            fi
+          done
+          echo "Requested cancellation for ${#obsolete[@]} runs; ${failed} requests were not accepted"
