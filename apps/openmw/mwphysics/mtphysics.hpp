@@ -43,8 +43,7 @@ namespace MWPhysics
     class PhysicsTaskScheduler
     {
     public:
-        PhysicsTaskScheduler(
-            float physicsDt, btDiscreteDynamicsWorld* dynamicsWorld, MWRender::DebugDrawer* debugDrawer);
+        PhysicsTaskScheduler(float physicsDt, btDiscreteDynamicsWorld* dynamicsWorld);
         ~PhysicsTaskScheduler();
 
         /// @brief move actors taking into account desired movements and collisions
@@ -219,7 +218,6 @@ namespace MWPhysics
         std::mutex mImpactsMutex;
         void collectImpactsUnsafe();
         mutable std::mutex mHeldObjectMutex;
-        MWRender::DebugDrawer* mDebugDrawer;
         std::vector<LOSRequest> mLOSCache;
         std::set<std::weak_ptr<PtrHolder>, std::owner_less<std::weak_ptr<PtrHolder>>> mUpdateAabb;
 
