@@ -205,9 +205,11 @@ namespace
                 = MWBase::Environment::get().getESMStore()->get<ESM::MagicEffect>().find(enam.mData.mEffectID);
             lightDiffuseColor += magicEffect->getColor();
         }
-        size_t numberOfEffects = effects.mList.size();
+        const size_t numberOfEffects = effects.mList.size();
+        if (numberOfEffects == 0)
+            return osg::Vec4(0.7f, 0.65f, 1.f, 1.f);
         lightDiffuseColor /= static_cast<float>(numberOfEffects);
-
+        lightDiffuseColor.a() = 1.f;
         return lightDiffuseColor;
     }
 
@@ -329,18 +331,21 @@ namespace MWWorld
 
         if (createLight)
         {
+            // The projectile's light is coloured by its magical effects, never by white ambient lighting.
+            // It is parented to the moving bolt so the lit area follows its flight.
+            const osg::Vec4 color(lightDiffuseColor.r(), lightDiffuseColor.g(), lightDiffuseColor.b(), 1.f);
             SceneUtil::Light projectileLight;
-            projectileLight.setAmbient(osg::Vec4(1.0f, 1.0f, 1.0f, 1.0f));
-            projectileLight.setDiffuse(lightDiffuseColor);
-            projectileLight.setSpecular(osg::Vec4(0.0f, 0.0f, 0.0f, 0.0f));
-            projectileLight.setConstantAttenuation(0.f);
-            projectileLight.setLinearAttenuation(0.1f);
-            projectileLight.setQuadraticAttenuation(0.f);
-            projectileLight.setPosition(osg::Vec4(pos, 1.0));
+            projectileLight.setAmbient(osg::Vec4(color.r() * 0.55f, color.g() * 0.55f, color.b() * 0.55f, 1.f));
+            projectileLight.setDiffuse(osg::Vec4(color.r() * 1.45f, color.g() * 1.45f, color.b() * 1.45f, 1.f));
+            projectileLight.setSpecular(osg::Vec4(color.r() * 0.25f, color.g() * 0.25f, color.b() * 0.25f, 1.f));
+            projectileLight.setConstantAttenuation(1.f);
+            projectileLight.setLinearAttenuation(0.018f);
+            projectileLight.setQuadraticAttenuation(0.00015f);
+            projectileLight.setPosition(osg::Vec4(0.f, 0.f, 0.f, 1.f));
 
             SceneUtil::LightSource* projectileLightSource = new SceneUtil::LightSource;
             projectileLightSource->setNodeMask(MWRender::Mask_Lighting);
-            projectileLightSource->setRadius(66.f);
+            projectileLightSource->setRadius(190.f);
 
             state.mNode->addChild(projectileLightSource);
             projectileLightSource->setLight(projectileLight);
