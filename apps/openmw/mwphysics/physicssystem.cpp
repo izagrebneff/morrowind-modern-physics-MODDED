@@ -250,7 +250,7 @@ namespace MWPhysics
         return toEsmRotation(quat);
     }
 
-    PhysicsSystem::PhysicsSystem(Resource::ResourceSystem* resourceSystem, osg::ref_ptr<osg::Group> parentNode)
+    PhysicsSystem::PhysicsSystem(Resource::ResourceSystem* resourceSystem, std::unique_ptr<btIDebugDraw> debugDrawer)
         : mPhysicsDt(1.f / 60.f)
         , mShapeManager(std::make_unique<Resource::BulletShapeManager>(resourceSystem->getVFS(),
               resourceSystem->getSceneManager(), resourceSystem->getNifFileManager(),
@@ -274,7 +274,7 @@ namespace MWPhysics
 
         mCollisionWorld = std::make_unique<DynamicsWorld>(
             mDispatcher.get(), mBroadphase.get(), mConstraintSolver.get(), mCollisionConfiguration.get());
-        mCollisionWorld->setGravity(btVector3(0, 0, -Constants::GravityConst * Constants::UnitsPerMeter));
+        mCollisionWorld->setGravity(btVector3(0, 0, -Constants::GravityUnits));
         // Ragdolls are long chains of joints; more solver passes keep them from stretching.
         mCollisionWorld->getSolverInfo().m_numIterations = 20;
 
