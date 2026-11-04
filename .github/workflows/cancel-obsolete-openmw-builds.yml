@@ -1,4 +1,4 @@
-name: Cancel obsolete builds
+name: Purge obsolete OpenMW build runs
 
 on:
   push:
@@ -9,30 +9,75 @@ permissions:
   actions: write
   contents: read
 
+concurrency:
+  group: purge-openmw-obsolete
+  cancel-in-progress: true
+
 jobs:
-  cancel-obsolete:
-    if: contains(github.event.head_commit.message, '[clear-ci-queue]')
+  purge:
+    if: contains(github.event.head_commit.message, '[purge-other-runs]')
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 18
     steps:
-      - name: Cancel all older queued and running builds; preserve current source revision
+      - name: Cancel and DELETE every other workflow run in this repository
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          echo "Keeping GitHub Actions runs for commit ${GITHUB_SHA}"
-          filter=".workflow_runs[] | select((.status == \"queued\" or .status == \"in_progress\" or .status == \"waiting\" or .status == \"pending\" or .status == \"requested\") and .head_sha != \"${GITHUB_SHA}\") | .id"
-          mapfile -t obsolete < <(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs?per_page=100" --jq "$filter")
-          echo "Found ${#obsolete[@]} obsolete runs"
-          failed=0
-          for id in "${obsolete[@]}"; do
-            if [[ -n "${id}" ]]; then
-              echo "Canceling obsolete workflow run ${id}"
-              if ! gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/cancel" >/dev/null; then
-                failed=$((failed + 1))
-                echo "Cancellation may have raced with run completion: ${id}"
-              fi
+          echo "Preserving the current RC1 build at ${GITHUB_SHA} and the cleanup job."
+          echo "All other historical and active workflow runs in ${GITHUB_REPOSITORY} are to be removed."
+          snapshot() {
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs?per_page=100"               --jq '.workflow_runs[] | [.id, .status, .head_sha] | @tsv'
+          }
+
+          # Cancel obsolete queued and running jobs first.
+          mapfile -t rows < <(snapshot)
+          echo "Found ${#rows[@]} total workflow runs"
+          for row in "${rows[@]}"; do
+            IFS=$'\t' read -r id status sha <<< "$row"
+            if [[ "$sha" == "${GITHUB_SHA}" || "$id" == "${GITHUB_RUN_ID}" ]]; then
+              echo "KEEP $id $status"
+              continue
+            fi
+            if [[ "$status" != "completed" ]]; then
+              echo "CANCEL $id"
+              gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/cancel" >/dev/null                 || gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/force-cancel" >/dev/null                 || echo "Cancellation pending $id"
             fi
           done
-          echo "Requested cancellation for ${#obsolete[@]} runs; ${failed} requests were not accepted"
+
+          # Once cancellation is registered, delete finished runs from history.
+          # GitHub disallows deleting running jobs, so retry while they transition.
+          for pass in $(seq 1 30); do
+            mapfile -t rows < <(snapshot)
+            pending=0
+            errors=0
+            for row in "${rows[@]}"; do
+              IFS=$'\t' read -r id status sha <<< "$row"
+              if [[ "$sha" == "${GITHUB_SHA}" || "$id" == "${GITHUB_RUN_ID}" ]]; then
+                continue
+              fi
+              if [[ "$status" == "completed" ]]; then
+                if gh api -X DELETE "repos/${GITHUB_REPOSITORY}/actions/runs/${id}" >/dev/null; then
+                  echo "DELETED $id"
+                else
+                  echo "Could not delete $id (will retry)"
+                  errors=$((errors + 1))
+                fi
+              else
+                pending=$((pending + 1))
+                if (( pass % 3 == 0 )); then
+                  gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/force-cancel" >/dev/null                     || true
+                fi
+              fi
+              sleep 0.12
+            done
+            if [[ "$pending" -eq 0 && "$errors" -eq 0 ]]; then
+              echo "DONE: only current SHA's build and this cleanup job remain."
+              exit 0
+            fi
+            echo "Pass $pass: waiting for $pending active run(s); retrying $errors deletion(s)"
+            sleep 10
+          done
+          echo "Some older runs could not be deleted automatically. Check repository Actions permissions."
+          exit 1
