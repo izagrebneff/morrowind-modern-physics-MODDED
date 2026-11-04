@@ -1,5 +1,6 @@
 #include "projectilemanager.hpp"
 
+#include <algorithm>
 #include <iomanip>
 #include <memory>
 #include <optional>
@@ -19,11 +20,13 @@
 #include <components/esm3/projectilestate.hpp>
 
 #include <components/esm/quaternion.hpp>
+#include <components/esm/util.hpp>
 #include <components/esm/vector3.hpp>
 
 #include <components/misc/constants.hpp>
 #include <components/misc/convert.hpp>
 #include <components/misc/resourcehelpers.hpp>
+#include <components/misc/strings/lower.hpp>
 
 #include <components/resource/resourcesystem.hpp>
 #include <components/resource/scenemanager.hpp>
@@ -37,6 +40,8 @@
 
 #include "../mwworld/class.hpp"
 #include "../mwworld/esmstore.hpp"
+#include "../mwworld/impactsounds.hpp"
+#include "../mwworld/materials.hpp"
 #include "../mwworld/inventorystore.hpp"
 #include "../mwworld/manualref.hpp"
 #include "../mwworld/worldmodel.hpp"
@@ -51,6 +56,7 @@
 #include "../mwmechanics/combat.hpp"
 #include "../mwmechanics/creaturestats.hpp"
 #include "../mwmechanics/spellcasting.hpp"
+#include "../mwmechanics/stuckprojectiles.hpp"
 
 #include "../mwrender/animation.hpp"
 #include "../mwrender/renderingmanager.hpp"
@@ -205,6 +211,22 @@ namespace
         return lightDiffuseColor;
     }
 
+    /// Whether the projectile's enchantment bursts over an area where it lands (and so is spent wherever it hits).
+    bool hasAreaEnchantment(const MWWorld::Ptr& projectile)
+    {
+        const ESM::RefId& id = projectile.getClass().getEnchantment(projectile);
+        if (id.empty())
+            return false;
+        const ESM::Enchantment* enchantment
+            = MWBase::Environment::get().getESMStore()->get<ESM::Enchantment>().search(id);
+        if (enchantment == nullptr)
+            return false;
+        for (const ESM::IndexedENAMstruct& effect : enchantment->mEffects.mList)
+            if (effect.mData.mArea > 0)
+                return true;
+        return false;
+    }
+
     osg::Quat lookAt(const osg::Vec3f& pos)
     {
         // Rotate the forward vector towards the position (used for gravity-affected projectiles)
@@ -318,7 +340,7 @@ namespace MWWorld
 
             SceneUtil::LightSource* projectileLightSource = new SceneUtil::LightSource;
             projectileLightSource->setNodeMask(MWRender::Mask_Lighting);
-            projectileLightSource->setRadius(66.f);
+            projectileLightSource->setRadius(190.f);
 
             state.mNode->addChild(projectileLightSource);
             projectileLightSource->setLight(projectileLight);
@@ -624,10 +646,109 @@ namespace MWWorld
             const auto hitPosition = Misc::Convert::toOsg(projectile->getHitPosition());
 
             if (projectile->getHitWater())
+            {
                 mRendering->emitWaterRipple(hitPosition);
+                if (Settings::modernPhysics().mImpactSounds && Settings::modernPhysics().mExtendedWaterSplashes)
+                    ImpactSounds::get().splash(ImpactSounds::SplashKind::Projectile, projectileRef.getPtr(), hitPosition, projectileState.mVelocity.length(),
+                        std::max(projectileRef.getPtr().getClass().getWeight(projectileRef.getPtr()), 0.1f));
+            }
 
-            MWMechanics::projectileHit(caster, target, bow, projectileRef.getPtr(), hitPosition,
-                projectileState.mAttackStrength, projectileState.mAttackWindUp);
+            const MWWorld::Ptr projectilePtr = projectileRef.getPtr();
+            const bool hitActor = !target.isEmpty() && target.getClass().isActor();
+
+            // A simulated item that was hit gets knocked, according to the momentum of the projectile.
+            if (!target.isEmpty() && !hitActor && target.getClass().isItem(target))
+                strikeItem(projectileState, projectilePtr, target, hitPosition);
+
+            // A dead body is knocked by it, the limb it hit most. (Harder than its momentum alone would: an arrow
+            // weighs next to nothing, but a hit should show.)
+            if (hitActor && target.getClass().getCreatureStats(target).isDead())
+            {
+                constexpr float corpseHitBoost = 3.f;
+                const float projectileMass = std::max(projectilePtr.getClass().getWeight(projectilePtr), 0.1f);
+                mPhysics->strikeRagdoll(target, hitPosition, projectileState.mVelocity * (projectileMass * corpseHitBoost));
+            }
+
+            const bool recoverable = MWMechanics::recoverableStuckProjectiles();
+            osg::Vec3f flight = projectileState.mVelocity;
+            flight.normalize();
+            const bool hitBody = recoverable
+                ? MWMechanics::projectileHitAndStick(caster, target, bow, projectilePtr, hitPosition, flight,
+                    projectileState.mAttackStrength, projectileState.mAttackWindUp)
+                : MWMechanics::projectileHit(caster, target, bow, projectilePtr, hitPosition,
+                    projectileState.mAttackStrength, projectileState.mAttackWindUp);
+
+            // A hit sticks in the body (not the player's: it would clutter the first person view).
+            if (!recoverable && hitBody && target != MWMechanics::getPlayer())
+            {
+                if (MWRender::Animation* animation = MWBase::Environment::get().getWorld()->getAnimation(target))
+                {
+                    osg::Vec3f direction = projectileState.mVelocity;
+                    direction.normalize();
+                    animation->attachStuckProjectile(
+                        projectilePtr.getClass().getCorrectedModel(projectilePtr), hitPosition, direction);
+                }
+            }
+
+            // Missed shots aren't lost: the arrow, bolt or thrown weapon lands where it hit and can be picked up,
+            // enchanted ones too, unless their enchantment burst over an area there (then it is spent, as is one
+            // that hits a body).
+            if (!hitActor && !hasAreaEnchantment(projectilePtr))
+            {
+                // Fixed things made of something soft enough (wood, plants, earth) catch it. It glances off stone
+                // and metal, and off loose items, doors and water.
+                bool stick = false;
+                MWWorld::Material material = MWWorld::Material::Unknown;
+                osg::Vec3f stickPoint = hitPosition;
+                // Off loose things it glances lightly; off the world harder.
+                constexpr float itemBounce = 0.1f;
+                constexpr float surfaceBounce = 0.25f;
+                bool offItem = !target.isEmpty() && target.getClass().isItem(target);
+                const bool hitTerrain = target.isEmpty() && !projectile->getHitWater();
+                const bool hitStatic
+                    = !target.isEmpty() && !target.getClass().isItem(target) && !target.getClass().isDoor();
+                if (hitTerrain || hitStatic)
+                {
+                    osg::Vec3f direction = projectileState.mVelocity;
+                    direction.normalize();
+                    // The hit was on the collision shape, which can stand off from what is seen (often a little
+                    // bigger). Look along the flight for the visible surface, a little either side of it.
+                    const MWRender::RenderingManager::SurfaceResult surface
+                        = mRendering->castRayForSurface(hitPosition - direction * 20.f, hitPosition + direction * 60.f);
+                    if (surface.mHit && !surface.mObject.isEmpty() && surface.mObject != target
+                        && surface.mObject.getClass().isItem(surface.mObject))
+                    {
+                        // What is seen there is a loose item in front of the shelf or table (whose collision
+                        // reaches out past what is seen): that is what it hit. Sticking would leave it hanging
+                        // in the air once the item is moved.
+                        offItem = true;
+                        stickPoint = surface.mPosition;
+                        strikeItem(projectileState, projectilePtr, surface.mObject, surface.mPosition);
+                    }
+                    else
+                    {
+                        const VFS::Path::Normalized model
+                            = hitStatic ? target.getClass().getCorrectedModel(target) : VFS::Path::Normalized();
+                        // Bare ground takes arrows unless it looks rocky; unrecognized objects deflect them.
+                        material = MWWorld::classifySurface(surface.mTexture, model.value(),
+                            hitTerrain || surface.mTerrain ? MWWorld::Material::Earth : MWWorld::Material::Stone);
+                        stick = MWWorld::isSoftMaterial(material);
+                        if (surface.mHit)
+                            stickPoint = surface.mPosition;
+                    }
+                }
+                else if (!target.isEmpty() && target.getClass().isDoor())
+                    material = MWWorld::classifySurface(
+                        {}, target.getClass().getCorrectedModel(target).value(), MWWorld::Material::Wood);
+                placeMissedProjectile(projectileState, stick || offItem ? stickPoint : osg::Vec3f(hitPosition),
+                    Misc::Convert::toOsg(projectile->getHitNormal()), stick, offItem ? itemBounce : surfaceBounce);
+
+                // Heard where it hit. (Items and water have their own sounds.)
+                if (!offItem && (hitTerrain || hitStatic || material != MWWorld::Material::Unknown))
+                    ImpactSounds::get().projectileHit(stick ? stickPoint : osg::Vec3f(hitPosition), material, stick,
+                        projectileState.mVelocity.length(), projectilePtr.getCellRef().getRefId().toDebugString());
+            }
+
             projectileState.mToDelete = true;
         }
 
@@ -665,6 +786,9 @@ namespace MWWorld
                 hitNormal = projectile->velocity();
                 hitNormal.normalize();
             }
+            // A spell bolt striking a simulated item knocks it back (area effects are handled by the explosion).
+            else if (!target.isEmpty() && !target.getClass().isActor() && target.getClass().isItem(target))
+                mPhysics->strikeObject(target, hitNormal * -300.f, hitPos, hitPos + hitNormal * 100.f);
             MWBase::Environment::get().getLuaManager()->magicProjectileHit(
                 magicBoltState.mSpellId, caster, magicBoltState.mItem, target, hitPos, hitNormal);
 
@@ -688,6 +812,56 @@ namespace MWWorld
         mMagicBolts.erase(
             std::remove_if(mMagicBolts.begin(), mMagicBolts.end(), [](const State& state) { return state.mToDelete; }),
             mMagicBolts.end());
+    }
+
+    void ProjectileManager::strikeItem(const ProjectileState& state, const MWWorld::Ptr& projectile,
+        const MWWorld::Ptr& item, const osg::Vec3f& hitPosition)
+    {
+        const float projectileMass = std::max(projectile.getClass().getWeight(projectile), 0.1f);
+        const float itemMass = std::clamp(item.getClass().getWeight(item), 0.2f, 50.f);
+        osg::Vec3f direction = state.mVelocity;
+        direction.normalize();
+        mPhysics->strikeObject(
+            item, state.mVelocity * (projectileMass / itemMass), hitPosition, hitPosition - direction * 100.f);
+        ImpactSounds::get().itemStruck(item, hitPosition, MWWorld::classifyItem(projectile),
+            std::clamp(state.mVelocity.length() / 2500.f, 0.f, 1.f), projectile.getCellRef().getRefId().toDebugString());
+    }
+
+    void ProjectileManager::placeMissedProjectile(const ProjectileState& state, const osg::Vec3f& hitPosition,
+        const osg::Vec3f& hitNormal, bool stick, float bounce)
+    {
+        MWBase::World* world = MWBase::Environment::get().getWorld();
+        MWWorld::CellStore* cell = world->getPlayerPtr().getCell();
+        if (cell == nullptr)
+            return;
+
+        osg::Vec3f direction = state.mVelocity;
+        direction.normalize();
+        // Backed out of whatever it hit, so it doesn't start inside it (a stuck one is driven in afterwards).
+        const osg::Vec3f position = hitPosition - direction * 10.f;
+        if (cell->isExterior())
+            cell = &MWBase::Environment::get().getWorldModel()->getExterior(
+                ESM::positionToExteriorCellLocation(position.x(), position.y(), cell->getCell()->getWorldSpace()));
+
+        ESM::Position pos;
+        pos.pos[0] = position.x();
+        pos.pos[1] = position.y();
+        pos.pos[2] = position.z();
+        const osg::Vec3f rotation = MWPhysics::quatToEsmRotation(lookAt(state.mVelocity));
+        pos.rot[0] = rotation.x();
+        pos.rot[1] = rotation.y();
+        pos.rot[2] = rotation.z();
+
+        MWWorld::ManualRef ref(*MWBase::Environment::get().getESMStore(), state.mIdArrow, 1);
+        const MWWorld::Ptr placed = world->placeObject(ref.getPtr(), cell, pos);
+        if (stick)
+            mPhysics->stickObject(placed, hitPosition);
+        else
+        {
+            // Glance off what it hit, losing most of its speed.
+            const osg::Vec3f reflected = state.mVelocity - hitNormal * (2.f * (state.mVelocity * hitNormal));
+            mPhysics->deflectObject(placed, hitPosition, reflected * bounce);
+        }
     }
 
     void ProjectileManager::cleanupProjectile(ProjectileManager::ProjectileState& state)

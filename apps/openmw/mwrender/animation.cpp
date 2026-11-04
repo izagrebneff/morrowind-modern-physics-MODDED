@@ -1,14 +1,18 @@
 #include "animation.hpp"
 
 #include <algorithm>
+#include <set>
 #include <limits>
 
 #include <osg/BlendFunc>
+#include <osg/ComputeBoundsVisitor>
 #include <osg/Matrix>
 #include <osg/MatrixTransform>
 #include <osg/Switch>
 
 #include <osg/Vec4f>
+#include <osgUtil/IntersectionVisitor>
+#include <osgUtil/LineSegmentIntersector>
 #include <osgParticle/ParticleProcessor>
 #include <osgParticle/ParticleSystem>
 
@@ -16,6 +20,8 @@
 #include <osgAnimation/UpdateBone>
 
 #include <components/debug/debuglog.hpp>
+#include <components/misc/strings/lower.hpp>
+#include <components/sceneutil/riggeometry.hpp>
 
 #include <components/resource/animblendrulesmanager.hpp>
 #include <components/resource/keyframemanager.hpp>
@@ -57,6 +63,7 @@
 #include "../mwworld/esmstore.hpp"
 
 #include "../mwmechanics/character.hpp" // FIXME: for MWMechanics::Priority
+#include "../mwmechanics/stuckprojectiles.hpp"
 #include "../mwmechanics/weapontype.hpp"
 
 #include "actorutil.hpp"
@@ -1041,6 +1048,354 @@ namespace MWRender
         mTextKeyListener = listener;
     }
 
+    std::optional<osg::Matrixf> Animation::getBoneWorldMatrix(std::string_view bone) const
+    {
+        const auto found = getNodeMap().find(std::string(bone));
+        if (found == getNodeMap().end())
+            return std::nullopt;
+        const osg::NodePathList paths = found->second->getParentalNodePaths();
+        if (paths.empty())
+            return std::nullopt;
+        return osg::computeLocalToWorld(paths.front());
+    }
+
+    void Animation::setBoneWorldMatrix(std::string_view bone, const osg::Matrixf& world)
+    {
+        const auto found = getNodeMap().find(std::string(bone));
+        if (found == getNodeMap().end())
+            return;
+        osg::NodePathList paths = found->second->getParentalNodePaths();
+        if (paths.empty())
+            return;
+        osg::NodePath& toParent = paths.front();
+        toParent.pop_back();
+        found->second->setMatrix(world * osg::Matrixf::inverse(osg::computeLocalToWorld(toParent)));
+    }
+
+    void Animation::stopAllAnimations()
+    {
+        mStates.clear();
+        resetActiveGroups();
+    }
+
+    namespace
+    {
+        // Adds the bounds of the meshes under node (in the space matrix takes them to), not going into stopAt.
+        void collectMeshBounds(const osg::Node& node, const osg::Matrixf& matrix,
+            const std::set<const osg::Node*>* stopAt, osg::BoundingBox& box)
+        {
+            if (node.getNodeMask() == 0 || (stopAt != nullptr && stopAt->count(&node) != 0))
+                return;
+            if (const osg::Drawable* drawable = node.asDrawable())
+            {
+                // Particles (smoke, sparks...) aren't part of the body.
+                if (dynamic_cast<const osgParticle::ParticleSystem*>(drawable) != nullptr)
+                    return;
+                const osg::BoundingBox& bounds = drawable->getBoundingBox();
+                if (!bounds.valid())
+                    return;
+                for (unsigned int i = 0; i < 8; ++i)
+                    box.expandBy(bounds.corner(i) * matrix);
+                return;
+            }
+            osg::Matrixf toSpace = matrix;
+            if (const osg::Transform* transform = node.asTransform())
+            {
+                osg::Matrix local;
+                transform->computeLocalToWorldMatrix(local, nullptr);
+                toSpace = osg::Matrixf(local) * matrix;
+            }
+            if (const osg::Group* group = node.asGroup())
+                for (unsigned int i = 0; i < group->getNumChildren(); ++i)
+                    collectMeshBounds(*group->getChild(i), toSpace, stopAt, box);
+        }
+    }
+
+    std::vector<Animation::RigidPiece> Animation::getRigidPieces() const
+    {
+        // Only a model of nothing but rigid pieces comes apart: a skinned mesh (the wire between a centurion
+        // spider's parts) would stretch between them. (Meshes that change shape in place, like a shalk's, stay on
+        // their piece; one that is the whole body, like a kwama forager's, is just one piece.)
+        class FindSkins : public osg::NodeVisitor
+        {
+        public:
+            FindSkins()
+                : osg::NodeVisitor(TRAVERSE_ALL_CHILDREN)
+            {
+            }
+            void apply(osg::Drawable& drawable) override
+            {
+                if (dynamic_cast<SceneUtil::RigGeometry*>(&drawable) != nullptr)
+                    mFound = true;
+            }
+            bool mFound = false;
+        };
+        if (mObjectRoot == nullptr)
+            return {};
+        FindSkins skins;
+        mObjectRoot->accept(skins);
+        if (skins.mFound)
+            return {};
+
+        std::set<const osg::Node*> nodes;
+        for (const auto& [name, node] : getNodeMap())
+            nodes.insert(node.get());
+
+        // Each node's own pieces: what is under it, up to the next node.
+        std::map<const osg::Node*, std::pair<std::string, osg::BoundingBox>> pieces;
+        for (const auto& [name, node] : getNodeMap())
+        {
+            if (node->getNodeMask() == 0)
+                continue;
+            osg::BoundingBox bounds;
+            for (unsigned int i = 0; i < node->getNumChildren(); ++i)
+                collectMeshBounds(*node->getChild(i), osg::Matrixf(), &nodes, bounds);
+            if (bounds.valid())
+                pieces.emplace(node.get(), std::make_pair(name, bounds));
+        }
+
+        // Parents first: by depth in the scene graph.
+        struct Entry
+        {
+            const osg::Node* mNode;
+            const osg::Node* mParent;
+            int mDepth;
+        };
+        std::vector<Entry> entries;
+        for (const auto& [node, piece] : pieces)
+        {
+            Entry entry{ node, nullptr, 0 };
+            for (const osg::Node* up = node; up->getNumParents() > 0;)
+            {
+                up = up->getParent(0);
+                ++entry.mDepth;
+                if (entry.mParent == nullptr && pieces.count(up) != 0)
+                    entry.mParent = up;
+            }
+            entries.push_back(entry);
+        }
+        std::stable_sort(
+            entries.begin(), entries.end(), [](const Entry& a, const Entry& b) { return a.mDepth < b.mDepth; });
+
+        std::vector<RigidPiece> result;
+        std::map<const osg::Node*, int> indices;
+        for (const Entry& entry : entries)
+        {
+            const auto& [name, bounds] = pieces[entry.mNode];
+            const std::optional<osg::Matrixf> world = getBoneWorldMatrix(name);
+            if (!world)
+                continue;
+            const auto parent = indices.find(entry.mParent);
+            indices.emplace(entry.mNode, static_cast<int>(result.size()));
+            result.push_back({ name, parent != indices.end() ? parent->second : -1, *world, bounds });
+        }
+        return result;
+    }
+
+    std::vector<Animation::SkinnedBone> Animation::getSkinnedBones() const
+    {
+        // What each bone moves, over all the skinned meshes.
+        class BoundsVisitor : public osg::NodeVisitor
+        {
+        public:
+            BoundsVisitor()
+                : osg::NodeVisitor(TRAVERSE_ALL_CHILDREN)
+            {
+            }
+
+            void apply(osg::Drawable& drawable) override
+            {
+                const auto* rig = dynamic_cast<const SceneUtil::RigGeometry*>(&drawable);
+                if (rig == nullptr)
+                    return;
+                for (const SceneUtil::RigGeometry::BoneInfo& info : rig->getBoneInfo())
+                {
+                    if (!info.mBoundSphere.valid())
+                        continue;
+                    const auto [found, inserted]
+                        = mBounds.emplace(Misc::StringUtils::lowerCase(info.mName), info.mBoundSphere);
+                    if (!inserted)
+                        found->second.expandBy(info.mBoundSphere);
+                }
+            }
+
+            std::map<std::string, osg::BoundingSpheref> mBounds;
+        };
+
+        if (mObjectRoot == nullptr)
+            return {};
+        BoundsVisitor visitor;
+        mObjectRoot->accept(visitor);
+
+        std::map<const osg::Node*, std::string> bones;
+        for (const auto& [name, sphere] : visitor.mBounds)
+            if (const auto found = getNodeMap().find(name); found != getNodeMap().end())
+                bones.emplace(found->second.get(), name);
+
+        // Parents first: by depth in the scene graph.
+        struct Entry
+        {
+            const osg::Node* mNode;
+            const osg::Node* mParent;
+            int mDepth;
+        };
+        std::vector<Entry> entries;
+        for (const auto& [node, name] : bones)
+        {
+            Entry entry{ node, nullptr, 0 };
+            for (const osg::Node* up = node; up->getNumParents() > 0;)
+            {
+                up = up->getParent(0);
+                ++entry.mDepth;
+                if (entry.mParent == nullptr && bones.count(up) != 0)
+                    entry.mParent = up;
+            }
+            entries.push_back(entry);
+        }
+        std::stable_sort(
+            entries.begin(), entries.end(), [](const Entry& a, const Entry& b) { return a.mDepth < b.mDepth; });
+
+        std::vector<SkinnedBone> result;
+        std::map<const osg::Node*, int> indices;
+        for (const Entry& entry : entries)
+        {
+            const std::string& name = bones[entry.mNode];
+            const std::optional<osg::Matrixf> world = getBoneWorldMatrix(name);
+            if (!world)
+                continue;
+            const osg::BoundingSpheref& sphere = visitor.mBounds[name];
+            const auto parent = indices.find(entry.mParent);
+            indices.emplace(entry.mNode, static_cast<int>(result.size()));
+            result.push_back({ name, parent != indices.end() ? parent->second : -1, *world, sphere.center(),
+                sphere.radius() });
+        }
+        return result;
+    }
+
+    std::optional<Animation::StuckProjectilePlacement> Animation::findStuckProjectilePlacement(
+        VFS::Path::NormalizedView model, const osg::Vec3f& hitPosition, const osg::Vec3f& direction)
+    {
+        // The hit was on the actor's collision box, which is bigger than the body. Where the projectile's path
+        // meets what is seen of the body (armor and clothes included, other stuck projectiles not), the tip goes
+        // in a little way.
+        constexpr float searchDepth = 80.f;
+        constexpr float embed = 4.f;
+        std::optional<osg::Vec3f> surface;
+        if (mInsert != nullptr)
+        {
+            osg::ref_ptr<osgUtil::LineSegmentIntersector> intersector = new osgUtil::LineSegmentIntersector(
+                osgUtil::Intersector::MODEL, hitPosition - direction * 10.f, hitPosition + direction * searchDepth);
+            intersector->setIntersectionLimit(osgUtil::LineSegmentIntersector::LIMIT_NEAREST);
+            osgUtil::IntersectionVisitor visitor(intersector);
+            visitor.setTraversalMask(~static_cast<unsigned int>(Mask_Effect));
+            mInsert->accept(visitor);
+            if (intersector->containsIntersections())
+                surface = intersector->getFirstIntersection().getWorldIntersectPoint();
+        }
+
+        // Stuck to the bone it goes into: the closest to the tip. Without a surface to go by, the bone closest to
+        // the line it was flying along, inside the box, and the tip there. Only bones that move part of the body:
+        // not the root, which carries the walk and so wanders off from the body (or for a body of rigid pieces,
+        // which has no such bones, any node but that).
+        std::set<std::string> bodyBones;
+        for (const SkinnedBone& skinned : getSkinnedBones())
+            bodyBones.insert(skinned.mName);
+        std::set<const osg::Node*> aboveBody;
+        for (const osg::Node* up = mAccumRoot.get(); up != nullptr && up != mInsert.get();
+             up = up->getNumParents() > 0 ? up->getParent(0) : nullptr)
+            aboveBody.insert(up);
+
+        osg::MatrixTransform* bone = nullptr;
+        std::string boneName;
+        osg::Matrixf boneToWorld;
+        osg::Vec3f tipPosition;
+        float closest = std::numeric_limits<float>::max();
+        for (const auto& [name, node] : getNodeMap())
+        {
+            if (bodyBones.empty() ? aboveBody.count(node.get()) != 0
+                                  : bodyBones.count(Misc::StringUtils::lowerCase(name)) == 0)
+                continue;
+            const osg::NodePathList paths = node->getParentalNodePaths();
+            if (paths.empty())
+                continue;
+            const osg::Matrixf toWorld = osg::computeLocalToWorld(paths.front());
+            const osg::Vec3f bonePosition = toWorld.getTrans();
+            const float along = surface ? (*surface - hitPosition) * direction + embed
+                                        : std::clamp((bonePosition - hitPosition) * direction, 0.f, searchDepth);
+            const osg::Vec3f onLine = hitPosition + direction * along;
+            const float distance = (bonePosition - onLine).length2();
+            if (distance < closest)
+            {
+                closest = distance;
+                bone = node.get();
+                boneName = name;
+                boneToWorld = toWorld;
+                tipPosition = onLine;
+            }
+        }
+        if (bone == nullptr)
+            return std::nullopt;
+
+        osg::ref_ptr<osg::Node> projectile = mResourceSystem->getSceneManager()->getInstance(model);
+        // Its tip is the far end along its Y axis, the direction projectile models point.
+        osg::ComputeBoundsVisitor computeBounds;
+        projectile->accept(computeBounds);
+        const float tip = computeBounds.getBoundingBox().valid() ? computeBounds.getBoundingBox().yMax() : 0.f;
+
+        // Same orientation as in flight: Y along the direction, no roll.
+        osg::Vec3f right = direction ^ osg::Z_AXIS;
+        if (right.normalize() < 1e-4f)
+            right = osg::X_AXIS;
+        const osg::Vec3f up = right ^ direction;
+        const osg::Matrixf rotation(right.x(), right.y(), right.z(), 0.f, direction.x(), direction.y(),
+            direction.z(), 0.f, up.x(), up.y(), up.z(), 0.f, 0.f, 0.f, 0.f, 1.f);
+        const osg::Vec3f origin = tipPosition - direction * tip;
+        const osg::Matrixf projectileToWorld = rotation * osg::Matrixf::translate(origin);
+        return StuckProjectilePlacement{ boneName, projectileToWorld * osg::Matrixf::inverse(boneToWorld) };
+    }
+
+    bool Animation::showStuckProjectile(
+        VFS::Path::NormalizedView model, std::string_view boneName, const osg::Matrixf& onBone)
+    {
+        const NodeMap& nodes = getNodeMap();
+        const auto found = nodes.find(std::string(boneName));
+        if (found == nodes.end())
+            return false;
+        osg::ref_ptr<osg::MatrixTransform> attached = new osg::MatrixTransform(onBone);
+        // Not part of the body (for where the next one goes in; see findStuckProjectilePlacement), though it shows.
+        attached->setNodeMask(Mask_Effect);
+        attached->addChild(mResourceSystem->getSceneManager()->getInstance(model));
+        found->second->addChild(attached);
+        mStuckProjectiles.emplace_back(found->second.get(), attached);
+        return true;
+    }
+
+    void Animation::removeStuckProjectiles()
+    {
+        for (const auto& [parent, node] : mStuckProjectiles)
+            if (osg::ref_ptr<osg::Group> group; parent.lock(group))
+                group->removeChild(node);
+        mStuckProjectiles.clear();
+    }
+
+    void Animation::attachStuckProjectile(
+        VFS::Path::NormalizedView model, const osg::Vec3f& hitPosition, const osg::Vec3f& direction)
+    {
+        const std::optional<StuckProjectilePlacement> placement
+            = findStuckProjectilePlacement(model, hitPosition, direction);
+        if (!placement || !showStuckProjectile(model, placement->mBone, placement->mOnBone))
+            return;
+
+        constexpr size_t maxStuckProjectiles = 8;
+        while (mStuckProjectiles.size() > maxStuckProjectiles)
+        {
+            const auto& [parent, node] = mStuckProjectiles.front();
+            if (osg::ref_ptr<osg::Group> group; parent.lock(group))
+                group->removeChild(node);
+            mStuckProjectiles.pop_front();
+        }
+    }
+
     const Animation::NodeMap& Animation::getNodeMap() const
     {
         if (!mNodeMapCreated && mObjectRoot)
@@ -1650,6 +2005,10 @@ namespace MWRender
         mObjectRoot->addCullCallback(mLightListCallback);
         if (mTransparencyUpdater)
             mObjectRoot->addCullCallback(mTransparencyUpdater);
+
+        // A new body: the projectiles stuck in it go back in.
+        if (!mPtr.isEmpty() && mPtr.getClass().isActor())
+            MWMechanics::restoreStuckProjectiles(mPtr, *this);
     }
 
     osg::Group* Animation::getObjectRoot()

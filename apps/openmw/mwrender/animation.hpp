@@ -17,6 +17,10 @@
 #include <components/sceneutil/util.hpp>
 #include <components/vfs/pathutil.hpp>
 
+#include <osg/BoundingBox>
+#include <osg/observer_ptr>
+
+#include <deque>
 #include <map>
 #include <optional>
 #include <span>
@@ -216,6 +220,9 @@ namespace MWRender
 
         mutable NodeMap mNodeMap;
         mutable bool mNodeMapCreated;
+
+        // Stuck projectiles: the bone each is attached to, and its node.
+        std::deque<std::pair<osg::observer_ptr<osg::Group>, osg::ref_ptr<osg::Node>>> mStuckProjectiles;
 
         MWWorld::Ptr mPtr;
 

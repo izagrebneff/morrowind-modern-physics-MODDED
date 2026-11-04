@@ -26,11 +26,17 @@
 #include "../mwbase/statemanager.hpp"
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
+#include "../mwmechanics/creaturestats.hpp"
+#include "../mwmechanics/stuckprojectiles.hpp"
+#include "../mwrender/animation.hpp"
+
 #include "../mwworld/action.hpp"
 #include "../mwworld/class.hpp"
 #include "../mwworld/datetimemanager.hpp"
 #include "../mwworld/esmstore.hpp"
 #include "../mwworld/manualref.hpp"
+#include "../mwworld/impactsounds.hpp"
+#include "../mwworld/materials.hpp"
 #include "../mwworld/store.hpp"
 #include "../mwworld/worldmodel.hpp"
 
@@ -297,6 +303,110 @@ namespace MWLua
                 checkGameInitialized(lua);
                 return MWBase::Environment::get().getESMStore()->insert(light);
             });
+
+        // Physics fork: blow simulated objects away from a spell explosion (called by the built-in spellcasting).
+        api["_pushObjectsFromExplosion"] = [context](const osg::Vec3f& position, const Misc::FiniteFloat radius) {
+            context.mLuaManager->addAction(
+                [position, radius = static_cast<float>(radius)] {
+                    MWBase::Environment::get().getWorld()->pushObjectsFromExplosion(position, radius);
+                },
+                "_pushObjectsFromExplosion");
+        };
+
+        // Physics fork: carrying and ragdolls, for scripted tests (the player does this with Activate/Attack).
+        // The queries read physics state: call them with "lua num threads = 0".
+        api["_grabObject"] = [context](const GObject& object) {
+            context.mLuaManager->addAction(
+                [object] { MWBase::Environment::get().getWorld()->grabObject(object.ptr()); }, "_grabObject");
+        };
+        api["_releaseGrabbedObject"] = [context](bool throwObject) {
+            context.mLuaManager->addAction(
+                [throwObject] { MWBase::Environment::get().getWorld()->releaseGrabbedObject(throwObject); },
+                "_releaseGrabbedObject");
+        };
+        api["_isGrabbingObject"] = []() { return MWBase::Environment::get().getWorld()->isGrabbingObject(); };
+        api["_ragdollBoneCount"] = [](const GObject& actor) {
+            return MWBase::Environment::get().getWorld()->getRagdollBonePoses(actor.ptr()).size();
+        };
+        // Where the ragdoll's main part (the pelvis, say: bones are parents first) is; nil without a ragdoll.
+        api["_ragdollCenter"] = [](const GObject& actor) -> sol::optional<osg::Vec3f> {
+            const auto poses = MWBase::Environment::get().getWorld()->getRagdollBonePoses(actor.ptr());
+            if (poses.empty())
+                return sol::nullopt;
+            return osg::Vec3f(poses.front().second.getTrans());
+        };
+        // Recoverable stuck projectiles: what a stored projectile hit does (without the hit and its chance), and how
+        // many are shown in / embedded in an actor.
+        api["_embedProjectile"] = [context](const GObject& actor, std::string_view ammo, const osg::Vec3f& hitPosition,
+                                      const osg::Vec3f& direction) {
+            const ESM::RefId ammoId = ESM::RefId::deserializeText(ammo);
+            context.mLuaManager->addAction(
+                [actor, ammoId, hitPosition, direction] {
+                    MWWorld::ManualRef ref(*MWBase::Environment::get().getESMStore(), ammoId);
+                    MWMechanics::embedProjectile(actor.ptr(), ammoId);
+                    MWMechanics::showEmbeddedProjectile(actor.ptr(), ref.getPtr(), hitPosition, direction);
+                },
+                "_embedProjectile");
+        };
+        // Fire a projectile (an arrow, say, as if thrown: no bow) from a point along a direction (normalized).
+        api["_shootProjectile"] = [context](const GObject& shooter, std::string_view ammo, const osg::Vec3f& from,
+                                      const osg::Vec3f& direction, float speed) {
+            const ESM::RefId ammoId = ESM::RefId::deserializeText(ammo);
+            context.mLuaManager->addAction(
+                [shooter, ammoId, from, direction, speed] {
+                    MWWorld::ManualRef ref(*MWBase::Environment::get().getESMStore(), ammoId);
+                    MWWorld::Ptr actor = shooter.ptr();
+                    MWWorld::Ptr projectile = ref.getPtr();
+                    MWWorld::Ptr bow = projectile;
+                    osg::Quat orient;
+                    orient.makeRotate(osg::Vec3f(0, 1, 0), direction);
+                    MWBase::Environment::get().getWorld()->launchProjectile(
+                        actor, projectile, from, orient, bow, speed, 1.f, 1.f);
+                },
+                "_shootProjectile");
+        };
+        // What an object is made of, as impact sounds and arrows judge it ("wood", "metal"...): items by type and
+        // name, anything else as a surface by its model.
+        api["_material"] = [](const GObject& object) {
+            const MWWorld::Ptr ptr = object.ptr();
+            if (ptr.getClass().isItem(ptr))
+                return std::string(MWWorld::getMaterialName(MWWorld::classifyItem(ptr)));
+            return std::string(MWWorld::getMaterialName(
+                MWWorld::classifySurface({}, ptr.getClass().getCorrectedModel(ptr), MWWorld::Material::Unknown)));
+        };
+        // Impact sounds: the last impacts and what was done about them, oldest first.
+        api["_impactLog"] = []() {
+            const auto& log = MWWorld::ImpactSounds::get().getLog();
+            return std::vector<std::string>(log.begin(), log.end());
+        };
+        api["_clearImpactLog"] = []() { MWWorld::ImpactSounds::get().clearLog(); };
+        // What a melee swing that hits no one does to the world around it (knocks loose things, or sounds where it
+        // meets the world), as if swung with this weapon record (none: a fist), at strength (0 to 1).
+        api["_meleeSwing"] = [context](const GObject& attacker, sol::optional<std::string_view> weapon, float strength) {
+            const ESM::RefId weaponId = weapon ? ESM::RefId::deserializeText(*weapon) : ESM::RefId();
+            context.mLuaManager->addAction(
+                [attacker, weaponId, strength] {
+                    if (weaponId.empty())
+                    {
+                        MWBase::Environment::get().getWorld()->knockObjectsWithMeleeAttack(
+                            attacker.ptr(), MWWorld::Ptr(), ESM::Weapon::AT_Chop, strength);
+                        return;
+                    }
+                    MWWorld::ManualRef ref(*MWBase::Environment::get().getESMStore(), weaponId);
+                    MWBase::Environment::get().getWorld()->knockObjectsWithMeleeAttack(
+                        attacker.ptr(), ref.getPtr(), ESM::Weapon::AT_Chop, strength);
+                },
+                "_meleeSwing");
+        };
+        api["_stuckProjectiles"] = [](const GObject& actor) {
+            MWMechanics::CreatureStats& stats = actor.ptr().getClass().getCreatureStats(actor.ptr());
+            int embedded = 0;
+            for (const auto& [ammo, count] : stats.getEmbeddedAmmo())
+                embedded += count;
+            const MWRender::Animation* animation = MWBase::Environment::get().getWorld()->getAnimation(actor.ptr());
+            return std::make_tuple(static_cast<int>(stats.getStuckProjectiles().size()), embedded,
+                animation ? static_cast<int>(animation->getStuckProjectileCount()) : -1);
+        };
 
         api["_runStandardActivationAction"] = [context](const GObject& object, const GObject& actor) {
             if (!object.ptr().getRefData().activate())

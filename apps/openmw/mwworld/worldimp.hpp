@@ -2,6 +2,8 @@
 #define GAME_MWWORLD_WORLDIMP_H
 
 #include <memory>
+#include <set>
+#include <string>
 
 #include <osg/ref_ptr>
 
@@ -114,6 +116,8 @@ namespace MWWorld
         bool mGodMode;
         bool mScriptsEnabled;
         bool mDiscardMovements;
+        bool mPlayerAttackSuppressed = false;
+        std::set<std::string> mFailedRagdollModels; // creatures whose ragdolls came apart (see doPhysics)
         std::vector<std::string> mContentFiles;
 
         std::filesystem::path mUserDataPath;
@@ -382,6 +386,31 @@ namespace MWWorld
         /// \param adjust indicates rotation should be set or adjusted
         void rotateObject(const Ptr& ptr, const osg::Vec3f& rot,
             MWBase::RotationFlags flags = MWBase::RotationFlag_inverseOrder) override;
+
+        bool canGrabObject(const MWWorld::ConstPtr& ptr) const override;
+        /// A dead actor whose body can be made a ragdoll (see grabObject).
+        bool canRagdollCorpse(const MWWorld::ConstPtr& ptr) const;
+        bool makeRagdollBody(const MWWorld::Ptr& actor, const osg::Vec3f& kick, bool allowOnePiece);
+        bool grabObject(const MWWorld::Ptr& ptr) override;
+        void releaseGrabbedObject(bool throwObject) override;
+        bool isGrabbingObject() const override;
+        void rotateGrabbedObject(float yaw, float pitch) override;
+        void setPlayerAttackSuppressed(bool suppressed) override { mPlayerAttackSuppressed = suppressed; }
+        void pushObjectsFromExplosion(const osg::Vec3f& center, float radius) override;
+        void objectEnteredWater(const MWWorld::Ptr& object, const osg::Vec3f& position, float speed) override;
+        void bodyEnteredWater(const MWWorld::Ptr& body, const osg::Vec3f& position, float speed, float size) override;
+        std::vector<std::pair<std::string, osg::Matrixf>> getRagdollBonePoses(
+            const MWWorld::ConstPtr& actor) const override;
+        bool makeRagdoll(
+            const MWWorld::Ptr& actor, const osg::Vec3f& kick, bool allowOnePiece, bool atRest) override;
+        void removeRagdoll(const MWWorld::ConstPtr& actor) override;
+        void knockObjectsWithMeleeAttack(const MWWorld::Ptr& attacker, const MWWorld::Ptr& weapon, int attackType,
+            float attackStrength) override;
+        /// A melee swing that hit no one and nothing loose: the sound of it meeting the world, if it does (from
+        /// eye, along direction, within reach).
+        void meleeHitWorld(const MWWorld::Ptr& attacker, const MWWorld::Ptr& weapon, osg::Vec3f direction,
+            const osg::Vec3f& eye, float reach, float attackStrength);
+        bool isPlayerAttackSuppressed() const override { return mPlayerAttackSuppressed; }
 
         MWWorld::Ptr placeObject(
             const MWWorld::ConstPtr& ptr, MWWorld::CellStore* cell, const ESM::Position& pos) override;

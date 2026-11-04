@@ -81,7 +81,7 @@ add_openmw_dir (mwworld
     worldmodel localscripts customdata inventorystore ptr actionopen actionread actionharvest
     actionequip timestamp actionalchemy cellstore actionapply actioneat
     store esmstore fallback actionrepair actionsoulgem livecellref actiondoor
-    contentloader esmloader actiontrap cellreflist cellref weather projectilemanager
+    contentloader esmloader actiontrap cellreflist cellref weather projectilemanager materials impactsounds
     cellpreloader datetimemanager groundcoverstore magiceffects cell ptrregistry
     positioncellgrid
     )
@@ -89,7 +89,7 @@ add_openmw_dir (mwworld
 add_openmw_dir (mwphysics
     physicssystem trace collisiontype actor convert object heightfield closestnotmerayresultcallback
     contacttestresultcallback stepper movementsolver projectile
-    actorconvexcallback raycasting mtphysics contacttestwrapper projectileconvexcallback
+    actorconvexcallback raycasting mtphysics contacttestwrapper projectileconvexcallback ragdoll
     )
 
 add_openmw_dir (mwclass
@@ -104,7 +104,7 @@ add_openmw_dir (mwmechanics
     aicast aiescort aiface aiactivate aicombat recharge repair enchanting pathfinding pathgrid security spellcasting spellresistance
     disease pickpocket levelledlist combat steering obstacle autocalcspell difficultyscaling aicombataction summoning
     character actors objects aistate weaponpriority spellpriority weapontype spellutil
-    spelleffects
+    spelleffects stuckprojectiles
     )
 
 add_openmw_dir (mwstate

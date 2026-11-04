@@ -5,6 +5,11 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
+
+#include <osg/Matrixf>
+#include <osg/Vec3f>
 
 #include "activespells.hpp"
 #include "aisequence.hpp"
@@ -13,6 +18,7 @@
 #include "magiceffects.hpp"
 #include "spells.hpp"
 #include "stat.hpp"
+#include "stuckprojectiles.hpp"
 
 #include <components/esm/attr.hpp>
 #include <components/esm/refid.hpp>
@@ -59,6 +65,10 @@ namespace MWMechanics
         bool mKnockdownOverOneFrame = false;
         bool mHitRecovery = false;
         bool mBlock = false;
+        osg::Vec3f mDeathKick; // how the killing blow throws the body
+        std::vector<std::pair<std::string, osg::Matrixf>> mRagdollPose;
+        std::vector<StuckProjectile> mStuckProjectiles;
+        std::map<ESM::RefId, int> mEmbeddedAmmo;
         unsigned int mMovementFlags = 0;
 
         float mFallHeight = 0.f;
@@ -230,6 +240,23 @@ namespace MWMechanics
         bool getHitRecovery() const;
         void setBlock(bool value);
         bool getBlock() const;
+
+        /// How the killing blow throws the body (velocity change; not saved).
+        void setDeathKick(const osg::Vec3f& kick) { mDeathKick = kick; }
+        const osg::Vec3f& getDeathKick() const { return mDeathKick; }
+
+        /// Where a dead body's ragdoll bones lie (world matrices; so it lies the same after loading, or coming back
+        /// to it). Parents first.
+        void setRagdollPose(std::vector<std::pair<std::string, osg::Matrixf>>&& pose)
+        {
+            mRagdollPose = std::move(pose);
+        }
+        const std::vector<std::pair<std::string, osg::Matrixf>>& getRagdollPose() const { return mRagdollPose; }
+
+        /// Projectiles shown stuck in the body, oldest first (see stuckprojectiles.hpp).
+        std::vector<StuckProjectile>& getStuckProjectiles() { return mStuckProjectiles; }
+        /// Projectiles stuck in it while alive, not yet in its inventory: ammo -> count.
+        std::map<ESM::RefId, int>& getEmbeddedAmmo() { return mEmbeddedAmmo; }
 
         std::multimap<ESM::RefId, ESM::RefNum>& getSummonedCreatureMap(); // <Effect, summoned creature>
 

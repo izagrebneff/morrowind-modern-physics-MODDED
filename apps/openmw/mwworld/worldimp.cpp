@@ -66,6 +66,7 @@
 #include "../mwmechanics/actorutil.hpp"
 #include "../mwmechanics/aiavoiddoor.hpp" //Used to tell actors to avoid doors
 #include "../mwmechanics/combat.hpp"
+#include "../mwmechanics/stuckprojectiles.hpp"
 #include "../mwmechanics/creaturestats.hpp"
 #include "../mwmechanics/levelledlist.hpp"
 #include "../mwmechanics/npcstats.hpp"
@@ -90,6 +91,7 @@
 #include "../mwphysics/collisiontype.hpp"
 #include "../mwphysics/object.hpp"
 #include "../mwphysics/physicssystem.hpp"
+#include "../mwphysics/ragdoll.hpp"
 
 #include "../mwsound/constants.hpp"
 
@@ -100,6 +102,7 @@
 #include "inventorystore.hpp"
 #include "manualref.hpp"
 #include "player.hpp"
+#include "impactsounds.hpp"
 #include "projectilemanager.hpp"
 #include "weather.hpp"
 
@@ -110,6 +113,19 @@ namespace MWWorld
 {
     namespace
     {
+        // Where a carried thing is held from. In third person the camera is well behind the player, further than
+        // a carried thing may be from where it is held: it is held in front of the player instead, on the line the
+        // camera looks along (so it stays under the crosshair).
+        osg::Vec3f getHoldEye(const MWRender::Camera& camera)
+        {
+            const osg::Vec3f position = camera.getPosition();
+            if (camera.getMode() == MWRender::Camera::Mode::FirstPerson)
+                return position;
+            const osg::Vec3f direction = camera.getOrient() * osg::Vec3f(0, 1, 0);
+            const float ahead = (osg::Vec3f(camera.getTrackedPosition()) - position) * direction;
+            return position + direction * std::max(ahead, 0.f);
+        }
+
         std::vector<std::pair<GlobalVariableName, ESM::Variant>> generateDefaultGlobals()
         {
             return {
@@ -1383,12 +1399,50 @@ namespace MWWorld
     void World::doPhysics(
         float duration, Misc::FrameClock::time_point statsEpoch, unsigned int frameNumber, Misc::FrameStats& stats)
     {
+        if (mPhysics->isHoldingObject())
+        {
+            const MWRender::Camera* camera = mRendering->getCamera();
+            mPhysics->setHoldView(getHoldEye(*camera), camera->getOrient() * osg::Vec3f(0, 1, 0));
+        }
         processDoors(duration);
         mProjectileManager->update(duration);
         mPhysics->stepSimulation(duration, mDiscardMovements, statsEpoch, frameNumber, stats);
         mProjectileManager->processHits();
         mDiscardMovements = false;
-        mPhysics->moveActors();
+        for (const MWWorld::Ptr& body : mPhysics->removeFailedRagdolls(duration))
+        {
+            // It lies in its death pose instead (see CharacterController::driveRagdoll). A creature's model is
+            // left out from then on; people all share one, so only this body is.
+            Log(Debug::Warning) << "Ragdoll of " << body.getCellRef().getRefId() << " came apart; dropped it";
+            body.getClass().getCreatureStats(body).setRagdollPose({});
+            if (!body.getClass().isNpc())
+                mFailedRagdollModels.insert(std::string(body.getClass().getModel(body).value()));
+        }
+        for (const MWWorld::Ptr& body : mPhysics->moveActors())
+        {
+            // Its bones were set in the world before it moved; put them back there (or they'd move with it).
+            MWRender::Animation* animation = mRendering->getAnimation(body);
+            if (animation == nullptr)
+                continue;
+            for (const auto& [bone, world] : mPhysics->getLastRagdollBonePoses(body))
+                if (!bone.empty())
+                    animation->setBoneWorldMatrix(bone, world);
+        }
+
+        // Hitting someone with a thrown object is an attack, like any other.
+        for (const MWPhysics::ThrownObjectHit& hit : mPhysics->takeThrownObjectHits())
+        {
+            const MWWorld::Ptr& victim = hit.mVictim;
+            if (!victim.getClass().isActor() || victim.getClass().getCreatureStats(victim).isDead())
+                continue;
+            // A knock, not a wound: some fatigue damage by the object's momentum.
+            const float mass = std::clamp(hit.mObject.getClass().getWeight(hit.mObject), 0.2f, 50.f);
+            const float fatigue = std::clamp(mass * hit.mSpeed / 300.f, 1.f, 15.f);
+            victim.getClass().onHit(victim, { { "fatigue", fatigue } }, hit.mObject.getCellRef().getRefId(),
+                getPlayerPtr(), true, MWMechanics::DamageSourceType::Ranged);
+        }
+
+        ImpactSounds::get().update(duration, *mPhysics, *mRendering);
     }
 
     void World::updateNavigator()
@@ -1412,6 +1466,8 @@ namespace MWWorld
         const MWPhysics::Object& object, const DetourNavigator::UpdateGuard* navigatorUpdateGuard)
     {
         if (object.getShapeInstance()->mVisualCollisionType != Resource::VisualCollisionType::None)
+            return;
+        if (object.isDynamic())
             return;
         const MWWorld::Ptr ptr = object.getPtr();
         const DetourNavigator::ObjectShapes shapes(object.getShapeInstance(),
@@ -1688,8 +1744,8 @@ namespace MWWorld
     {
         try
         {
-            // inform the GUI about focused object
-            MWWorld::Ptr object = getFocusObject();
+            // inform the GUI about focused object (none while carrying something: that would be what is carried)
+            MWWorld::Ptr object = mPhysics->isHoldingObject() ? MWWorld::Ptr() : getFocusObject();
 
             // retrieve the object's top point's screen position so we know where to place the floating label
             if (!object.isEmpty())
@@ -2029,6 +2085,10 @@ namespace MWWorld
                 moveObject(object, pos.asVec3());
             }
         }
+
+        // Newly created loose items fall into place (ones loaded with a cell stay put where they were).
+        if (object.getRefData().getBaseNode())
+            mPhysics->wakeNewObject(object);
     }
 
     MWWorld::Ptr World::dropObjectOnGround(const Ptr& actor, const Ptr& object, int amount, bool copy)
@@ -3020,8 +3080,12 @@ namespace MWWorld
 
         if (result.mHit)
         {
-            MWMechanics::projectileHit(
-                actor, result.mHitObject, bow, projectile, result.mHitPos, attackStrength, attackWindUp);
+            if (MWMechanics::recoverableStuckProjectiles())
+                MWMechanics::projectileHitAndStick(actor, result.mHitObject, bow, projectile, result.mHitPos,
+                    orient * osg::Vec3f(0, 1, 0), attackStrength, attackWindUp);
+            else
+                MWMechanics::projectileHit(
+                    actor, result.mHitObject, bow, projectile, result.mHitPos, attackStrength, attackWindUp);
             return;
         }
 

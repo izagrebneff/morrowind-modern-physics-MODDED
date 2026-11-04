@@ -13,6 +13,7 @@
 #include "categories/lua.hpp"
 #include "categories/map.hpp"
 #include "categories/models.hpp"
+#include "categories/modernphysics.hpp"
 #include "categories/navigator.hpp"
 #include "categories/physics.hpp"
 #include "categories/postprocessing.hpp"
@@ -63,6 +64,7 @@ namespace Settings
         StereoCategory mStereo{ mIndex };
         StereoViewCategory mStereoView{ mIndex };
         PostProcessingCategory mPostProcessing{ mIndex };
+        ModernPhysicsCategory mModernPhysics{ mIndex };
     };
 
     class StaticValues
@@ -217,6 +219,11 @@ namespace Settings
     inline PostProcessingCategory& postProcessing()
     {
         return values().mPostProcessing;
+    }
+
+    inline ModernPhysicsCategory& modernPhysics()
+    {
+        return values().mModernPhysics;
     }
 
     template <class T>

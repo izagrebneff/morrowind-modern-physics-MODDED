@@ -8,8 +8,12 @@
 #include <optional>
 #include <set>
 #include <span>
+#include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
+
+#include <osg/Matrixf>
 
 #include <components/misc/rng.hpp>
 #include <components/vfs/pathutil.hpp>
@@ -297,6 +301,43 @@ namespace MWBase
         ///< @return an updated Ptr
 
         virtual void scaleObject(const MWWorld::Ptr& ptr, float scale, bool force = false) = 0;
+
+        // Player carrying a simulated object in front of the camera.
+        virtual bool canGrabObject(const MWWorld::ConstPtr& ptr) const = 0;
+        virtual bool grabObject(const MWWorld::Ptr& ptr) = 0;
+        /// Drop the carried object, or throw it where the camera is looking.
+        virtual void releaseGrabbedObject(bool throwObject) = 0;
+        virtual bool isGrabbingObject() const = 0;
+        /// Turn the carried object: yaw spins it around the vertical, pitch tilts it towards/away from the camera.
+        virtual void rotateGrabbedObject(float yaw, float pitch) = 0;
+        /// Stops the player's weapon/spell use (e.g. so clicking to throw doesn't also attack).
+        virtual void setPlayerAttackSuppressed(bool suppressed) = 0;
+
+        /// Ragdolls for dead actors. The ragdoll's bones (world matrices, parents first); empty if it has none.
+        virtual std::vector<std::pair<std::string, osg::Matrixf>> getRagdollBonePoses(
+            const MWWorld::ConstPtr& actor) const
+            = 0;
+        /// Make a dead actor's body a ragdoll: limp if it has a skeleton, else (if allowOnePiece) in one piece, its
+        /// model following. kick is how the killing blow throws it; atRest makes it start out still (as it was left
+        /// lying). @return false if it can't be made.
+        virtual bool makeRagdoll(
+            const MWWorld::Ptr& actor, const osg::Vec3f& kick, bool allowOnePiece, bool atRest)
+            = 0;
+        virtual void removeRagdoll(const MWWorld::ConstPtr& actor) = 0;
+
+        /// A simulated object fell into water here, going down at speed: ripples, and a splash if fast.
+        virtual void objectEnteredWater(const MWWorld::Ptr& object, const osg::Vec3f& position, float speed) = 0;
+        /// A dead body (its ragdoll) fell into water at position (on the surface); size: about its length.
+        virtual void bodyEnteredWater(const MWWorld::Ptr& body, const osg::Vec3f& position, float speed, float size) = 0;
+
+        /// Blow simulated objects away from an area effect at center.
+        virtual void pushObjectsFromExplosion(const osg::Vec3f& center, float radius) = 0;
+        /// A melee attack that didn't hit anyone, at the moment it lands: knock simulated objects in its reach and
+        /// arc, in the direction of the attack type (an ESM::Weapon::AttackType).
+        virtual void knockObjectsWithMeleeAttack(
+            const MWWorld::Ptr& attacker, const MWWorld::Ptr& weapon, int attackType, float attackStrength)
+            = 0;
+        virtual bool isPlayerAttackSuppressed() const = 0;
 
         virtual void rotateObject(
             const MWWorld::Ptr& ptr, const osg::Vec3f& rot, RotationFlags flags = RotationFlag_inverseOrder)
