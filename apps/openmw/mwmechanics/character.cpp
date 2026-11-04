@@ -2535,6 +2535,16 @@ namespace MWMechanics
 
             movement.x() *= scale;
             movement.y() *= scale;
+            // Queue alongside animation root motion so the collision solver, rather
+            // than a direct teleport, moves dying NPCs backwards. The kick decays.
+            if (mNpcDeathKnockbackRemaining > 0.f && duration > 0.f)
+            {
+                constexpr float knockbackDuration = 0.32f;
+                const float active = std::min(duration, mNpcDeathKnockbackRemaining);
+                const float fade = mNpcDeathKnockbackRemaining / knockbackDuration;
+                movement += mNpcDeathKnockbackVelocity * (fade * active / duration);
+                mNpcDeathKnockbackRemaining -= active;
+            }
             world->queueMovement(mPtr, movement);
         }
 
@@ -2843,6 +2853,26 @@ namespace MWMechanics
     {
         if (mDeathState == CharState_None)
         {
+            // NPCs keep the normal animated death, but the killing blow displaces them
+            // backwards for a short time. Only CREA records enter Bullet ragdoll physics.
+            if (mPtr.getType() == ESM::NPC::sRecordId && mPtr != getPlayer())
+            {
+                CreatureStats& stats = mPtr.getClass().getCreatureStats(mPtr);
+                osg::Vec3f impulse = stats.getDeathKick();
+                impulse.z() = 0.f;
+                const float hitSpeed = impulse.length();
+                if (impulse.normalize() < 0.001f)
+                {
+                    // Non-weapon fatal damage (spells, scripts, etc): a modest backwards
+                    // motion relative to the NPC's own facing is still visible.
+                    const float yaw = mPtr.getRefData().getPosition().rot[2];
+                    impulse = osg::Quat(-yaw, osg::Vec3f(0.f, 0.f, 1.f)) * osg::Vec3f(0.f, -1.f, 0.f);
+                }
+                mNpcDeathKnockbackVelocity = impulse * std::clamp(hitSpeed * 1.6f, 200.f, 420.f);
+                mNpcDeathKnockbackRemaining = 0.32f;
+                stats.setDeathKick(osg::Vec3f());
+            }
+
             mDying = true;
             playRandomDeath();
             mDying = false;
@@ -2863,6 +2893,8 @@ namespace MWMechanics
 
     void CharacterController::resurrect()
     {
+        mNpcDeathKnockbackRemaining = 0.f;
+        mNpcDeathKnockbackVelocity.set(0.f, 0.f, 0.f);
         if (mRagdoll)
         {
             MWBase::Environment::get().getWorld()->removeRagdoll(mPtr);
@@ -2880,7 +2912,7 @@ namespace MWMechanics
     bool CharacterController::startRagdoll()
     {
         // Anyone with a skeleton; the rest play their death animation. Not the player (the death camera).
-        if (!mAnimation || mPtr == getPlayer())
+        if (!mAnimation || mPtr.getType() != ESM::Creature::sRecordId || mPtr == getPlayer())
             return false;
         CreatureStats& stats = mPtr.getClass().getCreatureStats(mPtr);
         const osg::Vec3f kick = stats.getDeathKick();
