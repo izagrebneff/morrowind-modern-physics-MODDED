@@ -542,14 +542,12 @@ namespace MWPhysics
         std::mutex mHasJobMutex;
     };
 
-    PhysicsTaskScheduler::PhysicsTaskScheduler(
-        float physicsDt, btDiscreteDynamicsWorld* dynamicsWorld, MWRender::DebugDrawer* debugDrawer)
+    PhysicsTaskScheduler::PhysicsTaskScheduler(float physicsDt, btDiscreteDynamicsWorld* dynamicsWorld)
         : mDefaultPhysicsDt(physicsDt)
         , mPhysicsDt(physicsDt)
         , mTimeAccum(0.f)
         , mCollisionWorld(dynamicsWorld)
         , mDynamicsWorld(dynamicsWorld)
-        , mDebugDrawer(debugDrawer)
         , mLockingPolicy(detectLockingPolicy())
         , mNumThreads(getNumThreads(mLockingPolicy))
         , mNumJobs(0)
