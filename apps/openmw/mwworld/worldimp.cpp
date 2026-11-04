@@ -1701,7 +1701,8 @@ namespace MWWorld
             weapon.isEmpty() ? std::string("fist") : weapon.getCellRef().getRefId().toDebugString());
     }
 
-    void World::doPhysics(float duration, osg::Timer_t frameStart, unsigned int frameNumber, osg::Stats& stats)
+    void World::doPhysics(float duration, Misc::FrameClock::time_point statsEpoch,
+        unsigned int frameNumber, Misc::FrameStats& stats)
     {
         if (mPhysics->isHoldingObject())
         {
