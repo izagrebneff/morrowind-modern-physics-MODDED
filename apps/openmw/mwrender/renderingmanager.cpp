@@ -1143,6 +1143,8 @@ namespace MWRender
 
     void RenderingManager::clear()
     {
+        // A hidden seated avatar must never survive loading another game.
+        setPlayerModelVisible(true);
         mSky->setMoonColour(false);
 
         notifyWorldSpaceChanged();
@@ -1176,11 +1178,12 @@ namespace MWRender
         if (!mPlayerNode)
         {
             mPlayerNode = new SceneUtil::PositionAttitudeTransform;
-            mPlayerNode->setNodeMask(Mask_Player);
             mPlayerNode->setName("Player Root");
             mSceneRoot->addChild(mPlayerNode);
         }
 
+        // Re-apply after character changes and player node reconstruction.
+        mPlayerNode->setNodeMask(mPlayerModelVisible ? Mask_Player : Mask_UpdateVisitor);
         mPlayerNode->setUserDataContainer(new osg::DefaultUserDataContainer);
         SceneUtil::addUserData(*mPlayerNode, player);
 
@@ -1188,6 +1191,13 @@ namespace MWRender
 
         mWater->removeEmitter(player);
         mWater->addEmitter(player);
+    }
+
+    void RenderingManager::setPlayerModelVisible(bool visible)
+    {
+        mPlayerModelVisible = visible;
+        if (mPlayerNode)
+            mPlayerNode->setNodeMask(visible ? Mask_Player : Mask_UpdateVisitor);
     }
 
     void RenderingManager::renderPlayer(const MWWorld::Ptr& player)

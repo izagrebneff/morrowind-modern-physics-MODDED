@@ -236,6 +236,11 @@ namespace MWRender
         void setupPlayer(const MWWorld::Ptr& player);
         void renderPlayer(const MWWorld::Ptr& player);
 
+        /// Hides only the player scene graph (including first-person hands,
+        /// armor and held items), leaving AI, inventory and collision intact.
+        void setPlayerModelVisible(bool visible);
+        bool getPlayerModelVisible() const { return mPlayerModelVisible; }
+
         void rebuildPtr(const MWWorld::Ptr& ptr);
 
         void processChangedSettings(const Settings::CategorySettingVector& settings);
@@ -353,6 +358,7 @@ namespace MWRender
         osg::ref_ptr<PostProcessor> mPostProcessor;
         osg::ref_ptr<NpcAnimation> mPlayerAnimation;
         osg::ref_ptr<SceneUtil::PositionAttitudeTransform> mPlayerNode;
+        bool mPlayerModelVisible = true;
         std::unique_ptr<Camera> mCamera;
         osg::ref_ptr<Debug::DebugDrawer> mDebugDraw;
 
