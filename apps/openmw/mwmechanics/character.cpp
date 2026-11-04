@@ -2915,7 +2915,14 @@ namespace MWMechanics
         if (!mAnimation || mPtr.getType() != ESM::Creature::sRecordId || mPtr == getPlayer())
             return false;
         CreatureStats& stats = mPtr.getClass().getCreatureStats(mPtr);
-        const osg::Vec3f kick = stats.getDeathKick();
+        osg::Vec3f kick = stats.getDeathKick();
+        // Magic and scripted kills may not carry a recorded attacker vector:
+        // still make a creature visibly recoil rather than collapsing straight down.
+        if (kick.length2() < 1.f)
+        {
+            const float yaw = mPtr.getRefData().getPosition().rot[2];
+            kick = osg::Quat(-yaw, osg::Vec3f(0.f, 0.f, 1.f)) * osg::Vec3f(0.f, -165.f, 60.f);
+        }
         stats.setDeathKick(osg::Vec3f());
         if (!MWBase::Environment::get().getWorld()->makeRagdoll(mPtr, kick, false, false))
             return false;
