@@ -55,27 +55,12 @@ namespace MWWorld
     void Class::insertObjectPhysics(
         const Ptr& ptr, const std::string& mesh, const osg::Quat& rotation, MWPhysics::PhysicsSystem& physics) const
     {
-        // Items lying around in the world are simulated rigid bodies.
-        if (mesh.empty() || !isItem(ptr))
-            return;
-        const float mass = std::clamp(getWeight(ptr), 0.2f, 50.f);
-        // Metal goods sink no matter how light they are for their size.
-        const unsigned type = ptr.getType();
-        const bool metal = type == ESM::Weapon::sRecordId || type == ESM::Armor::sRecordId
-            || type == ESM::Lockpick::sRecordId || type == ESM::Probe::sRecordId || type == ESM::Repair::sRecordId
-            || ptr.getClass().isGold(ptr);
-        // Ammunition and thrown weapons can be stuck in things.
-        bool projectile = false;
-        if (type == ESM::Weapon::sRecordId)
-        {
-            const ESM::RefId& weaponType = ptr.get<ESM::Weapon>()->mBase->mData.mType;
-            projectile = weaponType == ESM::WeaponType::Arrow || weaponType == ESM::WeaponType::Bolt
-                || weaponType == ESM::WeaponType::MarksmanThrown;
-        }
-        // Script-placed objects normally get collision only after the next cell change. Simulated objects
-        // need it right away, or they would just hang in the air.
-        ptr.mRef->mData.mPhysicsPostponed = false;
-        physics.addDynamicObject(ptr, VFS::Path::toNormalized(mesh), rotation, mass, metal, projectile);
+        // Keep loose items and ordinary models at their authored location:
+        // they remain selectable but no longer become simulated rigid bodies
+        // when an actor steps on them or when they are dropped in the world.
+        // ESM::Static objects keep their existing fixed world collision.
+        if (!mesh.empty() && isItem(ptr))
+            physics.addObject(ptr, VFS::Path::toNormalized(mesh), rotation, MWPhysics::CollisionType_VisualOnly);
     }
 
     bool Class::consume(const MWWorld::Ptr& consumable, const MWWorld::Ptr& actor) const

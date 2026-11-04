@@ -43,6 +43,7 @@
 #include "../mwbase/world.hpp"
 
 #include "../mwworld/class.hpp"
+#include "../mwworld/creaturephysics.hpp"
 #include "../mwworld/esmstore.hpp"
 #include "../mwworld/inventorystore.hpp"
 #include "../mwworld/player.hpp"
@@ -2876,10 +2877,17 @@ namespace MWMechanics
     bool CharacterController::startRagdoll()
     {
         // Anyone with a skeleton; the rest play their death animation. Not the player (the death camera).
-        if (!mAnimation || mPtr == getPlayer() || mPtr.getClass().isBipedal(mPtr))
+        if (!mAnimation || mPtr == getPlayer() || !MWWorld::supportsCreatureCorpsePhysics(mPtr))
             return false;
         CreatureStats& stats = mPtr.getClass().getCreatureStats(mPtr);
-        const osg::Vec3f kick = stats.getDeathKick();
+        osg::Vec3f kick = stats.getDeathKick();
+        // Some spells and scripted deaths have no recorded attacker. Even then,
+        // give the corpse a small, visible backward movement.
+        if (kick.length2() < 1.f)
+        {
+            const float yaw = mPtr.getRefData().getPosition().rot[2];
+            kick = osg::Quat(-yaw, osg::Vec3f(0.f, 0.f, 1.f)) * osg::Vec3f(0.f, -55.f, 12.f);
+        }
         stats.setDeathKick(osg::Vec3f());
         if (!MWBase::Environment::get().getWorld()->makeRagdoll(mPtr, kick, false, false))
             return false;

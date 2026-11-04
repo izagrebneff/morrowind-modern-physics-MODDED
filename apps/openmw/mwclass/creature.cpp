@@ -444,8 +444,9 @@ namespace MWClass
             away.z() = 0;
             if (away.normalize() > 0)
             {
-                away.z() = 0.3f;
-                stats.setDeathKick(away * std::clamp(100.f + health->second * 5.f, 100.f, 320.f));
+                // A restrained recoil rather than a violent launch.
+                away.z() = 0.18f;
+                stats.setDeathKick(away * std::clamp(45.f + health->second * 1.5f, 45.f, 110.f));
             }
         }
     }

@@ -153,9 +153,13 @@ namespace
                 = MWBase::Environment::get().getESMStore()->get<ESM::MagicEffect>().find(enam.mData.mEffectID);
             lightDiffuseColor += magicEffect->getColor();
         }
-        size_t numberOfEffects = effects.mList.size();
+        const size_t numberOfEffects = effects.mList.size();
+        // Defensive fallback for empty effect lists (e.g. mod-generated bolts).
+        // Never divide by zero and feed NaN light colors into the renderer.
+        if (numberOfEffects == 0)
+            return osg::Vec4(0.7f, 0.65f, 1.f, 1.f);
         lightDiffuseColor /= static_cast<float>(numberOfEffects);
-
+        lightDiffuseColor.a() = 1.f;
         return lightDiffuseColor;
     }
 
