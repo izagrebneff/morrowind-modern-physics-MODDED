@@ -465,6 +465,10 @@ namespace MWRender
         /// @note The matching is case-insensitive.
         const osg::Node* getNode(std::string_view name) const;
 
+        /// World transforms used by actor-attached effects and camera placement.
+        std::optional<osg::Matrixf> getNodeWorldTransform(std::string_view name) const;
+        std::optional<osg::Matrixf> getHeadWorldTransform() const;
+
         /// For ragdolls: where a bone is (world matrix), and putting it somewhere. Only bones no animation drives
         /// stay where they're put (see stopAllAnimations).
         std::optional<osg::Matrixf> getBoneWorldMatrix(std::string_view bone) const;
