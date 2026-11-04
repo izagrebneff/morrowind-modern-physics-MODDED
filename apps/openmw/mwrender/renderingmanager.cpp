@@ -1183,7 +1183,7 @@ namespace MWRender
         }
 
         // Re-apply after character changes and player node reconstruction.
-        mPlayerNode->setNodeMask(mPlayerModelVisible ? Mask_Player : 0u);
+        mPlayerNode->setNodeMask(mPlayerModelVisible ? Mask_Player : Mask_UpdateVisitor);
         mPlayerNode->setUserDataContainer(new osg::DefaultUserDataContainer);
         SceneUtil::addUserData(*mPlayerNode, player);
 
@@ -1197,7 +1197,7 @@ namespace MWRender
     {
         mPlayerModelVisible = visible;
         if (mPlayerNode)
-            mPlayerNode->setNodeMask(visible ? Mask_Player : 0u);
+            mPlayerNode->setNodeMask(visible ? Mask_Player : Mask_UpdateVisitor);
     }
 
     void RenderingManager::renderPlayer(const MWWorld::Ptr& player)
