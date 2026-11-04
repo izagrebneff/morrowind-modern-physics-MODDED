@@ -17,9 +17,11 @@
 #include <osg/Matrixf>
 #include <osg/Quat>
 
+#include <LinearMath/btIDebugDraw.h>
 #include <LinearMath/btQuaternion.h>
 #include <LinearMath/btVector3.h>
 
+#include <components/misc/framestats.hpp>
 #include <components/vfs/pathutil.hpp>
 
 #include "../mwworld/ptr.hpp"
