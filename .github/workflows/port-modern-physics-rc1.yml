@@ -1,0 +1,30 @@
+name: Examine Modern Physics v1.1 merge into RC1
+on:
+  push:
+    branches:
+      - openmw-052-rc1-modern-physics-v11
+    paths:
+      - .github/workflows/port-modern-physics-rc1.yml
+jobs:
+  inspect-merge:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Try three-way merge, report conflicts
+        shell: bash
+        run: |
+          git fetch origin modern-physics-v11-port-source
+          git config user.name "OpenMW RC1 port"
+          git config user.email "openmw-rc1-port@users.noreply.github.com"
+          git merge --no-commit --no-ff -X theirs FETCH_HEAD || true
+          echo "=== REMAINING CONFLICTS ==="
+          git diff --name-only --diff-filter=U || true
+          echo "=== MERGED DIFF SUMMARY ==="
+          git diff --cached --stat | tail -100
+          echo "=== UNMERGED DETAILS ==="
+          git ls-files -u | head -100 || true
+          git merge --abort || true
