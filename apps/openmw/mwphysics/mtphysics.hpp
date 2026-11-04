@@ -4,6 +4,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <shared_mutex>
@@ -11,6 +12,14 @@
 #include <unordered_set>
 
 #include <BulletCollision/CollisionDispatch/btCollisionWorld.h>
+
+class btDiscreteDynamicsWorld;
+class btRigidBody;
+class btTypedConstraint;
+class btActionInterface;
+class btPoint2PointConstraint;
+
+#include <osg/Timer>
 
 #include "components/misc/budgetmeasurement.hpp"
 #include "components/misc/framestats.hpp"
@@ -34,7 +43,8 @@ namespace MWPhysics
     class PhysicsTaskScheduler
     {
     public:
-        PhysicsTaskScheduler(float physicsDt, btCollisionWorld* collisionWorld);
+        PhysicsTaskScheduler(
+            float physicsDt, btDiscreteDynamicsWorld* dynamicsWorld, MWRender::DebugDrawer* debugDrawer);
         ~PhysicsTaskScheduler();
 
         /// @brief move actors taking into account desired movements and collisions
@@ -58,6 +68,81 @@ namespace MWPhysics
         void getAabb(const btCollisionObject* obj, btVector3& min, btVector3& max);
         void setCollisionFilterMask(btCollisionObject* collisionObject, int collisionFilterMask);
         void addCollisionObject(btCollisionObject* collisionObject, int collisionFilterGroup, int collisionFilterMask);
+        void addRigidBody(btRigidBody* body, int collisionFilterGroup, int collisionFilterMask);
+        /// A joint between two rigid bodies already added (its bodies don't collide with each other).
+        void addConstraint(btTypedConstraint* constraint);
+        void removeConstraint(btTypedConstraint* constraint);
+        /// Something run every simulation step (inside it, with the world locked).
+        void addAction(btActionInterface* action);
+        void removeAction(btActionInterface* action);
+        /// Stop a body and put it to sleep.
+        void setAtRest(btRigidBody* body);
+        /// Moves a simulated body to transform, still.
+        void placeBody(btRigidBody* body, const btTransform& transform);
+        /// Wake the body and push it: impulse applied at point (world space).
+        void applyImpulse(btRigidBody* body, const btVector3& impulse, const btVector3& point);
+
+        // Carrying a dynamic object: each physics step it is steered towards the hold target.
+        /// steerRotation: also turn it to the target orientation. holdMass: if set, its mass while held (a heavier
+        /// grip drags what it is jointed to, e.g. the rest of a ragdoll).
+        /// grabPoint: if set, it isn't carried but hangs from this world point (pinned there), which then follows
+        /// the hold target.
+        /// lightened: other objects (the rest of a ragdoll) whose mass is scaled by lightenScale while it's held.
+        void holdObject(const std::shared_ptr<PtrHolder>& object, bool steerRotation, btScalar holdMass,
+            const std::optional<btVector3>& grabPoint = std::nullopt,
+            const std::vector<std::shared_ptr<PtrHolder>>& lightened = {}, btScalar lightenScale = 1);
+        void setHoldTarget(const btVector3& position, const btQuaternion& rotation);
+        /// Let go of the held object, optionally setting its velocity (for throwing).
+        void releaseHeldObject(const std::optional<btVector3>& velocity);
+        std::shared_ptr<PtrHolder> getHeldObject() const;
+
+        /// Counts the simulation runs that stepped (as of the last sync with the main thread).
+        const std::atomic<unsigned>& getStepGeneration() const { return mStepGeneration; }
+        /// How far from the last step to the next the main thread is (as of the last sync), for showing
+        /// simulated objects between steps.
+        float getSyncInterpolation() const { return mSyncInterpolation; }
+
+        /// Change the velocity of dynamic objects as if struck at a world point (velocityChange is independent
+        /// of the object's mass). Ignores the held object.
+        struct Strike
+        {
+            std::shared_ptr<Object> mObject;
+            btVector3 mVelocityChange;
+            btVector3 mPoint;
+            btVector3 mSource; // where the blow came from
+        };
+        void strikeObjects(const std::vector<Strike>& strikes);
+
+        /// Water level for buoyancy, or none.
+        void setWaterHeight(std::optional<float> height);
+
+        /// Watch a thrown object for hitting an actor (other than the thrower) while it flies.
+        void addFlyingObject(const std::shared_ptr<Object>& object, const btCollisionObject* thrower);
+        struct FlyingObjectHit
+        {
+            std::weak_ptr<Object> mObject;
+            const btCollisionObject* mActor;
+            btScalar mSpeed;
+        };
+        /// Hits since the last call.
+        std::vector<FlyingObjectHit> takeFlyingObjectHits();
+
+        /// A new contact of a simulated body (item or ragdoll part) with something, hard enough to be heard.
+        struct Impact
+        {
+            std::weak_ptr<PtrHolder> mBody; // the simulated one
+            std::weak_ptr<PtrHolder> mOther; // empty for terrain
+            bool mOtherSimulated;
+            bool mOtherTerrain;
+            btVector3 mPoint;
+            btVector3 mNormal; // towards mBody
+            btScalar mSpeed; // the change of speed at the contact
+            btScalar mBodyMass;
+        };
+        /// Collect impacts with at least this speed change (0: don't).
+        void setImpactMinSpeed(float speed) { mImpactMinSpeed = speed; }
+        /// Impacts since the last call.
+        std::vector<Impact> takeImpacts();
         void removeCollisionObject(btCollisionObject* collisionObject);
         void updateSingleAabb(const std::shared_ptr<PtrHolder>& ptr, bool immediate = false);
         bool getLineOfSight(const std::shared_ptr<Actor>& actor1, const std::shared_ptr<Actor>& actor2);
@@ -81,6 +166,19 @@ namespace MWPhysics
         void afterPreStep();
         void afterPostStep();
         void afterPostSim();
+        void pushDynamicObjects();
+        void stepDynamics();
+        void releaseHeldObjectUnsafe(btRigidBody& body, const std::optional<btVector3>& velocity);
+        void applyWaterForces(float waterHeight);
+        void freeWedgedObjectUnsafe(const std::shared_ptr<Object>& object);
+        void setStuckUnsafe(Object& object, bool stuck);
+        void updateWedgedObjects(const std::vector<std::shared_ptr<Object>>& objects);
+        struct FlyingObject
+        {
+            std::weak_ptr<Object> mObject;
+            const btCollisionObject* mThrower;
+        };
+        void updateFlyingObjects(const std::vector<std::pair<std::shared_ptr<Object>, FlyingObject>>& objects);
         void syncWithMainThread();
         void waitForWorkers();
         void prepareWork(float& timeAccum, std::vector<Simulation>& simulations,
@@ -93,6 +191,35 @@ namespace MWPhysics
         float mPhysicsDt;
         float mTimeAccum;
         btCollisionWorld* mCollisionWorld;
+        btDiscreteDynamicsWorld* mDynamicsWorld; // same object as mCollisionWorld
+        int mNumRigidBodies = 0;
+        std::atomic<bool> mHasWater{ false };
+        std::atomic<float> mWaterHeight{ 0.f };
+        std::atomic<unsigned> mStepGeneration{ 0 };
+        float mSyncInterpolation = 1.f;
+        std::weak_ptr<PtrHolder> mHeldObject;
+        bool mHoldSteerRotation = true;
+        btScalar mHeldRestoreMass = 0; // the mass to give back on release, if changed while held
+        // Objects lightened while something is held, and the masses to give back (see holdObject).
+        std::vector<std::pair<std::weak_ptr<PtrHolder>, btScalar>> mLightened;
+        void restoreLightenedUnsafe();
+        std::unique_ptr<btPoint2PointConstraint> mHoldPin; // see holdObject
+        void removeHoldPinUnsafe();
+        btVector3 mHoldTarget;
+        btQuaternion mHoldTargetRotation;
+        // Dynamic objects passing through statics they were wedged in (see freeWedgedObjectUnsafe).
+        std::vector<std::weak_ptr<Object>> mWedgedObjects;
+        std::mutex mWedgedObjectsMutex;
+        // Thrown objects still flying, and the actors they hit (see addFlyingObject).
+        std::vector<FlyingObject> mFlyingObjects;
+        std::vector<FlyingObjectHit> mFlyingObjectHits;
+        std::mutex mFlyingObjectsMutex;
+        std::atomic<float> mImpactMinSpeed{ 0.f };
+        std::vector<Impact> mImpacts;
+        std::mutex mImpactsMutex;
+        void collectImpactsUnsafe();
+        mutable std::mutex mHeldObjectMutex;
+        MWRender::DebugDrawer* mDebugDrawer;
         std::vector<LOSRequest> mLOSCache;
         std::set<std::weak_ptr<PtrHolder>, std::owner_less<std::weak_ptr<PtrHolder>>> mUpdateAabb;
 

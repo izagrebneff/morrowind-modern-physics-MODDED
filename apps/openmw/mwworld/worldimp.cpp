@@ -66,6 +66,7 @@
 #include "../mwmechanics/actorutil.hpp"
 #include "../mwmechanics/aiavoiddoor.hpp" //Used to tell actors to avoid doors
 #include "../mwmechanics/combat.hpp"
+#include "../mwmechanics/stuckprojectiles.hpp"
 #include "../mwmechanics/creaturestats.hpp"
 #include "../mwmechanics/levelledlist.hpp"
 #include "../mwmechanics/npcstats.hpp"
@@ -90,6 +91,7 @@
 #include "../mwphysics/collisiontype.hpp"
 #include "../mwphysics/object.hpp"
 #include "../mwphysics/physicssystem.hpp"
+#include "../mwphysics/ragdoll.hpp"
 
 #include "../mwsound/constants.hpp"
 
@@ -100,6 +102,7 @@
 #include "inventorystore.hpp"
 #include "manualref.hpp"
 #include "player.hpp"
+#include "impactsounds.hpp"
 #include "projectilemanager.hpp"
 #include "weather.hpp"
 
@@ -110,6 +113,19 @@ namespace MWWorld
 {
     namespace
     {
+        // Where a carried thing is held from. In third person the camera is well behind the player, further than
+        // a carried thing may be from where it is held: it is held in front of the player instead, on the line the
+        // camera looks along (so it stays under the crosshair).
+        osg::Vec3f getHoldEye(const MWRender::Camera& camera)
+        {
+            const osg::Vec3f position = camera.getPosition();
+            if (camera.getMode() == MWRender::Camera::Mode::FirstPerson)
+                return position;
+            const osg::Vec3f direction = camera.getOrient() * osg::Vec3f(0, 1, 0);
+            const float ahead = (osg::Vec3f(camera.getTrackedPosition()) - position) * direction;
+            return position + direction * std::max(ahead, 0.f);
+        }
+
         std::vector<std::pair<GlobalVariableName, ESM::Variant>> generateDefaultGlobals()
         {
             return {
@@ -1380,15 +1396,357 @@ namespace MWWorld
         mPhysics->updateAnimatedCollisionShape(ptr);
     }
 
-    void World::doPhysics(
-        float duration, Misc::FrameClock::time_point statsEpoch, unsigned int frameNumber, Misc::FrameStats& stats)
+    bool World::canGrabObject(const MWWorld::ConstPtr& ptr) const
     {
+        return !ptr.isEmpty() && (mPhysics->canHoldObject(ptr) || canRagdollCorpse(ptr));
+    }
+
+    bool World::canRagdollCorpse(const MWWorld::ConstPtr& ptr) const
+    {
+        // Not the player (the death camera).
+        if (!ptr.getClass().isActor() || ptr == getPlayerConstPtr())
+            return false;
+        // Only reads the stats, so stripping Const is fine.
+        const MWWorld::Ptr mutablePtr(
+            const_cast<MWWorld::LiveCellRefBase*>(ptr.mRef), const_cast<MWWorld::CellStore*>(ptr.mCell));
+        const MWMechanics::CreatureStats& stats = ptr.getClass().getCreatureStats(mutablePtr);
+        return stats.isDead() && stats.isDeathAnimationFinished();
+    }
+
+    bool World::grabObject(const MWWorld::Ptr& ptr)
+    {
+        if (ptr.isEmpty())
+            return false;
+        // Bodies only go limp as they die, so one from before a save (or placed dead) lies in its death pose
+        // until picked up.
+        if (canRagdollCorpse(ptr) && getRagdollBonePoses(ptr).empty()
+            && !makeRagdoll(ptr, osg::Vec3f(), true, false))
+            return false;
+        const MWRender::Camera* camera = mRendering->getCamera();
+        return mPhysics->holdObject(ptr, getHoldEye(*camera), camera->getOrient() * osg::Vec3f(0, 1, 0));
+    }
+
+    void World::rotateGrabbedObject(float yaw, float pitch)
+    {
+        mPhysics->rotateHeldObject(yaw, pitch);
+    }
+
+    void World::releaseGrabbedObject(bool throwObject)
+    {
+        const MWRender::Camera* camera = mRendering->getCamera();
+        mPhysics->releaseHeldObject(throwObject, camera->getOrient() * osg::Vec3f(0, 1, 0));
+    }
+
+    bool World::isGrabbingObject() const
+    {
+        return mPhysics->isHoldingObject();
+    }
+
+    std::vector<std::pair<std::string, osg::Matrixf>> World::getRagdollBonePoses(const MWWorld::ConstPtr& actor) const
+    {
+        return mPhysics->getRagdollBonePoses(actor);
+    }
+
+    bool World::makeRagdoll(const MWWorld::Ptr& actor, const osg::Vec3f& kick, bool allowOnePiece, bool atRest)
+    {
+        if (!makeRagdollBody(actor, kick, allowOnePiece))
+            return false;
+        if (atRest)
+            mPhysics->settleRagdoll(actor);
+        return true;
+    }
+
+    bool World::makeRagdollBody(const MWWorld::Ptr& actor, const osg::Vec3f& kick, bool allowOnePiece)
+    {
+        const MWRender::Animation* animation = mRendering->getAnimation(actor);
+        if (animation == nullptr)
+            return false;
+        // A creature whose ragdoll came apart before (see doPhysics) is moved about in one piece.
+        if (mFailedRagdollModels.count(std::string(actor.getClass().getModel(actor).value())) != 0)
+            return allowOnePiece && mPhysics->createCorpseBody(actor);
+
+        // People, and things built like people (skeletons, dremora...): the hand-made body. Many four-legged
+        // beasts (guars, rats, wolves...) have bones of the same names, but they aren't shaped like people.
+        if (actor.getClass().isBipedal(actor))
+        {
+            std::map<std::string, osg::Matrixf, std::less<>> bones;
+            for (const std::string& bone : MWPhysics::Ragdoll::getRequiredBones())
+            {
+                const std::optional<osg::Matrixf> world = animation->getBoneWorldMatrix(bone);
+                if (!world)
+                    break;
+                bones.emplace(bone, *world);
+            }
+            if (bones.size() == MWPhysics::Ragdoll::getRequiredBones().size())
+                return mPhysics->createRagdoll(actor, bones, kick);
+        }
+
+        // Any other skinned body: parts fitted to the mesh.
+        std::vector<MWPhysics::Ragdoll::SkinnedBone> skinned;
+        for (const MWRender::Animation::SkinnedBone& bone : animation->getSkinnedBones())
+            skinned.push_back({ bone.mName, bone.mParent, bone.mWorld, bone.mCenter, bone.mRadius });
+        if (mPhysics->createSkinnedRagdoll(actor, skinned, kick))
+            return true;
+
+        // Built of rigid pieces (scribs, constructs...): it falls apart.
+        std::vector<MWPhysics::Ragdoll::RigidPiece> pieces;
+        for (const MWRender::Animation::RigidPiece& piece : animation->getRigidPieces())
+            pieces.push_back({ piece.mName, piece.mParent, piece.mWorld, piece.mBounds._min, piece.mBounds._max });
+        if (mPhysics->createRigidPieceRagdoll(actor, pieces, kick))
+            return true;
+
+        // Anything else (bending its mesh as a whole, or partly skinned) stays in one piece.
+        return allowOnePiece && mPhysics->createCorpseBody(actor);
+    }
+
+    void World::removeRagdoll(const MWWorld::ConstPtr& actor)
+    {
+        mPhysics->removeRagdoll(actor);
+    }
+
+    void World::objectEnteredWater(const MWWorld::Ptr& object, const osg::Vec3f& position, float speed)
+    {
+        mRendering->emitWaterRipple(position);
+        // Items always splashed; how is tuned with the other splashes (water: items in impactsounds.yaml).
+        ImpactSounds::get().splash(ImpactSounds::SplashKind::Item, object, position, speed,
+            std::clamp(object.getClass().getWeight(object), 0.1f, 50.f));
+    }
+
+    void World::bodyEnteredWater(const MWWorld::Ptr& body, const osg::Vec3f& position, float speed, float size)
+    {
+        if (!Settings::modernPhysics().mImpactSounds || !Settings::modernPhysics().mExtendedWaterSplashes)
+            return;
+        // A body is big: ripples around where it went in.
+        mRendering->emitWaterRipple(position);
+        for (const osg::Vec3f& offset : { osg::Vec3f(30, 0, 0), osg::Vec3f(-20, 25, 0), osg::Vec3f(-15, -25, 0) })
+            mRendering->emitWaterRipple(position + offset);
+        ImpactSounds::get().splash(ImpactSounds::SplashKind::Body, body, position, speed, size);
+    }
+
+    void World::pushObjectsFromExplosion(const osg::Vec3f& center, float radius)
+    {
+        mPhysics->explode(center, radius, 600.f);
+    }
+
+    void World::knockObjectsWithMeleeAttack(
+        const MWWorld::Ptr& attacker, const MWWorld::Ptr& weapon, int attackType, float attackStrength)
+    {
+        // Everything loose that the swing passes through: within weapon reach of the attacker's body, inside the
+        // same arc as hitting actors, from the floor to over the head, and not behind a wall.
+        const float reach = MWMechanics::getMeleeWeaponReach(attacker, weapon);
+        const ESM::Position& position = attacker.getRefData().getPosition();
+        const osg::Vec3f feet = position.asVec3();
+        const osg::Vec3f halfExtents = mPhysics->getHalfExtents(attacker);
+        const osg::Vec3f eye = feet + osg::Vec3f(0, 0, halfExtents.z() * 2.f * 0.85f);
+
+        // Which way the attacker faces (the view, for the player).
+        const bool isPlayer = attacker == getPlayerPtr();
+        const osg::Vec3f view = isPlayer ? mRendering->getCamera()->getOrient() * osg::Vec3f(0, 1, 0)
+                                         : osg::Quat(position.rot[2], osg::Vec3f(0, 0, -1)) * osg::Vec3f(0, 1, 0);
+        // The player swings where they look, up or down; others at anything from their feet to over their head.
+        const float viewElevation = std::asin(std::clamp(view.z() / view.length(), -1.f, 1.f));
+        const float maxElevationOffAim = osg::DegreesToRadians(25.f);
+        osg::Vec3f forward = view;
+        forward.z() = 0;
+        if (forward.normalize() < 1e-4f)
+            return;
+        const osg::Vec3f right(forward.y(), -forward.x(), 0);
+
+        // How the blow moves things: a thrust drives them ahead, a slash sweeps them aside, a chop knocks them
+        // forward and down.
+        osg::Vec3f knock = forward;
+        // A sweeping slash sends things flying further than it should otherwise; hold it back.
+        float attackTypeMult = 1.f;
+        if (attackType == ESM::Weapon::AT_Slash)
+        {
+            knock = forward * 0.4f - right * 0.9f;
+            attackTypeMult = 0.7f;
+        }
+        else if (attackType == ESM::Weapon::AT_Chop)
+            knock = forward * 0.9f - osg::Vec3f(0, 0, 0.3f);
+        knock.normalize();
+
+        // Heavier weapons and fuller swings hit harder; heavier things move less.
+        const float weaponWeight = weapon.isEmpty() ? 5.f : std::max(weapon.getClass().getWeight(weapon), 1.f);
+        const float swingSpeed = (200.f + 500.f * attackStrength) * attackTypeMult;
+
+        static const float fCombatAngleXY
+            = getStore().get<ESM::GameSetting>().find("fCombatAngleXY")->mValue.getFloat() / 90.f;
+        const float bodyRadius = halfExtents.y();
+
+        constexpr size_t maxObjects = 6;
+        size_t knocked = 0;
+        // The player hits what they aim at first: order by how close to the line of sight. Others, nearest first.
+        std::vector<MWPhysics::PhysicsSystem::DynamicObjectInfo> candidates
+            = mPhysics->getDynamicObjectsInRange(feet, reach + bodyRadius + 50.f);
+        if (isPlayer)
+        {
+            osg::Vec3f aim = view;
+            aim.normalize();
+            const auto offAim = [&](const osg::Vec3f& point) {
+                osg::Vec3f toPoint = point - eye;
+                toPoint.normalize();
+                return -(toPoint * aim); // smaller is closer to the crosshair
+            };
+            std::stable_sort(candidates.begin(), candidates.end(),
+                [&](const auto& a, const auto& b) { return offAim(a.mCenter) < offAim(b.mCenter); });
+        }
+        for (const auto& [object, center, objectRadius] : candidates)
+        {
+            if (knocked >= maxObjects)
+                break;
+            if (!object.getClass().isItem(object))
+                continue;
+            if (isPlayer)
+            {
+                osg::Vec3f toCenter = center - eye;
+                const float elevation = std::asin(std::clamp(toCenter.z() / toCenter.length(), -1.f, 1.f));
+                if (std::abs(elevation - viewElevation) > maxElevationOffAim)
+                    continue;
+            }
+            osg::Vec2f toObject(center.x() - feet.x(), center.y() - feet.y());
+            const float distance = toObject.normalize() - bodyRadius;
+            if (distance > reach)
+                continue;
+            if (center.z() < feet.z() - 30.f || center.z() > feet.z() + halfExtents.z() * 2.f + 30.f)
+                continue;
+            // In front, within the attack arc (the same angle used for hitting actors).
+            if (toObject.x() * forward.x() + toObject.y() * forward.y() <= 0
+                || std::abs(toObject.x() * forward.y() - toObject.y() * forward.x()) > fCombatAngleXY)
+                continue;
+            // Not through walls (seen the way loose objects see them: a bookcase's shelves, not its outline). Any
+            // visible part will do: its middle, its top, or the side facing the attacker (a bottle under the shelf
+            // above may only show its front). What it sits on or in doesn't count, only something in between.
+            osg::Vec3f towardsEye = eye - center;
+            towardsEye.normalize();
+            const osg::Vec3f samples[] = { center, center + osg::Vec3f(0, 0, objectRadius * 0.8f),
+                center + towardsEye * (objectRadius * 0.8f) };
+            bool visible = false;
+            for (const osg::Vec3f& sample : samples)
+            {
+                const MWPhysics::RayCastingResult blocked = mPhysics->castRay(eye, sample, { attacker }, {},
+                    MWPhysics::CollisionType_World | MWPhysics::CollisionType_Door
+                        | MWPhysics::CollisionType_HeightMap | MWPhysics::CollisionType_DynamicDetail,
+                    MWPhysics::CollisionType_Dynamic);
+                if (!blocked.mHit || (blocked.mHitPos - sample).length() <= objectRadius + 5.f)
+                {
+                    visible = true;
+                    break;
+                }
+            }
+            if (!visible)
+                continue;
+
+            const float objectWeight = std::clamp(object.getClass().getWeight(object), 0.2f, 50.f);
+            const float speed = swingSpeed * std::clamp(0.7f * std::sqrt(weaponWeight / objectWeight), 0.3f, 2.f);
+            mPhysics->strikeObject(object, knock * speed, center, eye);
+            ImpactSounds::get().itemStruck(object, center,
+                weapon.isEmpty() ? Material::Flesh : classifyItem(weapon), std::clamp(attackStrength, 0.f, 1.f),
+                weapon.isEmpty() ? std::string("fist") : weapon.getCellRef().getRefId().toDebugString());
+            ++knocked;
+        }
+
+        // Nothing loose in the way either: maybe the swing meets a wall, the ground or furniture. A sound only.
+        if (knocked == 0)
+            meleeHitWorld(attacker, weapon, isPlayer ? view : forward, eye, reach + bodyRadius, attackStrength);
+    }
+
+    void World::meleeHitWorld(const MWWorld::Ptr& attacker, const MWWorld::Ptr& weapon, osg::Vec3f direction,
+        const osg::Vec3f& eye, float reach, float attackStrength)
+    {
+        // What it is swung with. Creatures without weapons (claws, teeth) make no such sound.
+        std::string_view weaponClass = "fist";
+        if (!weapon.isEmpty())
+        {
+            const ESM::RefId& type = weapon.get<ESM::Weapon>()->mBase->mData.mType;
+            if (type == ESM::WeaponType::BluntOneHand || type == ESM::WeaponType::BluntTwoClose
+                || type == ESM::WeaponType::BluntTwoWide)
+                weaponClass = "blunt";
+            else if (type == ESM::WeaponType::AxeOneHand || type == ESM::WeaponType::AxeTwoHand)
+                weaponClass = "axe";
+            else if (type == ESM::WeaponType::SpearTwoWide)
+                weaponClass = "spear";
+            else if (type == ESM::WeaponType::ShortBladeOneHand || type == ESM::WeaponType::LongBladeOneHand
+                || type == ESM::WeaponType::LongBladeTwoHand)
+                weaponClass = "blade";
+            else
+                return;
+        }
+        else if (!attacker.getClass().isNpc())
+            return;
+
+        // From the chest, the way the attacker faces (where the player looks), out to the weapon's reach.
+        if (direction.normalize() < 1e-4f)
+            return;
+        const osg::Vec3f from = eye - osg::Vec3f(0, 0, 25.f);
+        const MWPhysics::RayCastingResult hit = mPhysics->castRay(from, from + direction * reach, { attacker }, {},
+            MWPhysics::CollisionType_World | MWPhysics::CollisionType_Door | MWPhysics::CollisionType_HeightMap
+                | MWPhysics::CollisionType_DynamicDetail);
+        if (!hit.mHit)
+        {
+            ImpactSounds::get().meleeMissed(attacker, from, direction, reach, weaponClass);
+            return;
+        }
+
+        // What it looks like there: the texture, else the model; the ground unless it says otherwise.
+        const MWRender::RenderingManager::SurfaceResult surface
+            = mRendering->castRayForSurface(hit.mHitPos - direction * 10.f, hit.mHitPos + direction * 20.f);
+        const bool terrain = hit.mHitObject.isEmpty() || surface.mTerrain;
+        const std::string model
+            = hit.mHitObject.isEmpty() ? std::string() : std::string(hit.mHitObject.getClass().getCorrectedModel(hit.mHitObject));
+        const Material material = classifySurface(surface.mHit ? surface.mTexture : std::string(), model,
+            terrain ? Material::Earth : hit.mHitObject.getClass().isDoor() ? Material::Wood : Material::Stone);
+        ImpactSounds::get().meleeHitWorld(attacker, hit.mHitPos, material, weaponClass,
+            std::clamp(attackStrength, 0.f, 1.f),
+            weapon.isEmpty() ? std::string("fist") : weapon.getCellRef().getRefId().toDebugString());
+    }
+
+    void World::doPhysics(float duration, osg::Timer_t frameStart, unsigned int frameNumber, osg::Stats& stats)
+    {
+        if (mPhysics->isHoldingObject())
+        {
+            const MWRender::Camera* camera = mRendering->getCamera();
+            mPhysics->setHoldView(getHoldEye(*camera), camera->getOrient() * osg::Vec3f(0, 1, 0));
+        }
         processDoors(duration);
         mProjectileManager->update(duration);
         mPhysics->stepSimulation(duration, mDiscardMovements, statsEpoch, frameNumber, stats);
         mProjectileManager->processHits();
         mDiscardMovements = false;
-        mPhysics->moveActors();
+        for (const MWWorld::Ptr& body : mPhysics->removeFailedRagdolls(duration))
+        {
+            // It lies in its death pose instead (see CharacterController::driveRagdoll). A creature's model is
+            // left out from then on; people all share one, so only this body is.
+            Log(Debug::Warning) << "Ragdoll of " << body.getCellRef().getRefId() << " came apart; dropped it";
+            body.getClass().getCreatureStats(body).setRagdollPose({});
+            if (!body.getClass().isNpc())
+                mFailedRagdollModels.insert(std::string(body.getClass().getModel(body).value()));
+        }
+        for (const MWWorld::Ptr& body : mPhysics->moveActors())
+        {
+            // Its bones were set in the world before it moved; put them back there (or they'd move with it).
+            MWRender::Animation* animation = mRendering->getAnimation(body);
+            if (animation == nullptr)
+                continue;
+            for (const auto& [bone, world] : mPhysics->getLastRagdollBonePoses(body))
+                if (!bone.empty())
+                    animation->setBoneWorldMatrix(bone, world);
+        }
+
+        // Hitting someone with a thrown object is an attack, like any other.
+        for (const MWPhysics::ThrownObjectHit& hit : mPhysics->takeThrownObjectHits())
+        {
+            const MWWorld::Ptr& victim = hit.mVictim;
+            if (!victim.getClass().isActor() || victim.getClass().getCreatureStats(victim).isDead())
+                continue;
+            // A knock, not a wound: some fatigue damage by the object's momentum.
+            const float mass = std::clamp(hit.mObject.getClass().getWeight(hit.mObject), 0.2f, 50.f);
+            const float fatigue = std::clamp(mass * hit.mSpeed / 300.f, 1.f, 15.f);
+            victim.getClass().onHit(victim, { { "fatigue", fatigue } }, hit.mObject.getCellRef().getRefId(),
+                getPlayerPtr(), true, MWMechanics::DamageSourceType::Ranged);
+        }
+
+        ImpactSounds::get().update(duration, *mPhysics, *mRendering);
     }
 
     void World::updateNavigator()
@@ -1412,6 +1770,8 @@ namespace MWWorld
         const MWPhysics::Object& object, const DetourNavigator::UpdateGuard* navigatorUpdateGuard)
     {
         if (object.getShapeInstance()->mVisualCollisionType != Resource::VisualCollisionType::None)
+            return;
+        if (object.isDynamic())
             return;
         const MWWorld::Ptr ptr = object.getPtr();
         const DetourNavigator::ObjectShapes shapes(object.getShapeInstance(),
@@ -1688,8 +2048,8 @@ namespace MWWorld
     {
         try
         {
-            // inform the GUI about focused object
-            MWWorld::Ptr object = getFocusObject();
+            // inform the GUI about focused object (none while carrying something: that would be what is carried)
+            MWWorld::Ptr object = mPhysics->isHoldingObject() ? MWWorld::Ptr() : getFocusObject();
 
             // retrieve the object's top point's screen position so we know where to place the floating label
             if (!object.isEmpty())
@@ -2029,6 +2389,10 @@ namespace MWWorld
                 moveObject(object, pos.asVec3());
             }
         }
+
+        // Newly created loose items fall into place (ones loaded with a cell stay put where they were).
+        if (object.getRefData().getBaseNode())
+            mPhysics->wakeNewObject(object);
     }
 
     MWWorld::Ptr World::dropObjectOnGround(const Ptr& actor, const Ptr& object, int amount, bool copy)
@@ -3020,8 +3384,12 @@ namespace MWWorld
 
         if (result.mHit)
         {
-            MWMechanics::projectileHit(
-                actor, result.mHitObject, bow, projectile, result.mHitPos, attackStrength, attackWindUp);
+            if (MWMechanics::recoverableStuckProjectiles())
+                MWMechanics::projectileHitAndStick(actor, result.mHitObject, bow, projectile, result.mHitPos,
+                    orient * osg::Vec3f(0, 1, 0), attackStrength, attackWindUp);
+            else
+                MWMechanics::projectileHit(
+                    actor, result.mHitObject, bow, projectile, result.mHitPos, attackStrength, attackWindUp);
             return;
         }
 

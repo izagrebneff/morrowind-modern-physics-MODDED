@@ -1,5 +1,195 @@
-OpenMW
-======
+Morrowind - Modern Physics (Unofficial OpenMW Fork)
+===================================================
+
+Hi, sunspotdark here. Below the line is a detailed AI generated summary of the actual changes and such, but I felt compelled to add a personal note here at the top written with my actual human hands. 
+
+This is an unofficial fork of the OpenMW engine that adds Oblivion/Skyrim style physics to Morrowind. You can pick up items, spin them around and throw them. Or tenderly place them on a table or whatever. You do you. All enemies and NPCs have ragdoll physics and you can drag the bodies around. Stuff floats in the water. Arrows stick in the environment. Etc. Etc. Etc. 
+
+I am not a programmer. At all. This MF is vibecoded to hell and back, specifically with Claude Opus 5.5. Frankly, I didn't think this was even going to work when I started poking at it, but guess that shows what I know. Chances are, there's a lot of broken stuff if you get deeper into the game, but everything around Seyda Neen seems to be working as intended so I figured why not share it. I may update this from time to time based on feedback or my own personal playthrough, but currently it seems to work well enough to toss out into the world.
+
+I am led to believe by Claude that this probably works with old OpenMW saves, but new saves made within this fork will not be backwards compatible with OG OpenMW due to some funkiness with how the ragdoll physics are calculated, or some such. I have no idea if the slop machine is lying or not about this (see previous comment re: this being a vibecoded monstrosity made by a dribbling moron) so use at your own risk. I expect this probably works with most OpenMW mods that don't mess with the physics systems, but I cannot guarantee anything. The slop machine assures me that the ragdoll mechanics should apply to enemies added by mods, and there should be a failsafe if they don't. But, again, I have no idea if this is true--I cannot stress enough that I am exactly the sort of contemptible idiot who uses a $20 a month AI subscription to give themself delusions of game dev grandeur. But to my eyes, this works pretty much exactly as described. Crazy times we live in.
+
+I have no affiliation with the OpenMW team or Bethesda, but I am, of course, deeply indebted to them.
+
+Enjoy(?)
+
+---------------------------------------------------------------------------------------------------------------
+
+An **unofficial** fork of [OpenMW](https://openmw.org) that adds engine-level physics: clutter you can knock
+over, pick up and throw, projectiles that stick where they land, and ragdoll corpses you can drag around.
+
+> **This is not an official OpenMW release.** It is not made, reviewed or supported by the OpenMW team, and it
+> is not affiliated with or endorsed by OpenMW, Bethesda Softworks or ZeniMax Media. Please **do not report
+> problems with this fork to OpenMW's bug tracker, forums or Discord** — report them here instead.
+
+You need to own *The Elder Scrolls III: Morrowind* to play. This fork, like OpenMW, contains no game data.
+
+* Fork version: 1.1 (see the [changelog](#changelog))
+* Based on: OpenMW 0.52.0 (development version, upstream commit `628b6c2b72`, 2026-10-03)
+* Modified: October 2026, by sunspotdark (see [What this fork changes](#what-this-fork-changes) and the git
+  history for the full list of changes)
+* License: GPLv3, the same as OpenMW (see [LICENSE](LICENSE))
+
+What this fork changes
+----------------------
+
+**Items are physical objects**
+* Small items (clutter, weapons, ingredients, books...) are simulated rigid bodies: they fall, tumble, stack,
+  roll off shelves and get shoved when you walk into them.
+* Furniture gets detailed collision, so things rest *on* tables and *in* shelves instead of on their bounding
+  boxes.
+* Items float or sink in water by density (bottles bob, metal sinks), with ripples and splashes.
+
+**Carrying and throwing**
+* Hold **Activate** on an item to pick it up; a quick tap still takes it as usual.
+* Press **Activate** again to put it down, or **Attack** to throw it. Thrown items can hit people (which counts
+  as an attack, as it would be for any other hit).
+* Hold **Rotate Held Item** (default **C**) and move the mouse to turn what you're holding.
+* Works in third person too: what you carry is held in front of your character.
+
+**Combat knocks things about**
+* Arrows, bolts, thrown weapons and spell projectiles knock items over; area spells push things away.
+* Melee swings knock items in their path when they land.
+* Missed arrows and bolts no longer vanish: they stick into soft things (wood, earth, flesh...) and bounce off
+  hard ones (stone, metal), and can be picked up again, enchanted ones too (except ones with an area effect,
+  which go off where they land). Arrows also stick visibly in the people they hit.
+* Arrows, bolts and thrown weapons stuck in a body are real: one that stays in (the usual chance; never an
+  enchanted one) shows where it hit, and every one you see can be looted once the target is dead. Living
+  enemies can't pull them out and shoot them back. Taking them (by looting, Take All or a script) removes them
+  from the body, and they are kept through saves. Up to 8 show per body; any more are still there to loot.
+* Every plain arrow, bolt or thrown weapon shot into a dead body stays in it (and can be looted), and knocks
+  the ragdoll where it hits.
+* Arrows that hit an item glance off it lightly (and never stick in the wall behind it).
+
+**Impact sounds and splashes**
+* Things sound like what they are made of when they hit: arrows thunk into wood and clang off stone and
+  metal, dropped and thrown items knock, clatter or clink by material and weight, items knocking into each
+  other, bodies hitting the ground, and melee swings that hit a wall or the floor instead of someone.
+* Bodies, projectiles and items splash when they hit water, sized by how big and fast they are; nothing is
+  heard from under water.
+* Only Morrowind's own sounds are used. Everything can be turned off or tuned (see [Settings](#settings)).
+
+**Ragdolls**
+* People and creatures go limp when they die, thrown by the killing blow, instead of playing a death animation.
+  Creatures get a body fitted to their own model; creatures built from separate rigid pieces (scribs, shalks,
+  Dwemer spheres...) fall apart.
+* Hold **Activate** on a corpse to drag it by the limb you're looking at; a quick tap still loots it.
+* Corpses are saved where and how they lie.
+* People's bodies float in water.
+* A ragdoll that goes wrong (for example with an unusual creature model from a mod) is replaced with the normal
+  death pose.
+
+Settings
+--------
+
+The fork's own settings go in `settings.cfg` (in `Documents\My Games\OpenMW`), in a `[Modern Physics]` section.
+They aren't in the in-game options or the launcher yet.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `recoverable stuck projectiles` | `true` | Stuck arrows are real items, as described above. `false`: any hit shows an arrow stuck for a while, and the ones that stay go straight into the target's inventory (as in v1.0). |
+| `impact sounds` | `true` | All impact sounds below. `false` turns them all off. |
+| `projectile impact sounds` | `true` | Arrows, bolts and thrown weapons hitting the world: a thunk where they stick, a clatter or clang where they glance off. |
+| `object impact sounds` | `true` | Items and bodies landing, falling and knocking into things. |
+| `melee world impact sounds` | `true` | Melee swings hitting walls, the ground or furniture instead of someone. |
+| `extended water splashes` | `true` | Splashes for bodies and projectiles hitting water, scaled by size and speed. |
+| `impact sound debug` | `false` | Writes every impact to `openmw.log` (what hit what, the materials, the sound picked), and re-reads the sound file below as soon as it is saved. |
+
+Impact sounds use only Morrowind's own sounds, and play where the impact is. Which sounds, how loud, pitches and
+limits are in `resources\vfs\modernphysics\impactsounds.yaml` (explained inside), which you can edit without
+rebuilding anything.
+
+For example:
+```
+[Modern Physics]
+recoverable stuck projectiles = false
+```
+
+Changelog
+---------
+
+**v1.1**
+* Recoverable stuck projectiles: arrows, bolts and thrown weapons you see stuck in a body are real and can be
+  looted from the corpse (setting `recoverable stuck projectiles`). Shots into dead bodies stay in them and
+  knock the ragdoll; missed enchanted arrows can be picked up (except area-effect ones).
+* Impact sounds for projectiles, items, bodies and melee swings, by material (settings above).
+* Water splashes for bodies, projectiles and items.
+* Fixes: carrying in third person no longer drops the item straight away; a ragdoll piece that ends up under
+  the ground is lifted back instead of the whole body being reset; arrows no longer stick in a shelf behind
+  the item they hit.
+
+**v1.0** (2026-10-05)
+* First release.
+
+Known issues and limitations
+----------------------------
+
+* **Saved games:** a save containing ragdolled corpses will most likely **not load in official OpenMW** (or
+  other builds). Saves from official OpenMW load fine in this fork. Keep that in mind before switching back.
+* Windows only for now (other platforms may build from source but are untested).
+* Large furniture (beds, crates, tables) isn't simulated; it only has the detailed collision described above.
+* Mods that change creature models are untested; see the ragdoll fail-safe above.
+* Performance with very large numbers of simulated items in view has not been tested extensively.
+
+Installing
+----------
+
+You need Windows 10 or 11 (64-bit) and an installed copy of Morrowind (GOG, Steam or disc).
+
+1. Download the zip from the [Releases](../../releases) page and extract it to a folder of your choice (not
+   inside `Program Files`, and not into an existing OpenMW folder).
+2. Run `openmw-launcher.exe`.
+   * If Windows SmartScreen warns about an unrecognised app, click **More info → Run anyway**. The build isn't
+     code-signed.
+   * If you get an error about a missing `MSVCP140.dll` or `VCRUNTIME140.dll`, install the
+     [Microsoft Visual C++ Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe) and try again.
+3. On first run (if you've never used OpenMW before) the launcher offers to run the installation wizard. Accept, choose
+   **Existing installation** and point it at your Morrowind folder (the one containing `Morrowind.esm`, usually
+   `Data Files`). It will import your settings and content files.
+4. Click **Play**.
+
+**If you already use official OpenMW:** this fork uses the same settings and saves folder
+(`Documents\My Games\OpenMW`), so it will pick up your existing setup, mods and saves straight away. Because
+saves with ragdolled corpses won't load in official OpenMW (see [Known issues](#known-issues-and-limitations)),
+**back up your `saves` folder first** if you plan to go back and forth.
+
+To uninstall, delete the folder you extracted. Your settings and saves stay in `Documents\My Games\OpenMW`.
+
+The data path, command line options and everything else work as they do in OpenMW (see
+[About OpenMW](#about-openmw) below).
+
+How this was made (AI disclosure)
+---------------------------------
+
+This fork was made with heavy use of AI. Almost all of the code was written by Claude (an AI model made by
+Anthropic), working under my direction: I decided what to build and how it should behave, and tested each change
+in game before it was kept. I am not a C++ developer, and the code has **not** been reviewed line by line by an
+experienced OpenMW or engine developer — it has been checked by playing, not by expert review. Expect rough
+edges, and please judge it accordingly. Commits written this way are marked with a `Co-Authored-By: Claude`
+line in the git history.
+
+Credits
+-------
+
+* All of OpenMW — the engine this fork is built on — is the work of the OpenMW team and contributors (see
+  [AUTHORS.md](AUTHORS.md)). This fork only adds to it.
+* The Windows build bundles third-party libraries (OpenSceneGraph, Bullet, Qt, FFmpeg, SDL2, OpenAL Soft, Boost,
+  MyGUI, LuaJIT, ICU and others), each under its own license; their license texts are included in the release
+  download.
+
+Source code
+-----------
+
+The complete source for every release is in this repository; each release is tagged, and the downloadable build
+is made from exactly that tag.
+
+---
+
+About OpenMW
+============
+
+*The rest of this file is OpenMW's own README, kept as it is. Its links point to the official OpenMW project,
+which does not support this fork.*
 
 OpenMW is an open-source open-world RPG game engine that supports playing Morrowind by Bethesda Softworks. You need to own the game for OpenMW to play Morrowind.
 

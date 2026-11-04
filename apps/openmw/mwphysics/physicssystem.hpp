@@ -7,29 +7,38 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
+#include <string>
 #include <span>
 #include <unordered_map>
 #include <variant>
 
 #include <osg/BoundingBox>
+#include <osg/Matrixf>
 #include <osg/Quat>
 
-#include <components/misc/framestats.hpp>
+#include <LinearMath/btQuaternion.h>
+#include <LinearMath/btVector3.h>
+
 #include <components/vfs/pathutil.hpp>
 
 #include "../mwworld/ptr.hpp"
 
 #include "collisiontype.hpp"
+#include "ragdoll.hpp"
 #include "raycasting.hpp"
 
 namespace Resource
 {
+    struct BulletShape;
     class BulletShapeManager;
     class ResourceSystem;
 }
 
 class btCollisionWorld;
-class btIDebugDraw;
+class btDiscreteDynamicsWorld;
+class btConstraintSolver;
+struct btOverlapFilterCallback;
 class btBroadphaseInterface;
 class btDefaultCollisionConfiguration;
 class btCollisionDispatcher;
@@ -49,9 +58,33 @@ namespace MWPhysics
     class Actor;
     class PhysicsTaskScheduler;
     class Projectile;
+    class Ragdoll;
     enum ScriptedCollisionType : char;
 
     using ActorMap = std::unordered_map<const MWWorld::LiveCellRefBase*, std::shared_ptr<Actor>>;
+
+    struct ThrownObjectHit
+    {
+        MWWorld::Ptr mVictim;
+        MWWorld::Ptr mObject;
+        float mSpeed;
+    };
+
+    /// A simulated item or a ragdoll's part hitting something (see PhysicsSystem::takeImpacts).
+    struct Impact
+    {
+        MWWorld::Ptr mBody; // the item, or the dead actor
+        MWWorld::Ptr mOther; // the other item or body, or the static or door hit; empty for terrain
+        bool mOtherSimulated;
+        bool mOtherTerrain;
+        osg::Vec3f mPoint;
+        osg::Vec3f mNormal; // towards mBody
+        float mSpeed; // the change of speed at the contact
+        float mBodyMass;
+    };
+
+    /// Inverse of Misc::Convert::makeOsgQuat: the ESM rotation (x, y, z) of an object with this orientation.
+    osg::Vec3f quatToEsmRotation(const osg::Quat& quat);
 
     struct ContactPoint
     {
@@ -156,6 +189,84 @@ namespace MWPhysics
 
         void addObject(const MWWorld::Ptr& ptr, VFS::Path::NormalizedView mesh, osg::Quat rotation,
             int collisionType = CollisionType_World);
+        /// Add an object simulated as a rigid body (knocked around by actors, falls under gravity).
+        void addDynamicObject(
+            const MWWorld::Ptr& ptr, VFS::Path::NormalizedView mesh, osg::Quat rotation, float mass, bool metal,
+            bool projectile);
+
+        /// Turn a dead actor's body into a ragdoll: bones are the starting world matrices of
+        /// Ragdoll::getRequiredBones(), kick how the killing blow throws it (on top of how it was moving).
+        /// @return false if it can't be (missing bones)
+        bool createRagdoll(const MWWorld::Ptr& actor, const std::map<std::string, osg::Matrixf, std::less<>>& bones,
+            const osg::Vec3f& kick);
+        /// The simulated bones of the actor's ragdoll (world matrices, parents first); empty without one.
+        std::vector<std::pair<std::string, osg::Matrixf>> getRagdollBonePoses(const MWWorld::ConstPtr& actor) const;
+        /// What getRagdollBonePoses gave last.
+        std::vector<std::pair<std::string, osg::Matrixf>> getLastRagdollBonePoses(const MWWorld::ConstPtr& actor) const;
+        /// For any skinned body (see Ragdoll::fromSkeleton). @return false if it can't be made.
+        bool createSkinnedRagdoll(
+            const MWWorld::Ptr& actor, const std::vector<Ragdoll::SkinnedBone>& bones, const osg::Vec3f& kick);
+        /// For a body built of rigid pieces (see Ragdoll::fromRigidPieces). @return false if it can't be made.
+        bool createRigidPieceRagdoll(
+            const MWWorld::Ptr& actor, const std::vector<Ragdoll::RigidPiece>& pieces, const osg::Vec3f& kick);
+        /// A dead actor in one piece, which its model follows.
+        bool createCorpseBody(const MWWorld::Ptr& actor);
+        void addRagdoll(const MWWorld::Ptr& actor, std::unique_ptr<Ragdoll> ragdoll);
+        /// Throw away ragdolls that came apart (see Ragdoll::hasComeApart); duration is the time since the last
+        /// call. @return their actors
+        std::vector<MWWorld::Ptr> removeFailedRagdolls(float duration);
+        /// Make the ragdoll start out still and asleep (one that was lying there before).
+        void settleRagdoll(const MWWorld::ConstPtr& actor);
+        void removeRagdoll(const MWWorld::ConstPtr& actor);
+        bool hasRagdoll(const MWWorld::ConstPtr& actor) const;
+        /// Push the dead actor's ragdoll where it was hit (point, world space) with impulse. False without one.
+        bool strikeRagdoll(const MWWorld::ConstPtr& actor, const osg::Vec3f& point, const osg::Vec3f& impulse);
+
+        /// A simulated object was just created in the world (dropped, spawned): settle it onto the surface and
+        /// let it fall. Objects loaded with a cell stay asleep where they were.
+        void wakeNewObject(const MWWorld::Ptr& ptr);
+        /// Fix a simulated object, asleep, with its tip driven into hitPoint (an arrow stuck in a wall).
+        void stickObject(const MWWorld::Ptr& ptr, const osg::Vec3f& hitPoint);
+        /// Send a simulated object (a projectile that glanced off something at hitPoint) away at velocity, its tip
+        /// starting just short of the hit point.
+        void deflectObject(const MWWorld::Ptr& ptr, const osg::Vec3f& hitPoint, const osg::Vec3f& velocity);
+        /// Set a simulated object moving.
+        void launchObject(const MWWorld::Ptr& ptr, const osg::Vec3f& velocity);
+
+        // Carrying simulated objects (one at a time)
+        bool canHoldObject(const MWWorld::ConstPtr& ptr) const;
+        /// A corpse with a ragdoll is held by the part nearest the view (dragged along, not carried).
+        bool holdObject(const MWWorld::Ptr& ptr, const osg::Vec3f& eye, const osg::Vec3f& viewDirection);
+        /// Keep the held object in front of a viewer at eye, looking along direction (normalized).
+        void setHoldView(const osg::Vec3f& eye, const osg::Vec3f& direction);
+        /// Turn the held object relative to the viewer (radians).
+        void rotateHeldObject(float yaw, float pitch);
+        /// Drop the held object, or throw it along direction (normalized).
+        void releaseHeldObject(bool throwObject, const osg::Vec3f& direction);
+        bool isHoldingObject() const;
+
+        /// If ptr is a simulated object, change its velocity by velocityChange as if struck at point by a blow coming
+        /// from source. Returns whether it was.
+        bool strikeObject(const MWWorld::Ptr& ptr, const osg::Vec3f& velocityChange, const osg::Vec3f& point,
+            const osg::Vec3f& source);
+        struct DynamicObjectInfo
+        {
+            MWWorld::Ptr mPtr;
+            osg::Vec3f mCenter; // center of mass
+            float mRadius; // of a sphere around the simulated shape
+        };
+        /// Simulated objects whose center of mass is within radius of center, nearest first.
+        std::vector<DynamicObjectInfo> getDynamicObjectsInRange(const osg::Vec3f& center, float radius) const;
+
+        /// Push simulated objects away from center, up to speed at the center and nothing at radius.
+        void explode(const osg::Vec3f& center, float radius, float speed);
+
+        /// Actors hit by objects the player threw, since the last call.
+        std::vector<ThrownObjectHit> takeThrownObjectHits();
+        /// Collect impacts with at least this change of speed (0: don't).
+        void setImpactMinSpeed(float speed);
+        /// Impacts since the last call.
+        std::vector<Impact> takeImpacts();
         void addActor(const MWWorld::Ptr& ptr, VFS::Path::NormalizedView mesh);
 
         int addProjectile(
@@ -192,8 +303,9 @@ namespace MWPhysics
         void stepSimulation(float dt, bool skipSimulation, Misc::FrameClock::time_point statsEpoch,
             unsigned int frameNumber, Misc::FrameStats& stats);
 
-        /// Apply new positions to actors
-        void moveActors();
+        /// Apply new positions to actors and simulated objects
+        /// @return the dead actors moved along with their bodies (ragdolls)
+        std::vector<MWWorld::Ptr> moveActors();
         void debugDraw();
 
         std::vector<MWWorld::Ptr> getCollisions(const MWWorld::ConstPtr& ptr, int collisionGroup,
@@ -290,10 +402,20 @@ namespace MWPhysics
 
         void prepareSimulation(bool willSimulate, std::vector<Simulation>& simulations);
 
+        void moveDynamicObjects();
+        void placeOnSurface(Object& object);
+        /// Move an object so the far end along its Y axis is depth past point, along that axis.
+        void placeTipAt(Object& object, const osg::Vec3f& point, float depth);
+        /// Simplified convex hull of a mesh's collision geometry, computed once per mesh.
+        const std::vector<btVector3>& getHullPoints(VFS::Path::NormalizedView mesh, const Resource::BulletShape& shape);
+
+        std::unique_ptr<btOverlapFilterCallback> mOverlapFilter;
         std::unique_ptr<btBroadphaseInterface> mBroadphase;
         std::unique_ptr<btDefaultCollisionConfiguration> mCollisionConfiguration;
         std::unique_ptr<btCollisionDispatcher> mDispatcher;
-        std::unique_ptr<btCollisionWorld> mCollisionWorld;
+        std::unique_ptr<btConstraintSolver> mConstraintSolver;
+        // A dynamics world, so it can simulate rigid bodies; most of the code only needs collision queries.
+        std::unique_ptr<btDiscreteDynamicsWorld> mCollisionWorld;
         std::unique_ptr<PhysicsTaskScheduler> mTaskScheduler;
 
         std::unique_ptr<Resource::BulletShapeManager> mShapeManager;
@@ -301,6 +423,19 @@ namespace MWPhysics
 
         using ObjectMap = std::unordered_map<const MWWorld::LiveCellRefBase*, std::shared_ptr<Object>>;
         ObjectMap mObjects;
+
+        std::vector<std::shared_ptr<Object>> mDynamicObjects; // subset of mObjects
+        std::unordered_map<const MWWorld::LiveCellRefBase*, std::unique_ptr<Ragdoll>> mRagdolls;
+        // How high each ragdoll's main part was last frame (for falling into water).
+        std::unordered_map<const MWWorld::LiveCellRefBase*, float> mBodyHeights;
+        bool mMovingDynamicObjects = false;
+        float mHoldDistance = 0;
+        btQuaternion mHoldRelativeRotation;
+        bool mHoldingRagdoll = false;
+
+        osg::Vec3f getDeathVelocity(const MWWorld::ConstPtr& actor) const;
+        std::unordered_map<std::string, std::vector<btVector3>> mHullCache;
+        std::set<std::string, std::less<>> mWarnedNoShape;
 
         std::map<Object*, bool> mAnimatedObjects; // stores pointers to elements in mObjects
 

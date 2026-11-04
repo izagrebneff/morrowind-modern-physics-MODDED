@@ -888,6 +888,26 @@ namespace MWMechanics
         if (!mAnimation || isScriptedAnimPlaying())
             return;
 
+        // The body goes limp right away: a ragdoll instead of a death animation (which is still recorded, for
+        // how the corpse lies after loading a save). Only as it dies; a ragdoll already going keeps going.
+        if (mRagdoll)
+            return;
+        if (mDying && startRagdoll())
+        {
+            mCurrentDeath = deathStateToAnimGroup(mDeathState);
+            CreatureStats& stats = mPtr.getClass().getCreatureStats(mPtr);
+            stats.setDeathAnimation(static_cast<signed char>(mDeathState - CharState_Death1));
+            resetCurrentMovementState();
+            resetCurrentWeaponState();
+            resetCurrentHitState();
+            resetCurrentIdleState();
+            resetCurrentJumpState();
+            // With no death animation playing, kill() reports it finished on the next update, so the death is
+            // still recorded and the corpse stops blocking the living (see Actors::killDeadActors).
+            mAnimation->stopAllAnimations();
+            return;
+        }
+
         playDeath(startpoint, mDeathState);
     }
 
@@ -2441,6 +2461,15 @@ namespace MWMechanics
         }
         else if (cls.getCreatureStats(mPtr).isDead())
         {
+            // A body that was a ragdoll lies as it was left (after loading, or coming back to its cell).
+            if (!mRagdoll && !mRagdollRestored && mAnimation != nullptr)
+            {
+                mRagdollRestored = true;
+                restoreRagdoll();
+            }
+            if (mRagdoll || mAnimation != nullptr)
+                driveRagdoll();
+
             // initial start of death animation for actors that started the game as dead
             // not done in constructor since we need to give scripts a chance to set the mSkipAnim flag
             if (!mSkipAnim && mDeathState != CharState_None && mCurrentDeath.empty())
@@ -2814,7 +2843,9 @@ namespace MWMechanics
     {
         if (mDeathState == CharState_None)
         {
+            mDying = true;
             playRandomDeath();
+            mDying = false;
             resetCurrentIdleState();
             return Result_DeathAnimStarted;
         }
@@ -2832,11 +2863,102 @@ namespace MWMechanics
 
     void CharacterController::resurrect()
     {
+        if (mRagdoll)
+        {
+            MWBase::Environment::get().getWorld()->removeRagdoll(mPtr);
+            mRagdoll = false;
+        }
+        mPtr.getClass().getCreatureStats(mPtr).setRagdollPose({});
+
         if (mDeathState == CharState_None)
             return;
 
         resetCurrentDeathState();
         mWeaponTypeId = {};
+    }
+
+    bool CharacterController::startRagdoll()
+    {
+        // Anyone with a skeleton; the rest play their death animation. Not the player (the death camera).
+        if (!mAnimation || mPtr == getPlayer())
+            return false;
+        CreatureStats& stats = mPtr.getClass().getCreatureStats(mPtr);
+        const osg::Vec3f kick = stats.getDeathKick();
+        stats.setDeathKick(osg::Vec3f());
+        if (!MWBase::Environment::get().getWorld()->makeRagdoll(mPtr, kick, false, false))
+            return false;
+        mRagdoll = true;
+        return true;
+    }
+
+    void CharacterController::driveRagdoll()
+    {
+        const std::vector<std::pair<std::string, osg::Matrixf>> poses
+            = MWBase::Environment::get().getWorld()->getRagdollBonePoses(mPtr);
+        if (poses.empty())
+        {
+            // Gone while the body is still here (it came apart; see World::doPhysics): back to its death pose.
+            if (mRagdoll)
+            {
+                mRagdoll = false;
+                mCurrentDeath.clear();
+            }
+            return;
+        }
+        if (!mRagdoll)
+        {
+            // Made since it died (picking up a body from before a save): it takes over from the death pose.
+            mRagdoll = true;
+            mAnimation->stopAllAnimations();
+        }
+        // Parents first, so each bone is placed relative to where its parent now is.
+        // (A body in one piece, unnamed, moves the actor itself; see PhysicsSystem::moveActors.)
+        for (const auto& [bone, world] : poses)
+            if (!bone.empty())
+                mAnimation->setBoneWorldMatrix(bone, world);
+
+        // Remembered (and saved) where it lies. (Not relative to the actor: a corpse settles onto the ground when
+        // it is loaded, which would bury the body.)
+        std::vector<std::pair<std::string, osg::Matrixf>> pose(poses.begin(), poses.end());
+        mPtr.getClass().getCreatureStats(mPtr).setRagdollPose(std::move(pose));
+    }
+
+    void CharacterController::restoreRagdoll()
+    {
+        const std::vector<std::pair<std::string, osg::Matrixf>>& pose
+            = mPtr.getClass().getCreatureStats(mPtr).getRagdollPose();
+        if (pose.empty() || mPtr == getPlayer())
+            return;
+        // Moved away since (by a script, say): it lies as it died there.
+        constexpr float maxDistance = 256.f;
+        if ((pose.front().second.getTrans() - mPtr.getRefData().getPosition().asVec3()).length2()
+            > maxDistance * maxDistance)
+            return;
+
+        // Pose the body as it lay, then make the ragdoll from that pose, at rest.
+        mAnimation->stopAllAnimations();
+        for (const auto& [bone, world] : pose)
+        {
+            if (!bone.empty())
+                mAnimation->setBoneWorldMatrix(bone, world);
+            else if (SceneUtil::PositionAttitudeTransform* base = mPtr.getRefData().getBaseNode())
+            {
+                // In one piece: the whole model.
+                osg::Vec3f translation;
+                osg::Quat rotation;
+                osg::Vec3f scale;
+                osg::Quat scaleOrientation;
+                world.decompose(translation, rotation, scale, scaleOrientation);
+                base->setPosition(translation);
+                base->setAttitude(rotation);
+            }
+        }
+        if (!MWBase::Environment::get().getWorld()->makeRagdoll(mPtr, osg::Vec3f(), true, true))
+            return; // It plays its death animation after all.
+        mRagdoll = true;
+        // Not the death animation, which it already played.
+        if (mDeathState != CharState_None)
+            mCurrentDeath = deathStateToAnimGroup(mDeathState);
     }
 
     void CharacterController::updateContinuousVfx() const

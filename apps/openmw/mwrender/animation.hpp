@@ -17,6 +17,10 @@
 #include <components/sceneutil/util.hpp>
 #include <components/vfs/pathutil.hpp>
 
+#include <osg/BoundingBox>
+#include <osg/observer_ptr>
+
+#include <deque>
 #include <map>
 #include <optional>
 #include <span>
@@ -216,6 +220,9 @@ namespace MWRender
 
         mutable NodeMap mNodeMap;
         mutable bool mNodeMapCreated;
+
+        // Stuck projectiles: the bone each is attached to, and its node.
+        std::deque<std::pair<osg::observer_ptr<osg::Group>, osg::ref_ptr<osg::Node>>> mStuckProjectiles;
 
         MWWorld::Ptr mPtr;
 
@@ -458,13 +465,55 @@ namespace MWRender
         /// @note The matching is case-insensitive.
         const osg::Node* getNode(std::string_view name) const;
 
-        bool hasNode(std::string_view name) const { return getNode(name) != nullptr; }
+        /// For ragdolls: where a bone is (world matrix), and putting it somewhere. Only bones no animation drives
+        /// stay where they're put (see stopAllAnimations).
+        std::optional<osg::Matrixf> getBoneWorldMatrix(std::string_view bone) const;
+        void setBoneWorldMatrix(std::string_view bone, const osg::Matrixf& world);
+        /// Stop every animation, leaving the bones as they are.
+        void stopAllAnimations();
 
-        /// Return the world transform of the node with the specified name, or nothing if not existing.
-        std::optional<osg::Matrixf> getNodeWorldTransform(std::string_view name) const;
+        /// A bone of the skinned meshes, and the bounds (in its own space) of the vertices it moves.
+        struct SkinnedBone
+        {
+            std::string mName;
+            int mParent; // index of the closest such ancestor, -1 for none
+            osg::Matrixf mWorld;
+            osg::Vec3f mCenter;
+            float mRadius;
+        };
+        /// The bones of the skinned meshes, parents first.
+        std::vector<SkinnedBone> getSkinnedBones() const;
 
-        /// Return the world transform of the head: the "Head" node if there is one, otherwise "Bip01 Head".
-        std::optional<osg::Matrixf> getHeadWorldTransform() const;
+        /// A node carrying rigid (unskinned) pieces of the model, and their bounds in its own space.
+        struct RigidPiece
+        {
+            std::string mName;
+            int mParent; // index of the closest such ancestor, -1 for none
+            osg::Matrixf mWorld;
+            osg::BoundingBox mBounds;
+        };
+        /// The nodes of a model built of rigid pieces, parents first.
+        std::vector<RigidPiece> getRigidPieces() const;
+
+        /// Show a projectile model stuck in the body: it flew along direction (normalized) and hit near hitPosition.
+        /// It is attached to the closest bone, so it moves with the body. Visual only; the oldest ones are removed
+        /// once there are too many.
+        void attachStuckProjectile(
+            VFS::Path::NormalizedView model, const osg::Vec3f& hitPosition, const osg::Vec3f& direction);
+
+        /// Where attachStuckProjectile would put it: the bone, and the projectile's transform relative to it.
+        struct StuckProjectilePlacement
+        {
+            std::string mBone;
+            osg::Matrixf mOnBone;
+        };
+        std::optional<StuckProjectilePlacement> findStuckProjectilePlacement(
+            VFS::Path::NormalizedView model, const osg::Vec3f& hitPosition, const osg::Vec3f& direction);
+        /// Show a projectile model stuck in a bone, at a transform relative to it. False if there is no such bone.
+        bool showStuckProjectile(VFS::Path::NormalizedView model, std::string_view bone, const osg::Matrixf& onBone);
+        /// Remove all the stuck projectiles shown.
+        void removeStuckProjectiles();
+        size_t getStuckProjectileCount() const { return mStuckProjectiles.size(); }
 
         MWWorld::MovementDirectionFlags getSupportedMovementDirections(
             std::span<const std::string_view> prefixes) const;

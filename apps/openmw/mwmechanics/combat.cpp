@@ -32,6 +32,7 @@
 #include "pathfinding.hpp"
 #include "spellcasting.hpp"
 #include "spellresistance.hpp"
+#include "stuckprojectiles.hpp"
 
 namespace
 {
@@ -221,9 +222,12 @@ namespace MWMechanics
         }
     }
 
-    void projectileHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, MWWorld::Ptr weapon,
-        const MWWorld::Ptr& projectile, const osg::Vec3f& hitPosition, float attackStrength, float attackWindUp)
+    bool projectileHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, MWWorld::Ptr weapon,
+        const MWWorld::Ptr& projectile, const osg::Vec3f& hitPosition, float attackStrength, float attackWindUp,
+        bool* stored)
     {
+        if (stored != nullptr)
+            *stored = false;
         MWBase::World* world = MWBase::Environment::get().getWorld();
         const MWWorld::Store<ESM::GameSetting>& gmst = world->getStore().get<ESM::GameSetting>();
 
@@ -247,7 +251,7 @@ namespace MWMechanics
                     attackStrength, attackWindUp, damage, false, hitPosition, false,
                     MWMechanics::DamageSourceType::Ranged);
                 MWMechanics::reduceWeaponCondition(damage, false, weapon, attacker);
-                return;
+                return false;
             }
 
             {
@@ -304,13 +308,22 @@ namespace MWMechanics
                 {
                     // On point-blank hits the projectile is the attacker's live ammo stack -
                     // adding it directly would duplicate its RefNum into the victim's inventory
-                    victim.getClass().getContainerStore(victim).add(projectile.getCellRef().getRefId(), 1);
+                    if (recoverableStuckProjectiles())
+                    {
+                        embedProjectile(victim, projectile.getCellRef().getRefId());
+                        if (stored != nullptr)
+                            *stored = true;
+                    }
+                    else
+                        victim.getClass().getContainerStore(victim).add(projectile.getCellRef().getRefId(), 1);
                 }
             }
 
             MWBase::Environment::get().getLuaManager()->onHit(attacker, victim, weapon, projectile, 0, attackStrength,
                 attackWindUp, damage, true, hitPosition, true, MWMechanics::DamageSourceType::Ranged);
         }
+
+        return validVictim;
     }
 
     float getHitChance(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, int skillValue)

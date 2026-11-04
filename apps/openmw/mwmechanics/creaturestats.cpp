@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <type_traits>
 
+#include <osg/Quat>
+
 #include <components/esm3/actoridconverter.hpp>
 #include <components/esm3/creaturestats.hpp>
 #include <components/esm3/esmreader.hpp>
@@ -540,6 +542,28 @@ namespace MWMechanics
         state.mLevel = mLevel;
         state.mDeathAnimation = mDeathAnimation;
         state.mTimeOfDeath = mTimeOfDeath.toEsm();
+        state.mRagdoll.clear();
+        for (const auto& [bone, matrix] : mRagdollPose)
+        {
+            osg::Vec3f position;
+            osg::Quat rotation;
+            osg::Vec3f scale;
+            osg::Quat scaleOrientation;
+            matrix.decompose(position, rotation, scale, scaleOrientation);
+            state.mRagdoll.push_back({ bone,
+                { position.x(), position.y(), position.z(), static_cast<float>(rotation.x()),
+                    static_cast<float>(rotation.y()), static_cast<float>(rotation.z()),
+                    static_cast<float>(rotation.w()), scale.x() } });
+        }
+        state.mStuckProjectiles.clear();
+        for (const StuckProjectile& projectile : mStuckProjectiles)
+        {
+            ESM::CreatureStats::StuckProjectile& saved
+                = state.mStuckProjectiles.emplace_back(ESM::CreatureStats::StuckProjectile{ projectile.mAmmo,
+                    projectile.mBone, {} });
+            std::copy(projectile.mOnBone.ptr(), projectile.mOnBone.ptr() + 16, saved.mTransform.begin());
+        }
+        state.mEmbeddedAmmo = { mEmbeddedAmmo.begin(), mEmbeddedAmmo.end() };
         // state.mHitAttemptActorId = mHitAttemptActorId;
 
         mSpells.writeState(state.mSpells);
@@ -592,6 +616,19 @@ namespace MWMechanics
         mLevel = state.mLevel;
         mDeathAnimation = state.mDeathAnimation;
         mTimeOfDeath = MWWorld::TimeStamp(state.mTimeOfDeath);
+        mRagdollPose.clear();
+        for (const ESM::CreatureStats::RagdollBone& bone : state.mRagdoll)
+        {
+            const auto& p = bone.mPose;
+            mRagdollPose.emplace_back(bone.mName,
+                osg::Matrixf::scale(p[7], p[7], p[7]) * osg::Matrixf::rotate(osg::Quat(p[3], p[4], p[5], p[6]))
+                    * osg::Matrixf::translate(p[0], p[1], p[2]));
+        }
+        mStuckProjectiles.clear();
+        for (const ESM::CreatureStats::StuckProjectile& projectile : state.mStuckProjectiles)
+            mStuckProjectiles.push_back(
+                { projectile.mAmmo, projectile.mBone, osg::Matrixf(projectile.mTransform.data()) });
+        mEmbeddedAmmo = { state.mEmbeddedAmmo.begin(), state.mEmbeddedAmmo.end() };
         // mHitAttemptActor = state.mHitAttemptActor;
 
         mSpells.readState(state.mSpells, this);

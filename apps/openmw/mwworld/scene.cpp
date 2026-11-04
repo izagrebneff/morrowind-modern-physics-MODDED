@@ -164,7 +164,11 @@ namespace
             const DetourNavigator::ObjectTransform objectTransform{ ptr.getRefData().getPosition(),
                 ptr.getCellRef().getScale() };
 
-            if (ptr.getClass().isDoor() && !ptr.getCellRef().getTeleport())
+            if (object->isDynamic())
+            {
+                // Moving clutter is not part of the navmesh.
+            }
+            else if (ptr.getClass().isDoor() && !ptr.getCellRef().getTeleport())
             {
                 btVector3 aabbMin;
                 btVector3 aabbMax;
@@ -372,16 +376,27 @@ namespace MWWorld
         ListAndResetObjectsVisitor visitor;
 
         cell->forEach(visitor, true); // Include objects being teleported by Lua
+        std::size_t simulated = 0;
+        std::size_t awake = 0;
+        std::size_t ragdolls = 0;
         for (const auto& ptr : visitor.mObjects)
         {
             if (const auto object = mPhysics->getObject(ptr))
             {
+                if (object->isDynamic())
+                {
+                    ++simulated;
+                    if (object->getCollisionObject()->isActive())
+                        ++awake;
+                }
                 if (object->getShapeInstance()->mVisualCollisionType == Resource::VisualCollisionType::None)
                     mNavigator.removeObject(DetourNavigator::ObjectId(object), navigatorUpdateGuard);
                 mPhysics->remove(ptr);
             }
             else if (mPhysics->getActor(ptr))
             {
+                if (!mPhysics->getRagdollBonePoses(ptr).empty())
+                    ++ragdolls;
                 mNavigator.removeAgent(mWorld.getPathfindingAgentBounds(ptr));
                 mRendering.removeActorPath(ptr);
                 mPhysics->remove(ptr);
@@ -390,6 +405,10 @@ namespace MWWorld
                 ptr.mRef->mData.mPhysicsPostponed = false;
             MWBase::Environment::get().getLuaManager()->objectRemovedFromScene(ptr);
         }
+        // How the cell's physics ended up; "awake" bodies were still moving (or jittering) on the way out.
+        // std::dec: an earlier log line can leave the shared stream in hex.
+        Log(Debug::Verbose) << "[physics] unloaded " << cell->getCell()->getDescription() << ": " << std::dec
+                            << simulated << " simulated, " << awake << " awake, " << ragdolls << " ragdolls";
 
         const auto cellX = cell->getCell()->getGridX();
         const auto cellY = cell->getCell()->getGridY();
