@@ -166,6 +166,7 @@ namespace MWMechanics
         bool mRagdoll = false; // the body is a ragdoll, which drives the bones
         bool mRagdollRestored = false; // tried to bring back how it lay (see restoreRagdoll)
         bool mDying = false; // in kill()
+        bool mHybridDeathPending = false; // NPC death clip should hand its final pose to Bullet
         bool mResetIdleOnAttackEnd{ false };
 
         JumpingState mJumpState{ JumpState_None };
