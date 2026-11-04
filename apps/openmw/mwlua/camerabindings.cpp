@@ -80,6 +80,13 @@ namespace MWLua
         api["getFirstPersonOffset"] = [camera]() { return camera->getFirstPersonOffset(); };
         api["setFirstPersonOffset"] = [camera](const osg::Vec3f& v) { camera->setFirstPersonOffset(v); };
 
+        // Visual-only avatar switch for first-person furniture interactions.
+        // Unlike the Invisibility magic effect, this does not change stealth,
+        // AI, player stats, physics or equipped item state.
+        api["getPlayerModelVisible"] = [renderingManager]() { return renderingManager->getPlayerModelVisible(); };
+        api["setPlayerModelVisible"]
+            = [renderingManager](bool visible) { renderingManager->setPlayerModelVisible(visible); };
+
         api["getFocalPreferredOffset"] = [camera]() -> osg::Vec2f { return camera->getFocalPointTargetOffset(); };
         api["setFocalPreferredOffset"] = [camera](const osg::Vec2f& v) { camera->setFocalPointTargetOffset(v); };
         api["getFocalTransitionSpeed"] = [camera]() { return camera->getFocalPointTransitionSpeed(); };

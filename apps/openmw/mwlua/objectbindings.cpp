@@ -343,6 +343,22 @@ namespace MWLua
                     const ObjectT& o) -> sol::object { return types[getLiveCellRefType(o.ptr().mRef)]; });
 
             objectT["count"] = sol::readonly_property([](const ObjectT& o) { return o.ptr().getCellRef().getCount(); });
+            // Compatibility with seating mods that call player:setPlayerModelVisible().
+            // This changes only the player render scene graph, never game invisibility,
+            // the actor physics body, equipment or other game mechanics.
+            objectT["setPlayerModelVisible"] = [](const ObjectT& object, bool visible) {
+                MWBase::World* world = MWBase::Environment::get().getWorld();
+                if (object.ptr() != world->getPlayerPtr())
+                    throw std::runtime_error("setPlayerModelVisible is only available for the player");
+                world->getRenderingManager()->setPlayerModelVisible(visible);
+            };
+            objectT["getPlayerModelVisible"] = [](const ObjectT& object) {
+                MWBase::World* world = MWBase::Environment::get().getWorld();
+                if (object.ptr() != world->getPlayerPtr())
+                    throw std::runtime_error("getPlayerModelVisible is only available for the player");
+                return world->getRenderingManager()->getPlayerModelVisible();
+            };
+
             objectT[sol::meta_function::equal_to] = [](const ObjectT& a, const ObjectT& b) { return a.id() == b.id(); };
             objectT[sol::meta_function::to_string] = &ObjectT::toString;
             objectT["sendEvent"] = [context](const ObjectT& dest, std::string eventName, const sol::object& eventData) {
