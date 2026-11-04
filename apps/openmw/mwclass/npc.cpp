@@ -796,8 +796,9 @@ namespace MWClass
                 away.z() = 0;
                 if (away.normalize() > 0)
                 {
-                    away.z() = 0.3f;
-                    stats.setDeathKick(away * std::clamp(100.f + healthDamage * 5.f, 100.f, 320.f));
+                    // A visible backward throw and a slight lift, before gravity pulls the NPC down.
+                    away.z() = 0.38f;
+                    stats.setDeathKick(away * std::clamp(145.f + healthDamage * 7.f, 145.f, 430.f));
                 }
             }
 
