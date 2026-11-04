@@ -166,6 +166,8 @@ namespace MWMechanics
         bool mRagdoll = false; // the body is a ragdoll, which drives the bones
         bool mRagdollRestored = false; // tried to bring back how it lay (see restoreRagdoll)
         bool mDying = false; // in kill()
+        osg::Vec3f mNpcDeathKnockbackVelocity{ 0.f, 0.f, 0.f };
+        float mNpcDeathKnockbackRemaining = 0.f;
         bool mResetIdleOnAttackEnd{ false };
 
         JumpingState mJumpState{ JumpState_None };
