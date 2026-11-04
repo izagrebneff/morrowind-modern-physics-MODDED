@@ -1,4 +1,4 @@
-name: Examine Modern Physics v1.1 merge into RC1
+name: Integrate Modern Physics v1.1 into RC1
 on:
   push:
     branches:
@@ -6,25 +6,22 @@ on:
     paths:
       - .github/workflows/port-modern-physics-rc1.yml
 jobs:
-  inspect-merge:
+  integrate:
+    if: contains(github.event.head_commit.message, '[port-merge]')
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Try three-way merge, report conflicts
+      - name: Merge Modern Physics v1.1 into OpenMW 0.52.0 RC1
         shell: bash
         run: |
+          set -e
           git fetch origin modern-physics-v11-port-source
           git config user.name "OpenMW RC1 port"
           git config user.email "openmw-rc1-port@users.noreply.github.com"
-          git merge --no-commit --no-ff -X theirs FETCH_HEAD || true
-          echo "=== REMAINING CONFLICTS ==="
-          git diff --name-only --diff-filter=U || true
-          echo "=== MERGED DIFF SUMMARY ==="
-          git diff --cached --stat | tail -100
-          echo "=== UNMERGED DETAILS ==="
-          git ls-files -u | head -100 || true
-          git merge --abort || true
+          git merge --no-ff -X theirs -m "Port complete Modern Physics v1.1 onto official OpenMW 0.52.0 RC1" FETCH_HEAD
+          git status --short
+          git push origin HEAD:refs/heads/openmw-052-rc1-modern-physics-v11
