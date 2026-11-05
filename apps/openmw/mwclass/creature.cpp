@@ -436,9 +436,10 @@ namespace MWClass
             }
         }
 
-        // The killing blow throws the body (its ragdoll, for those with one) away from the attacker, as for NPCs.
+        // Death impulse only for creatures that still have dynamic body physics.
         const auto health = damages.find("health");
-        if (wasAlive && stats.isDead() && !attacker.isEmpty() && health != damages.end() && health->second >= 0.001f)
+        if (usesModernRagdoll(ptr) && wasAlive && stats.isDead() && !attacker.isEmpty()
+            && health != damages.end() && health->second >= 0.001f)
         {
             osg::Vec3f away = ptr.getRefData().getPosition().asVec3() - attacker.getRefData().getPosition().asVec3();
             away.z() = 0;
