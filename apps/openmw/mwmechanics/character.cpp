@@ -2927,8 +2927,22 @@ namespace MWMechanics
             return;
         // Moved away since (by a script, say): it lies as it died there.
         constexpr float maxDistance = 256.f;
-        if ((pose.front().second.getTrans() - mPtr.getRefData().getPosition().asVec3()).length2()
-            > maxDistance * maxDistance)
+        const osg::Vec3f actorPosition = mPtr.getRefData().getPosition().asVec3();
+        float distanceSquared = (pose.front().second.getTrans() - actorPosition).length2();
+        if (mPtr.getClass().canFly(mPtr))
+        {
+            // A flying creature's root/wing bones may be hundreds of units
+            // above its actor origin. Test planar proximity of ANY saved bone.
+            // Still reject a corpse teleported far away by a script.
+            const osg::Vec3f first = pose.front().second.getTrans() - actorPosition;
+            distanceSquared = first.x() * first.x() + first.y() * first.y();
+            for (const auto& [bone, world] : pose)
+            {
+                const osg::Vec3f delta = world.getTrans() - actorPosition;
+                distanceSquared = std::min(distanceSquared, delta.x() * delta.x() + delta.y() * delta.y());
+            }
+        }
+        if (distanceSquared > maxDistance * maxDistance)
             return;
 
         // Pose the body as it lay, then make the ragdoll from that pose, at rest.

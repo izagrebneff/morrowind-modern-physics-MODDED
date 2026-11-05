@@ -847,6 +847,14 @@ namespace MWPhysics
         body->forceActivationState(ISLAND_SLEEPING);
     }
 
+    void PhysicsTaskScheduler::setBodyGravity(btRigidBody* body, const btVector3& gravity)
+    {
+        MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
+        body->setGravity(gravity);
+        if (body->getInvMass() > 0)
+            body->activate(true);
+    }
+
     void PhysicsTaskScheduler::setRagdollBodiesFrozen(
         const std::vector<std::pair<btRigidBody*, btScalar>>& bodies, bool frozen)
     {

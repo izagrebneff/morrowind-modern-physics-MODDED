@@ -1455,6 +1455,10 @@ namespace MWWorld
 
     bool World::makeRagdollBody(const MWWorld::Ptr& actor, const osg::Vec3f& kick, bool allowOnePiece)
     {
+        // Some flying creatures have no suitable articulated rig. Always let
+        // them fall as one physically simulated collider rather than rejecting
+        // corpse physics and leaving the death animation suspended in the air.
+        allowOnePiece = allowOnePiece || actor.getClass().canFly(actor);
         const MWRender::Animation* animation = mRendering->getAnimation(actor);
         if (animation == nullptr)
             return false;

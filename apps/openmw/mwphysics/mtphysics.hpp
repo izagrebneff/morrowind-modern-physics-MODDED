@@ -81,6 +81,8 @@ namespace MWPhysics
         void removeAction(btActionInterface* action);
         /// Stop a body and put it to sleep.
         void setAtRest(btRigidBody* body);
+        /// Apply a corpse-specific gravity value without altering living actors.
+        void setBodyGravity(btRigidBody* body, const btVector3& gravity);
         /// Freeze or unfreeze all parts of a ragdoll together. Frozen parts remain solid
         /// but cannot be woken by actors, constraints or contacts. Restores original
         /// simulated masses (not the temporary carrying masses) when unfrozen.

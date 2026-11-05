@@ -101,6 +101,8 @@ namespace MWPhysics
         void updateFreezeTimer(float duration, bool beingDragged);
         /// The grab button is the only way to thaw a frozen ragdoll.
         void unfreezeForDragging();
+        /// Reapply aerial gravity after Bullet releases a held corpse part.
+        void restoreFlightGravity();
 
         /// Puts each part that is more than depth under the ground (groundAt: its height there) back on top of it,
         /// still: a small piece can slip through the ground on its own.
@@ -128,6 +130,9 @@ namespace MWPhysics
         /// What getBonePoses gave last (so the rest of the frame agrees with what the bones were set to).
         const std::vector<std::pair<std::string, osg::Matrixf>>& getLastBonePoses() const { return mLastPoses; }
 
+        /// The physically simulated torso, which may not be the first weighted mesh bone.
+        const osg::Vec3f& getMainPosition() const { return mLastMainBonePosition; }
+
         /// Where the actor (whose position is at its feet, actorPosition now) should be for its body to be where
         /// the ragdoll is: following the main part (the pelvis, say) along the ground, at its height. Empty
         /// before the bones were first posed.
@@ -139,13 +144,28 @@ namespace MWPhysics
         explicit Ragdoll(PhysicsTaskScheduler* scheduler);
         static void makeBody(Part& part, const btTransform& bodyWorld, float mass, float thickness);
         void addToWorld();
+        void setGravityScale(float scale);
         void addJointFriction(); // once all joints are made
         void addJoint(size_t parentIndex, size_t childIndex, const osg::Vec3f& position, float swing1, float swing2,
             float twist);
 
+        struct SkinnedBoneBinding
+        {
+            std::string mName;
+            size_t mDriverPart;
+            osg::Matrixf mRelativeToDriver;
+        };
+        // Keep ALL skinned bones driven by their simulated ancestors; particularly
+        // insect wing tips and small appendages that otherwise stretch on death.
+        std::vector<SkinnedBoneBinding> mSkinnedBoneBindings;
         mutable std::vector<std::pair<std::string, osg::Matrixf>> mLastPoses;
+        mutable osg::Vec3f mLastMainBonePosition;
+        size_t mMainPartIndex = 0;
+        bool mFlyingCorpse = false;
         std::unique_ptr<btActionInterface> mJointFriction;
+        std::unique_ptr<btActionInterface> mFlyingFallController;
         std::optional<osg::Vec2f> mActorOffset; // from the main part to the actor, along the ground
+        std::optional<float> mFlyingActorOffsetZ; // actor origin is not at the flying creature's torso
         // For hasComeApart: how long it has been checked, how far each part started from the main one, and where
         // each part was at the last check.
         osg::Vec3f mStartPosition;
