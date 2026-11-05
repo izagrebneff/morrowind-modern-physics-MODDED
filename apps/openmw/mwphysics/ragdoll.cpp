@@ -17,6 +17,7 @@
 #include <osg/Quat>
 
 #include <components/misc/convert.hpp>
+#include <components/misc/constants.hpp>
 
 #include "collisiontype.hpp"
 #include "mtphysics.hpp"
@@ -86,6 +87,35 @@ namespace MWPhysics
                 const btVector3 change = relative * fraction;
                 a->setAngularVelocity(a->getAngularVelocity() + change * (massB / (massA + massB)));
                 b->setAngularVelocity(b->getAngularVelocity() - change * (massA / (massA + massB)));
+            }
+        }
+
+        void debugDraw(btIDebugDraw*) override {}
+    };
+
+    // Restrict the descent of dead flyers, never living creatures. In the
+    // previous working build this was the profile used for netches/cliff racers.
+    class FlyingCorpseFall final : public btActionInterface
+    {
+    public:
+        std::vector<btRigidBody*> mBodies;
+
+        void updateAction(btCollisionWorld*, btScalar timeStep) override
+        {
+            const btScalar fraction = 1 - std::exp(-3.0f * timeStep);
+            constexpr btScalar maxFallSpeed = 950.f;
+            for (btRigidBody* body : mBodies)
+            {
+                // The adaptive freeze makes limbs static; never add velocity to
+                // an anchored body after it has settled.
+                if (body->isStaticOrKinematicObject())
+                    continue;
+                btVector3 velocity = body->getLinearVelocity();
+                if (velocity.z() < -maxFallSpeed)
+                {
+                    velocity.setZ(-maxFallSpeed + (velocity.z() + maxFallSpeed) * (1 - fraction));
+                    body->setLinearVelocity(velocity);
+                }
             }
         }
 
@@ -335,7 +365,31 @@ namespace MWPhysics
             if (parent >= 0)
                 ragdoll->addJoint(parent, i, bones[chosen[i]].mWorld.getTrans(), 30, 30, 15);
         }
+        ragdoll->mMainPartIndex = static_cast<size_t>(root);
         ragdoll->addJointFriction();
+
+        // Bind every original skinned bone to the nearest simulated ancestor.
+        // Skipping tiny wing bones caused insect skins to stretch away from
+        // their torso when the physical parts dropped vertically.
+        for (size_t i = 0; i < bones.size(); ++i)
+        {
+            int driver = partOfBone[i];
+            if (driver < 0)
+                for (int parent = bones[i].mParent; parent >= 0; parent = bones[parent].mParent)
+                    if (partOfBone[parent] >= 0)
+                    {
+                        driver = partOfBone[parent];
+                        break;
+                    }
+            if (driver < 0)
+                driver = root;
+
+            const size_t selectedBone = chosen[static_cast<size_t>(driver)];
+            const osg::Matrixf relative
+                = bones[i].mWorld * osg::Matrixf::inverse(bones[selectedBone].mWorld);
+            ragdoll->mSkinnedBoneBindings.push_back(
+                { bones[i].mName, static_cast<size_t>(driver), relative });
+        }
         return ragdoll;
     }
 
@@ -467,6 +521,19 @@ namespace MWPhysics
 
     void Ragdoll::addToWorld()
     {
+        mFlyingCorpse = !mParts.empty() && mParts.front()->getPtr().getClass().canFly(mParts.front()->getPtr());
+        // Flying creature wings and feelers often start inside overlapping
+        // collision capsules. Internal contacts can then explosively destabilize
+        // their ragdolls. Keep humanoid self-collision from the heavy-body fork,
+        // while exempting flying rigs (as in the earlier working physics fork).
+        if (mFlyingCorpse)
+            for (size_t i = 0; i < mParts.size(); ++i)
+                for (size_t j = i + 1; j < mParts.size(); ++j)
+                {
+                    mParts[i]->mBody->setIgnoreCollisionCheck(mParts[j]->mBody, true);
+                    mParts[j]->mBody->setIgnoreCollisionCheck(mParts[i]->mBody, true);
+                }
+
         // Self-collision is now enabled: hands/forearms, legs and the torso cannot
         // freely pass through non-adjacent parts of the same ragdoll.
         // Directly jointed parts still ignore each other via addConstraint(..., true)
