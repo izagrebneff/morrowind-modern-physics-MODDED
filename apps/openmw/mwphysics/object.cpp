@@ -176,16 +176,21 @@ namespace MWPhysics
         if (metal)
             mRelativeDensity = std::max(mRelativeDensity, 3.f);
 
+        // Increase actual Bullet mass and inertia, not just a gameplay weight label.
+        // The original mass is still used above to calculate buoyancy/density.
+        constexpr float massMultiplier = 3.f;
+        const float simulatedMass = mass * massMultiplier;
         btVector3 inertia(0, 0, 0);
-        mDynamicShape->calculateLocalInertia(mass, inertia);
-        mMass = mass;
+        mDynamicShape->calculateLocalInertia(simulatedMass, inertia);
+        mMass = simulatedMass;
         mLocalInertia = inertia;
 
         const btTransform centerOfMass = getTransform() * btTransform(btQuaternion::getIdentity(), mCenterOffset);
         mMotionState = std::make_unique<DynamicMotionState>(centerOfMass, mTaskScheduler->getStepGeneration());
         mPlacedPosition = mPosition;
 
-        btRigidBody::btRigidBodyConstructionInfo info(mass, mMotionState.get(), mDynamicShape.get(), inertia);
+        btRigidBody::btRigidBodyConstructionInfo info(
+            simulatedMass, mMotionState.get(), mDynamicShape.get(), inertia);
         info.m_friction = 0.6f;
         info.m_rollingFriction = 0.01f;
         info.m_restitution = 0.15f;

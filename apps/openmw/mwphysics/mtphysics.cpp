@@ -1141,12 +1141,20 @@ namespace MWPhysics
                 if (deficit <= 0)
                     continue;
 
-                // A body (a ragdoll's part, not a simulated object) is a dead weight: walking into it only nudges it.
+                // Walking actors must not fling corpses or loose objects. Previously this
+                // impulse was proportional to the body's mass, so heavier bodies still
+                // received almost the same velocity change. Use a small actor push mass,
+                // limited by an even smaller fraction of the relative contact speed.
                 const auto* holder = static_cast<const PtrHolder*>(contact.mBody->getUserPointer());
-                const btScalar share = dynamic_cast<const Object*>(holder) == nullptr ? 0.25f : 1.f;
+                const bool looseItem = dynamic_cast<const Object*>(holder) != nullptr;
+                const btScalar invMass = contact.mBody->getInvMass();
+                const btScalar pushMass = looseItem ? btScalar(0.6f) : btScalar(0.4f);
+                const btScalar maxVelocityShare = looseItem ? btScalar(0.03f) : btScalar(0.012f);
+                const btScalar velocityShare = std::min(pushMass * invMass, maxVelocityShare);
                 contact.mBody->activate(true);
                 contact.mBody->applyImpulse(
-                    direction * (deficit * share / contact.mBody->getInvMass()), relativePoint);            }
+                    direction * (deficit * velocityShare / invMass), relativePoint);
+            }
         }
     }
 
