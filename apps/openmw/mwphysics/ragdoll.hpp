@@ -101,6 +101,8 @@ namespace MWPhysics
         void updateFreezeTimer(float duration, bool beingDragged);
         /// The grab button is the only way to thaw a frozen ragdoll.
         void unfreezeForDragging();
+        /// Reapply aerial gravity after Bullet releases a held corpse part.
+        void restoreFlightGravity();
 
         /// Puts each part that is more than depth under the ground (groundAt: its height there) back on top of it,
         /// still: a small piece can slip through the ground on its own.
