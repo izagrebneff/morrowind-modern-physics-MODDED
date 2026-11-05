@@ -787,9 +787,8 @@ namespace MWClass
 
         if (!wasDead && getCreatureStats(ptr).isDead())
         {
-            // The killing blow throws the body (its ragdoll) away from the attacker, harder for heavier blows,
-            // within reason.
-            if (!attacker.isEmpty() && hasHealthDamage)
+            // NPCs use vanilla death animation: do not apply ragdoll knockback.
+            if (!attacker.isEmpty() && hasHealthDamage && usesModernRagdoll(ptr))
             {
                 osg::Vec3f away
                     = ptr.getRefData().getPosition().asVec3() - attacker.getRefData().getPosition().asVec3();
