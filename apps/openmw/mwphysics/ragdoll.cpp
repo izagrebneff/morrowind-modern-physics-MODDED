@@ -302,6 +302,10 @@ namespace MWPhysics
             return nullptr;
 
         std::unique_ptr<Ragdoll> ragdoll(new Ragdoll(scheduler));
+        // Procedural creature limb capsules frequently overlap at rest. Disable
+        // all internal contacts, not only directly jointed contacts: otherwise
+        // Bullet pushes the rig against itself and it spins uncontrollably.
+        ragdoll->mDisableInternalCollision = true;
         std::vector<int> partOfBone(bones.size(), -1);
         for (size_t i : chosen)
         {
@@ -440,6 +444,7 @@ namespace MWPhysics
             return nullptr;
 
         std::unique_ptr<Ragdoll> ragdoll(new Ragdoll(scheduler));
+        ragdoll->mDisableInternalCollision = true;
         osg::Vec3f middle;
         std::vector<btTransform> bodies;
         for (size_t i : chosen)
@@ -524,11 +529,12 @@ namespace MWPhysics
     void Ragdoll::addToWorld()
     {
         mFlyingCorpse = !mParts.empty() && mParts.front()->getPtr().getClass().canFly(mParts.front()->getPtr());
-        // Flying creature wings and feelers often start inside overlapping
-        // collision capsules. Internal contacts can then explosively destabilize
-        // their ragdolls. Keep humanoid self-collision from the heavy-body fork,
-        // while exempting flying rigs (as in the earlier working physics fork).
-        if (mFlyingCorpse)
+        // Creature limbs, wings and feelers often start inside overlapping collision
+        // capsules. Internal contacts can violently spin the entire ragdoll.
+        // Disable creature-to-self contacts, while preserving contacts with
+        // terrain, actors, objects and other corpses. Humanoid NPCs retain
+        // their existing self-collision behaviour.
+        if (mFlyingCorpse || mDisableInternalCollision)
             for (size_t i = 0; i < mParts.size(); ++i)
                 for (size_t j = i + 1; j < mParts.size(); ++j)
                 {
