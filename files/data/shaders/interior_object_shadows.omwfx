@@ -1,0 +1,206 @@
+uniform_float uShadowStrength {
+    default = 0.48;
+    min = 0.0;
+    max = 0.85;
+    step = 0.05;
+    display_name = "Сила теней";
+    description = "Затемнение поверхностей, закрытых объектами от источника света.";
+}
+
+uniform_int uShadowSteps {
+    default = 14;
+    min = 6;
+    max = 28;
+    step = 2;
+    display_name = "Качество теней (шаги)";
+    description = "Количество проб глубины для каждого источника света. Больше — плавнее, но медленнее.";
+}
+
+uniform_int uShadowLights {
+    default = 2;
+    min = 1;
+    max = 3;
+    step = 1;
+    display_name = "Источников света на пиксель";
+    description = "Максимум ближайших подходящих светильников для просчёта теней.";
+}
+
+uniform_float uShadowRange {
+    default = 500.0;
+    min = 100.0;
+    max = 1200.0;
+    step = 50.0;
+    display_name = "Дальность теней";
+    description = "Наибольшее расстояние от поверхности до источника света, в игровых единицах.";
+}
+
+uniform_float uShadowThickness {
+    default = 22.0;
+    min = 4.0;
+    max = 60.0;
+    step = 2.0;
+    display_name = "Толщина препятствий";
+    description = "Допуск сравнения глубины для определения препятствий. Слишком большое значение создаёт ореолы.";
+}
+
+uniform_float uShadowBias {
+    default = 3.0;
+    min = 1.0;
+    max = 12.0;
+    step = 0.5;
+    display_name = "Смещение от поверхности";
+    description = "Убирает самозатенение в месте контакта луча с поверхностью.";
+}
+
+fragment interiorShadows {
+    omw_In vec2 omw_TexCoord;
+
+    // Test whether a camera-visible surface intersects the world-space ray
+    // between the receiver and a point light.
+    float rayOccluded(vec3 receiver, vec3 normal, vec3 lightPos)
+    {
+        vec3 toLight = lightPos - receiver;
+        float rayLength = length(toLight);
+        if (rayLength < 8.0)
+            return 0.0;
+
+        vec3 rayDir = toLight / rayLength;
+        vec3 startPos = receiver + normal * uShadowBias + rayDir * uShadowBias;
+        float usableLength = max(rayLength - uShadowBias * 2.0, 1.0);
+
+        // Stop short of light itself and ignore the first slice, which is
+        // generally the receiver surface's own depth.
+        for (int stepIndex = 0; stepIndex < 28; ++stepIndex)
+        {
+            if (stepIndex >= uShadowSteps)
+                break;
+
+            float t = (float(stepIndex) + 1.5) / (float(uShadowSteps) + 1.5);
+            vec3 samplePos = startPos + rayDir * (usableLength * t);
+            vec4 viewPos = omw.viewMatrix * vec4(samplePos, 1.0);
+            vec4 clipPos = omw_ProjectionMatrix() * viewPos;
+            if (clipPos.w <= 0.0)
+                continue;
+
+            vec2 uv = clipPos.xy / clipPos.w * 0.5 + 0.5;
+            if (uv.x <= 0.002 || uv.x >= 0.998 || uv.y <= 0.002 || uv.y >= 0.998)
+                continue;
+
+            if (omw_GetDepth(uv) >= 0.99995)
+                continue;
+
+            vec3 occluder = omw_GetWorldPosFromUV(uv);
+            float occluderZ = (omw.viewMatrix * vec4(occluder, 1.0)).z;
+
+            // In a conventional view matrix, the larger (less negative) Z
+            // is the surface closer to the camera. Thickness limits spurious
+            // occlusion from unrelated foreground objects.
+            float depthGap = occluderZ - viewPos.z;
+            if (depthGap <= 0.75 || depthGap >= uShadowThickness)
+                continue;
+
+            float alongRay = dot(occluder - receiver, rayDir);
+            if (alongRay > uShadowBias && alongRay < rayLength - uShadowBias)
+                return 1.0;
+        }
+
+        return 0.0;
+    }
+
+    void main()
+    {
+        vec4 color = omw_GetLastShader(omw_TexCoord);
+        omw_FragColor = color;
+
+        if (!omw.isInterior || uShadowStrength <= 0.0
+            || omw_GetDepth(omw_TexCoord) >= 0.99995)
+            return;
+
+        vec3 receiver = omw_GetWorldPosFromUV(omw_TexCoord);
+        vec3 normal = vec3(0.0);
+#if OMW_NORMALS
+        normal = normalize(omw_GetNormalsWorldSpace(omw_TexCoord));
+#endif
+
+        // Select the strongest nearby lights for THIS receiver, not the first
+        // lights in the global list. Keep the expensive raymarch bounded.
+        int bestIndex[3];
+        float bestScore[3];
+        for (int j = 0; j < 3; ++j)
+        {
+            bestIndex[j] = -1;
+            bestScore[j] = 0.0;
+        }
+
+        int lightCount = min(omw_GetPointLightCount(), 32);
+        for (int i = 0; i < 32; ++i)
+        {
+            if (i >= lightCount)
+                break;
+
+            vec3 lightPos = omw_GetPointLightWorldPos(i);
+            vec3 offset = lightPos - receiver;
+            float distanceToLight = length(offset);
+            float radius = omw_GetPointLightRadius(i);
+            if (distanceToLight <= uShadowBias + 1.0
+                || distanceToLight > min(radius, uShadowRange))
+                continue;
+
+            vec3 lightColor = omw_GetPointLightDiffuse(i);
+            float brightness = dot(lightColor, vec3(0.2126, 0.7152, 0.0722));
+            float proximity = 1.0 - distanceToLight / max(radius, 1.0);
+            float score = clamp(brightness, 0.0, 1.5) * proximity;
+
+#if OMW_NORMALS
+            score *= max(dot(normal, offset / distanceToLight), 0.0);
+#endif
+            if (score < 0.045)
+                continue;
+
+            for (int slot = 0; slot < 3; ++slot)
+            {
+                if (score > bestScore[slot])
+                {
+                    for (int shift = 2; shift > slot; --shift)
+                    {
+                        bestScore[shift] = bestScore[shift - 1];
+                        bestIndex[shift] = bestIndex[shift - 1];
+                    }
+                    bestScore[slot] = score;
+                    bestIndex[slot] = i;
+                    break;
+                }
+            }
+        }
+
+        float shadow = 0.0;
+        for (int slot = 0; slot < 3; ++slot)
+        {
+            if (slot >= uShadowLights || bestIndex[slot] < 0)
+                break;
+
+            int lightIndex = bestIndex[slot];
+            vec3 lightPos = omw_GetPointLightWorldPos(lightIndex);
+            float blocked = rayOccluded(receiver, normal, lightPos);
+            float influence = clamp(bestScore[slot] * 1.25, 0.0, 1.0);
+
+            // A shaded light can remove its own apparent contribution, but
+            // avoid stacking multiple darkening passes against ambient light.
+            shadow = max(shadow, blocked * influence);
+        }
+
+        color.rgb *= 1.0 - uShadowStrength * shadow;
+        omw_FragColor = color;
+    }
+}
+
+technique {
+    description = "Динамические экранные тени от геометрии и точечных светильников в интерьерах. Видимые объекты создают затенение по направлению к источникам света. Экранная технология: геометрия вне кадра не даёт тени.";
+    version = "1.0";
+    author = "OpenMW custom fork";
+    passes = interiorShadows;
+    glsl_version = 330;
+    pass_normals = true;
+    pass_lights = true;
+    flags = disable_exteriors;
+}
