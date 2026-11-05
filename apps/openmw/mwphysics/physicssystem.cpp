@@ -995,6 +995,21 @@ namespace MWPhysics
 
     void PhysicsSystem::releaseHeldObject(bool throwObject, const osg::Vec3f& direction)
     {
+        if (mHoldingRagdoll)
+        {
+            // Corpse dragging does not throw: release the grip and restore
+            // aerial gravity (Bullet normally restores only world gravity).
+            const std::shared_ptr<PtrHolder> heldPart = mTaskScheduler->getHeldObject();
+            mTaskScheduler->releaseHeldObject(std::nullopt);
+            mHoldingRagdoll = false;
+            if (heldPart != nullptr)
+            {
+                const auto found = mRagdolls.find(heldPart->getPtr().mRef);
+                if (found != mRagdolls.end())
+                    found->second->restoreFlightGravity();
+            }
+            return;
+        }
         if (!throwObject)
         {
             mTaskScheduler->releaseHeldObject(std::nullopt);
