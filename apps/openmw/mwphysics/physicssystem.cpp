@@ -1506,7 +1506,10 @@ namespace MWPhysics
 
                 if (!poses.empty())
                 {
-                    const osg::Vec3f bodyPosition = poses.front().second.getTrans();
+                    // A skinned flying creature may list a wing before its torso.
+                    // Its physical body position must be the chosen main part,
+                    // not the first animation bone (which can be far away).
+                    const osg::Vec3f bodyPosition = ragdoll->second->getMainPosition();
 
                     // Falling into water (its main part going under; simulation steps are 1/mPhysicsDt a second).
                     if (mWaterEnabled)
@@ -1530,8 +1533,13 @@ namespace MWPhysics
                     // The actor is kept with its body, so if it is well away from it, something else moved it (a
                     // script, say). It stays there, in its death pose: the ragdoll would pull it back.
                     constexpr float maxDistance = 256.f;
-                    if ((bodyPosition - actorPtr.getRefData().getPosition().asVec3()).length2()
-                        > maxDistance * maxDistance)
+                    // Flying models can have a large permanent height offset
+                    // between their actor origin and their visible torso.
+                    const osg::Vec3f actorPosition = actorPtr.getRefData().getPosition().asVec3();
+                    const std::optional<osg::Vec3f> expectedActorPosition
+                        = ragdoll->second->getActorPosition(actorPosition);
+                    if (expectedActorPosition
+                        && (*expectedActorPosition - actorPosition).length2() > maxDistance * maxDistance)
                     {
                         droppedBodies.push_back(ptr);
                         continue;
