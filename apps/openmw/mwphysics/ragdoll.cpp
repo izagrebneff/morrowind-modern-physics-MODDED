@@ -542,6 +542,28 @@ namespace MWPhysics
         for (const auto& part : mParts)
             mTaskScheduler->addRigidBody(part->mBody, CollisionType_Dynamic,
                 CollisionType_DynamicSupport | CollisionType_Actor | CollisionType_Dynamic | CollisionType_Projectile);
+
+        if (mFlyingCorpse)
+        {
+            // Restore the previous controlled aerial fall: gravity stays strong
+            // enough for visible descent, and the velocity cap avoids spikes.
+            setGravityScale(1.20f);
+            auto controller = std::make_unique<FlyingCorpseFall>();
+            for (const auto& part : mParts)
+            {
+                part->mBody->setDamping(0.65f, 0.38f);
+                controller->mBodies.push_back(part->mBody);
+            }
+            mFlyingFallController = std::move(controller);
+            mTaskScheduler->addAction(mFlyingFallController.get());
+        }
+    }
+
+    void Ragdoll::setGravityScale(float scale)
+    {
+        const btVector3 gravity(0, 0, -Constants::GravityConst * Constants::UnitsPerMeter * scale);
+        for (const auto& part : mParts)
+            mTaskScheduler->setBodyGravity(part->mBody, gravity);
     }
 
     void Ragdoll::addJoint(size_t parentIndex, size_t childIndex, const osg::Vec3f& position, float swing1,
@@ -557,7 +579,11 @@ namespace MWPhysics
         auto joint = std::make_unique<btConeTwistConstraint>(
             parent, child, parent.getWorldTransform().inverse() * jointWorld, childWorld.inverse() * jointWorld);
         // Firm limits (little give, quickly corrected), so joints don't stretch.
-        joint->setLimit(btRadians(swing1), btRadians(swing2), btRadians(twist), 0.9f, 0.6f, 1.f);
+        const float flyingScale = mFlyingCorpse ? 1.4f : 1.f;
+        joint->setLimit(btRadians(swing1 * flyingScale), btRadians(swing2 * flyingScale),
+            btRadians(twist * flyingScale), 0.9f, 0.55f, 0.9f);
+        if (mFlyingCorpse)
+            joint->setOverrideNumSolverIterations(28);
         mTaskScheduler->addConstraint(joint.get());
         mJoints.push_back(std::move(joint));
     }
@@ -575,10 +601,18 @@ namespace MWPhysics
     {
         if (mLastPoses.empty())
             return std::nullopt;
-        const osg::Vec3f main = mLastPoses.front().second.getTrans();
-        // Kept from the start: a body picked up lying down lies off to one side of where the actor stands.
+        const osg::Vec3f main = mLastMainBonePosition;
+        // Keep the actor following the creature's main mass, not an arbitrary
+        // wing bone that may precede the torso in the source mesh skeleton.
         if (!mActorOffset)
             mActorOffset = osg::Vec2f(actorPosition.x() - main.x(), actorPosition.y() - main.y());
+        if (mFlyingCorpse)
+        {
+            if (!mFlyingActorOffsetZ)
+                mFlyingActorOffsetZ = actorPosition.z() - main.z();
+            return osg::Vec3f(main.x() + mActorOffset->x(), main.y() + mActorOffset->y(),
+                main.z() + *mFlyingActorOffsetZ);
+        }
         return osg::Vec3f(main.x() + mActorOffset->x(), main.y() + mActorOffset->y(), main.z());
     }
 
@@ -607,7 +641,7 @@ namespace MWPhysics
         if (mLastPositions.empty())
         {
             for (const btVector3& position : positions)
-                mStartDistances.push_back(static_cast<float>((position - positions.front()).length()));
+                mStartDistances.push_back(static_cast<float>((position - positions.at(mMainPartIndex)).length()));
             mLastPositions = std::move(positions);
             mCheckTimer = 0;
             return false;
@@ -624,7 +658,8 @@ namespace MWPhysics
             if ((positions[i] - mLastPositions[i]).length() > maxSpeed * mCheckTimer)
                 return true;
             if (isJointed()
-                && (positions[i] - positions.front()).length() > mStartDistances[i] * 2.f + 80.f)
+                && (positions[i] - positions.at(mMainPartIndex)).length()
+                    > mStartDistances[i] * 2.f + (mFlyingCorpse ? 250.f : 80.f))
                 return true;
         }
         mLastPositions = std::move(positions);
@@ -761,6 +796,10 @@ namespace MWPhysics
         for (const auto& part : mParts)
             bodies.emplace_back(part->mBody, part->mOriginalMass);
         mTaskScheduler->setRagdollBodiesFrozen(bodies, false);
+        // Re-registering Bullet bodies as dynamic restores world gravity. Flyers
+        // must immediately resume their custom aerial gravity after being grabbed.
+        if (mFlyingCorpse)
+            setGravityScale(1.20f);
         mFrozen = false;
     }
 
@@ -836,6 +875,8 @@ namespace MWPhysics
 
     Ragdoll::~Ragdoll()
     {
+        if (mFlyingFallController != nullptr)
+            mTaskScheduler->removeAction(mFlyingFallController.get());
         if (mJointFriction != nullptr)
             mTaskScheduler->removeAction(mJointFriction.get());
         for (const auto& joint : mJoints)
@@ -855,6 +896,19 @@ namespace MWPhysics
             poses.emplace_back(part->mBone,
                 osg::Matrixf::scale(part->mBoneScale) * osg::Matrixf::rotate(Misc::Convert::toOsg(bone.getRotation()))
                     * osg::Matrixf::translate(Misc::Convert::toOsg(bone.getOrigin())));
+        }
+        if (!poses.empty())
+            mLastMainBonePosition = poses.at(mMainPartIndex).second.getTrans();
+        if (!mSkinnedBoneBindings.empty())
+        {
+            std::vector<std::pair<std::string, osg::Matrixf>> allBones;
+            allBones.reserve(mSkinnedBoneBindings.size());
+            // Parent-first original hierarchy; every tiny wingtip/feelers follows
+            // its simulated driver rather than stretching as the body drops.
+            for (const auto& binding : mSkinnedBoneBindings)
+                allBones.emplace_back(binding.mName,
+                    binding.mRelativeToDriver * poses.at(binding.mDriverPart).second);
+            poses = std::move(allBones);
         }
         mLastPoses = poses;
         return poses;
