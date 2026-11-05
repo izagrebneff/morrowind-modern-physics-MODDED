@@ -342,6 +342,10 @@ namespace MWWorld
         virtual bool isItem(const MWWorld::ConstPtr& ptr) const { return false; }
 
         virtual bool isBipedal(const MWWorld::ConstPtr& ptr) const;
+
+        // Only non-humanoid creatures use the fork's dynamic death-body physics.
+        // NPCs, undead and humanoid enemies keep Morrowind's death animations.
+        bool usesModernRagdoll(const MWWorld::ConstPtr& ptr) const;
         virtual bool canFly(const MWWorld::ConstPtr& ptr) const;
         virtual bool canSwim(const MWWorld::ConstPtr& ptr) const;
         virtual bool canWalk(const MWWorld::ConstPtr& ptr) const;
