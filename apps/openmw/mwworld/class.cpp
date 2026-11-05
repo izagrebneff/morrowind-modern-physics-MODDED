@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <string_view>
 
 #include <components/esm/defs.hpp>
 #include <components/esm3/loadarmo.hpp>
+#include <components/esm3/loadcrea.hpp>
 #include <components/esm3/loadench.hpp>
 #include <components/esm3/loadlock.hpp>
 #include <components/esm3/loadprob.hpp>
@@ -13,6 +15,7 @@
 #include <components/esm3/loadmgef.hpp>
 #include <components/esm3/loadsoun.hpp>
 #include <components/misc/resourcehelpers.hpp>
+#include <components/misc/strings/algorithm.hpp>
 
 #include "../mwbase/environment.hpp"
 #include "../mwbase/windowmanager.hpp"
@@ -457,6 +460,46 @@ namespace MWWorld
         newPtr.getRefData().setPosition(pos);
         newPtr.getCellRef().setPosition(pos);
         return newPtr;
+    }
+
+    bool Class::usesModernRagdoll(const ConstPtr& ptr) const
+    {
+        // Vanilla death poses for all NPCs (including the player), regardless of their model.
+        if (!isActor() || isNpc() || ptr.getType() != ESM::Creature::sRecordId)
+            return false;
+
+        const ESM::Creature& creature = *ptr.get<ESM::Creature>()->mBase;
+
+        // Creature record types include undead (skeletons, ghosts, bonewalkers),
+        // humanoids (including ash creatures), and true beasts. Disable the
+        // modern death simulation for the first two groups.
+        if (creature.mData.mType == ESM::Creature::Undead
+            || creature.mData.mType == ESM::Creature::Humanoid)
+            return false;
+
+        // A few humanoids are recorded as ordinary creatures in third-party plugins.
+        if (creature.mData.mType == ESM::Creature::Creatures && isBipedal(ptr))
+            return false;
+
+        // Daedra records mix humanlike enemies (dremora, saints...) with genuine
+        // monsters (daedroths, clannfears, atronachs). Only the former keep the
+        // vanilla death animation. Match both record IDs and model paths, so
+        // mod-added versions with different IDs can still be recognized.
+        const std::string id = creature.mId.toString();
+        const std::string model(getModel(ptr).value());
+        constexpr std::string_view humanoidNames[] = {
+            "dremora", "golden saint", "golden_saint", "winged twilight", "winged_twilight",
+            "dark seducer", "dark_seducer", "xivilai", "hunger", "scamp",
+            "skeleton", "ghost", "spectre", "wraith", "bonewalker", "bone_walker", "bonelord", "lich"
+        };
+        for (std::string_view name : humanoidNames)
+        {
+            if (Misc::StringUtils::ciFind(id, name) != std::string_view::npos
+                || Misc::StringUtils::ciFind(model, name) != std::string_view::npos)
+                return false;
+        }
+
+        return true;
     }
 
     bool Class::isBipedal(const ConstPtr& ptr) const

@@ -2875,8 +2875,9 @@ namespace MWMechanics
 
     bool CharacterController::startRagdoll()
     {
-        // Anyone with a skeleton; the rest play their death animation. Not the player (the death camera).
-        if (!mAnimation || mPtr == getPlayer())
+        // Only non-humanoid creatures use a simulated death body. NPCs, skeletons,
+        // ghosts, dremora and other humanoid foes play their vanilla death animations.
+        if (!mAnimation || mPtr == getPlayer() || !mPtr.getClass().usesModernRagdoll(mPtr))
             return false;
         CreatureStats& stats = mPtr.getClass().getCreatureStats(mPtr);
         const osg::Vec3f kick = stats.getDeathKick();
@@ -2921,6 +2922,14 @@ namespace MWMechanics
 
     void CharacterController::restoreRagdoll()
     {
+        // An old save may contain a simulated corpse pose for an NPC or humanoid.
+        // Do not apply its physical bone transforms to a vanilla animated corpse.
+        if (!mPtr.getClass().usesModernRagdoll(mPtr))
+        {
+            mPtr.getClass().getCreatureStats(mPtr).setRagdollPose({});
+            return;
+        }
+
         const std::vector<std::pair<std::string, osg::Matrixf>>& pose
             = mPtr.getClass().getCreatureStats(mPtr).getRagdollPose();
         if (pose.empty() || mPtr == getPlayer())
