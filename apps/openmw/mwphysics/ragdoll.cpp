@@ -433,10 +433,15 @@ namespace MWPhysics
 
     void Ragdoll::makeBody(Part& part, const btTransform& bodyWorld, float mass, float thickness)
     {
+        // Bodies should carry far more inertia than the old lightweight pieces.
+        // Keep their separately modelled buoyancy (relative density) unchanged.
+        constexpr float massMultiplier = 2.75f;
+        const float simulatedMass = mass * massMultiplier;
         btVector3 inertia(0, 0, 0);
-        part.mShape->calculateLocalInertia(mass, inertia);
+        part.mShape->calculateLocalInertia(simulatedMass, inertia);
         part.mMotionState = std::make_unique<RagdollMotionState>(bodyWorld);
-        btRigidBody::btRigidBodyConstructionInfo info(mass, part.mMotionState.get(), part.mShape.get(), inertia);
+        btRigidBody::btRigidBodyConstructionInfo info(
+            simulatedMass, part.mMotionState.get(), part.mShape.get(), inertia);
         info.m_friction = 0.8f;
         info.m_restitution = 0.05f;
         info.m_linearDamping = 0.15f;
@@ -460,13 +465,11 @@ namespace MWPhysics
 
     void Ragdoll::addToWorld()
     {
-        // The parts don't collide with each other: they overlap at the joints.
-        for (size_t i = 0; i < mParts.size(); ++i)
-            for (size_t j = i + 1; j < mParts.size(); ++j)
-            {
-                mParts[i]->mBody->setIgnoreCollisionCheck(mParts[j]->mBody, true);
-                mParts[j]->mBody->setIgnoreCollisionCheck(mParts[i]->mBody, true);
-            }
+        // Self-collision is now enabled: hands/forearms, legs and the torso cannot
+        // freely pass through non-adjacent parts of the same ragdoll.
+        // Directly jointed parts still ignore each other via addConstraint(..., true)
+        // in PhysicsTaskScheduler, because their capsules overlap at the joints.
+        // Other ragdolls and loose items remain normally collidable.
         for (const auto& part : mParts)
             mTaskScheduler->addRigidBody(part->mBody, CollisionType_Dynamic,
                 CollisionType_DynamicSupport | CollisionType_Actor | CollisionType_Dynamic | CollisionType_Projectile);
