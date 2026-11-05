@@ -55,9 +55,20 @@ namespace MWWorld
     void Class::insertObjectPhysics(
         const Ptr& ptr, const std::string& mesh, const osg::Quat& rotation, MWPhysics::PhysicsSystem& physics) const
     {
-        // Items lying around in the world are simulated rigid bodies.
         if (mesh.empty() || !isItem(ptr))
             return;
+
+        // Items placed by Morrowind/ESP/ESM authors are part of the fixed scene.
+        // They must not fall, roll or get pushed by actors, explosions or ragdolls.
+        // Keep their normal collision and allow them to be picked up.
+        // Runtime-generated references (including items dropped from inventory)
+        // remain simulated rigid bodies.
+        if (ptr.getCellRef().hasContentFile())
+        {
+            physics.addObject(ptr, VFS::Path::toNormalized(mesh), rotation, MWPhysics::CollisionType_World);
+            return;
+        }
+
         const float mass = std::clamp(getWeight(ptr), 0.2f, 50.f);
         // Metal goods sink no matter how light they are for their size.
         const unsigned type = ptr.getType();
