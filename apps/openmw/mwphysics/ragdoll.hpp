@@ -93,8 +93,13 @@ namespace MWPhysics
 
         std::vector<std::shared_ptr<PtrHolder>> getParts() const;
 
-        /// Still and asleep, as if it had been lying there (until something disturbs it).
+        /// Still and anchored: saved corpses start frozen instead of rattling again.
         void setAtRest();
+
+        /// Freeze automatically after ten seconds of simulated time, except while held.
+        void updateFreezeTimer(float duration, bool beingDragged);
+        /// The grab button is the only way to thaw a frozen ragdoll.
+        void unfreezeForDragging();
 
         /// Puts each part that is more than depth under the ground (groundAt: its height there) back on top of it,
         /// still: a small piece can slip through the ground on its own.
@@ -145,6 +150,8 @@ namespace MWPhysics
         osg::Vec3f mStartPosition;
         float mAge = 0;
         float mCheckTimer = 0;
+        float mTimeUntilFreeze = 10.f;
+        bool mFrozen = false;
         std::vector<float> mStartDistances;
         std::vector<btVector3> mLastPositions;
 
