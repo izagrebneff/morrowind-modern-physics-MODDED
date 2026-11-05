@@ -567,21 +567,108 @@ namespace MWPhysics
 
     void Ragdoll::setAtRest()
     {
-        // A previously saved corpse is already settled: restore it anchored.
-        updateFreezeTimer(10.f, false);
+        // Restored corpses already have their saved pose; do not let them
+        // restart a fall or jitter every time a cell is loaded.
+        if (mFrozen)
+            return;
+        std::vector<std::pair<btRigidBody*, btScalar>> bodies;
+        bodies.reserve(mParts.size());
+        for (const auto& part : mParts)
+            bodies.emplace_back(part->mBody, part->mOriginalMass);
+        mTaskScheduler->setRagdollBodiesFrozen(bodies, true);
+        mFrozen = true;
     }
 
     void Ragdoll::updateFreezeTimer(float duration, bool beingDragged)
     {
-        if (mFrozen || beingDragged || duration <= 0.f)
+        if (mFrozen || beingDragged || duration <= 0.f || mParts.empty())
             return;
 
-        mTimeUntilFreeze = std::max(0.f, mTimeUntilFreeze - duration);
-        if (mTimeUntilFreeze > 0.f)
+        // Motion-state snapshots are synchronized with the physics simulation.
+        // Check translation AND rotation of every limb, not just the pelvis.
+        mFreezeAge += duration;
+        mFreezeSampleTime += duration;
+        constexpr float sampleInterval = 0.25f;
+        if (mFreezeSampleTime < sampleInterval)
+            return;
+        const float sampleDuration = mFreezeSampleTime;
+        mFreezeSampleTime = 0.f;
+
+        std::vector<btTransform> current;
+        current.reserve(mParts.size());
+        for (const auto& part : mParts)
+        {
+            btTransform transform;
+            part->mMotionState->getWorldTransform(transform);
+            current.push_back(transform);
+        }
+
+        if (mPreviousFreezeTransforms.size() != current.size())
+        {
+            mPreviousFreezeTransforms = current;
+            mJitterStartPositions.clear();
+            mJitterWindowTime = 0.f;
+            mStableTime = 0.f;
+            return;
+        }
+
+        // Below roughly 2 world units/s and 0.08 rad/s for EVERY part
+        // continuously for 0.5s: a genuinely settled corpse.
+        constexpr float maxStableSpeed = 2.f;
+        constexpr float maxStableAngularSpeed = 0.08f;
+        bool allStill = true;
+        for (size_t i = 0; i < current.size(); ++i)
+        {
+            const btScalar travel = (current[i].getOrigin() - mPreviousFreezeTransforms[i].getOrigin()).length();
+            const btScalar rotation = current[i].getRotation().angleShortestPath(
+                mPreviousFreezeTransforms[i].getRotation());
+            if (travel > maxStableSpeed * sampleDuration || rotation > maxStableAngularSpeed * sampleDuration)
+            {
+                allStill = false;
+                break;
+            }
+        }
+        mStableTime = allStill ? mStableTime + sampleDuration : 0.f;
+        mPreviousFreezeTransforms = current;
+
+        // Detect wedged bodies that shake in place but make no net progress.
+        // Compare a TWO-SECOND window, so falling or sliding down stairs does
+        // not look like stationary high-frequency jitter.
+        bool locallyStuck = false;
+        if (mJitterStartPositions.size() != current.size())
+        {
+            mJitterStartPositions.clear();
+            for (const btTransform& transform : current)
+                mJitterStartPositions.push_back(transform.getOrigin());
+            mJitterWindowTime = 0.f;
+        }
+        else
+        {
+            mJitterWindowTime += sampleDuration;
+            if (mJitterWindowTime >= 2.f)
+            {
+                const float pelvisTravel
+                    = static_cast<float>((current.front().getOrigin() - mJitterStartPositions.front()).length());
+                float totalTravel = 0.f;
+                for (size_t i = 0; i < current.size(); ++i)
+                    totalTravel += static_cast<float>(
+                        (current[i].getOrigin() - mJitterStartPositions[i]).length());
+                const float meanTravel = totalTravel / current.size();
+                locallyStuck = pelvisTravel < 12.f && meanTravel < 20.f;
+                mJitterStartPositions.clear();
+                for (const btTransform& transform : current)
+                    mJitterStartPositions.push_back(transform.getOrigin());
+                mJitterWindowTime = 0.f;
+            }
+        }
+
+        const bool settled = mFreezeAge >= 3.f && mStableTime >= 0.5f;
+        const bool wedged = mFreezeAge >= 6.f && locallyStuck;
+        if (!settled && !wedged)
             return;
 
-        // Freeze the WHOLE linked body at once. Sleeping alone is insufficient:
-        // a penetration/joint contact will immediately wake it and cause rattling.
+        // Fix the complete body at once: simply sleeping it is not enough,
+        // because joint contacts or terrain penetration can wake it repeatedly.
         std::vector<std::pair<btRigidBody*, btScalar>> bodies;
         bodies.reserve(mParts.size());
         for (const auto& part : mParts)
@@ -592,8 +679,13 @@ namespace MWPhysics
 
     void Ragdoll::unfreezeForDragging()
     {
-        // Once released, permit another ten seconds to settle into a new pose.
-        mTimeUntilFreeze = 10.f;
+        // Reset the settling and wedging measurements for the next drop.
+        mFreezeAge = 0.f;
+        mFreezeSampleTime = 0.f;
+        mStableTime = 0.f;
+        mJitterWindowTime = 0.f;
+        mPreviousFreezeTransforms.clear();
+        mJitterStartPositions.clear();
         if (!mFrozen)
             return;
 
