@@ -96,7 +96,8 @@ namespace MWPhysics
         /// Still and anchored: saved corpses start frozen instead of rattling again.
         void setAtRest();
 
-        /// Freeze automatically after ten seconds of simulated time, except while held.
+        /// Freeze after at least three seconds when the body settles, or after six
+        /// seconds of local jitter without net movement. Never freeze an ongoing fall.
         void updateFreezeTimer(float duration, bool beingDragged);
         /// The grab button is the only way to thaw a frozen ragdoll.
         void unfreezeForDragging();
@@ -150,8 +151,13 @@ namespace MWPhysics
         osg::Vec3f mStartPosition;
         float mAge = 0;
         float mCheckTimer = 0;
-        float mTimeUntilFreeze = 10.f;
+        float mFreezeAge = 0.f;
+        float mFreezeSampleTime = 0.f;
+        float mStableTime = 0.f;
+        float mJitterWindowTime = 0.f;
         bool mFrozen = false;
+        std::vector<btTransform> mPreviousFreezeTransforms;
+        std::vector<btVector3> mJitterStartPositions;
         std::vector<float> mStartDistances;
         std::vector<btVector3> mLastPositions;
 
