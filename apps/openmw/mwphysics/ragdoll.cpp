@@ -19,6 +19,8 @@
 #include <components/misc/convert.hpp>
 #include <components/misc/constants.hpp>
 
+#include "../mwworld/class.hpp"
+
 #include "collisiontype.hpp"
 #include "mtphysics.hpp"
 
