@@ -162,6 +162,7 @@ namespace MWPhysics
         mutable osg::Vec3f mLastMainBonePosition;
         size_t mMainPartIndex = 0;
         bool mFlyingCorpse = false;
+        bool mDisableInternalCollision = false; // Procedural creature rigs have overlapping limb shapes.
         std::unique_ptr<btActionInterface> mJointFriction;
         std::unique_ptr<btActionInterface> mFlyingFallController;
         std::optional<osg::Vec2f> mActorOffset; // from the main part to the actor, along the ground
