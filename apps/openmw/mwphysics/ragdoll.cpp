@@ -749,8 +749,8 @@ namespace MWPhysics
             mJitterWindowTime += sampleDuration;
             if (mJitterWindowTime >= 2.f)
             {
-                const float pelvisTravel
-                    = static_cast<float>((current.front().getOrigin() - mJitterStartPositions.front()).length());
+                const float pelvisTravel = static_cast<float>(
+                    (current.at(mMainPartIndex).getOrigin() - mJitterStartPositions.at(mMainPartIndex)).length());
                 float totalTravel = 0.f;
                 for (size_t i = 0; i < current.size(); ++i)
                     totalTravel += static_cast<float>(
@@ -801,6 +801,12 @@ namespace MWPhysics
         if (mFlyingCorpse)
             setGravityScale(1.20f);
         mFrozen = false;
+    }
+
+    void Ragdoll::restoreFlightGravity()
+    {
+        if (mFlyingCorpse && !mFrozen)
+            setGravityScale(1.20f);
     }
 
     void Ragdoll::liftStrayParts(const std::function<float(const osg::Vec3f&)>& groundAt, float depth)
