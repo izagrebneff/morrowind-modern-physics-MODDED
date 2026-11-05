@@ -32,6 +32,7 @@
 #include <components/debug/debuglog.hpp>
 #include <components/esm3/loadgmst.hpp>
 #include <components/esm3/loadmgef.hpp>
+#include <components/esm3/loadstat.hpp>
 #include <components/misc/constants.hpp>
 #include <components/misc/convert.hpp>
 #include <components/sceneutil/positionattitudetransform.hpp>
@@ -652,6 +653,15 @@ namespace MWPhysics
         const MWWorld::Ptr& ptr, VFS::Path::NormalizedView mesh, osg::Quat rotation, float mass, bool metal,
         bool projectile)
     {
+        // ESM STAT records are fixed world geometry, never simulated rigid bodies.
+        // Keep their collision shapes so actors and loose items still collide with
+        // buildings, furniture, rocks, etc. Even an accidental dynamic-body request
+        // must not let an explosion, collision or script impulse move a static.
+        if (ptr.getType() == ESM::Static::sRecordId)
+        {
+            addObject(ptr, mesh, rotation, CollisionType_World);
+            return;
+        }
         if (ptr.mRef->mData.mPhysicsPostponed)
             return;
 
