@@ -1401,7 +1401,7 @@ namespace MWWorld
     bool World::canRagdollCorpse(const MWWorld::ConstPtr& ptr) const
     {
         // Not the player (the death camera).
-        if (!ptr.getClass().isActor() || ptr == getPlayerConstPtr())
+        if (!ptr.getClass().usesModernRagdoll(ptr) || ptr == getPlayerConstPtr())
             return false;
         // Only reads the stats, so stripping Const is fine.
         const MWWorld::Ptr mutablePtr(
@@ -1455,6 +1455,11 @@ namespace MWWorld
 
     bool World::makeRagdollBody(const MWWorld::Ptr& actor, const osg::Vec3f& kick, bool allowOnePiece)
     {
+        // Never create a simulated corpse for NPCs, undead or humanoid enemies,
+        // including when grabbing a body or loading a save from an older build.
+        if (!actor.getClass().usesModernRagdoll(actor))
+            return false;
+
         const MWRender::Animation* animation = mRendering->getAnimation(actor);
         if (animation == nullptr)
             return false;
