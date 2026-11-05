@@ -1,8 +1,3 @@
-// Interior Object Contact Shadows for OpenMW 0.52
-// This is a screen-space approximation of light-source shadows, not a
-// replacement for cubemap shadow maps. Only camera-visible occluders can cast.
-// Uses actual world-space positions of OpenMW point lights, not camera direction.
-
 uniform_float uShadowStrength {
     default = 0.48;
     min = 0.0;
@@ -83,7 +78,7 @@ fragment interiorShadows {
             float t = (float(stepIndex) + 1.5) / (float(uShadowSteps) + 1.5);
             vec3 samplePos = startPos + rayDir * (usableLength * t);
             vec4 viewPos = omw.viewMatrix * vec4(samplePos, 1.0);
-            vec4 clipPos = omw.projectionMatrix * viewPos;
+            vec4 clipPos = omw_ProjectionMatrix() * viewPos;
             if (clipPos.w <= 0.0)
                 continue;
 
