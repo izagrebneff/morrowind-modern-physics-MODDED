@@ -81,6 +81,10 @@ namespace MWPhysics
         void removeAction(btActionInterface* action);
         /// Stop a body and put it to sleep.
         void setAtRest(btRigidBody* body);
+        /// Freeze or unfreeze all parts of a ragdoll together. Frozen parts remain solid
+        /// but cannot be woken by actors, constraints or contacts. Restores original
+        /// simulated masses (not the temporary carrying masses) when unfrozen.
+        void setRagdollBodiesFrozen(const std::vector<std::pair<btRigidBody*, btScalar>>& bodies, bool frozen);
         /// Moves a simulated body to transform, still.
         void placeBody(btRigidBody* body, const btTransform& transform);
         /// Wake the body and push it: impulse applied at point (world space).

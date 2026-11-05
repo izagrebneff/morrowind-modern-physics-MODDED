@@ -847,6 +847,47 @@ namespace MWPhysics
         body->forceActivationState(ISLAND_SLEEPING);
     }
 
+    void PhysicsTaskScheduler::setRagdollBodiesFrozen(
+        const std::vector<std::pair<btRigidBody*, btScalar>>& bodies, bool frozen)
+    {
+        // Switching between dynamic and static rigid bodies must update Bullet's
+        // broadphase proxy. The physics worker cannot see a partially frozen body.
+        MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
+        for (const auto& [body, originalMass] : bodies)
+        {
+            if (body == nullptr || body->getBroadphaseHandle() == nullptr)
+                continue;
+            const int group = body->getBroadphaseHandle()->m_collisionFilterGroup;
+            const int mask = body->getBroadphaseHandle()->m_collisionFilterMask;
+            mDynamicsWorld->removeRigidBody(body);
+
+            body->setLinearVelocity(btVector3(0, 0, 0));
+            body->setAngularVelocity(btVector3(0, 0, 0));
+            body->setInterpolationLinearVelocity(btVector3(0, 0, 0));
+            body->setInterpolationAngularVelocity(btVector3(0, 0, 0));
+            body->clearForces();
+
+            if (frozen)
+                body->setMassProps(0, btVector3(0, 0, 0));
+            else
+            {
+                btVector3 inertia(0, 0, 0);
+                body->getCollisionShape()->calculateLocalInertia(originalMass, inertia);
+                body->setMassProps(originalMass, inertia);
+            }
+            body->updateInertiaTensor();
+            mDynamicsWorld->addRigidBody(body, group, mask);
+            if (frozen)
+                body->forceActivationState(ISLAND_SLEEPING);
+            else
+            {
+                body->setGravity(mDynamicsWorld->getGravity());
+                body->setDeactivationTime(0);
+                body->forceActivationState(ACTIVE_TAG);
+            }
+        }
+    }
+
     void PhysicsTaskScheduler::placeBody(btRigidBody* body, const btTransform& transform)
     {
         MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);

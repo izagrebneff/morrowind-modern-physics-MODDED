@@ -726,6 +726,8 @@ namespace MWPhysics
     std::vector<MWWorld::Ptr> PhysicsSystem::removeFailedRagdolls(float duration)
     {
         std::vector<MWWorld::Ptr> failed;
+        const std::shared_ptr<PtrHolder> held = mTaskScheduler->getHeldObject();
+        const MWWorld::LiveCellRefBase* heldRef = held != nullptr ? held->getPtr().mRef : nullptr;
         for (auto it = mRagdolls.begin(); it != mRagdolls.end();)
         {
             if (it->second->hasComeApart(duration))
@@ -734,7 +736,12 @@ namespace MWPhysics
                 it = mRagdolls.erase(it);
             }
             else
+            {
+                // Ten seconds after death (or after being released), permanently anchor
+                // all parts until the player explicitly grabs the corpse again.
+                it->second->updateFreezeTimer(duration, it->first == heldRef);
                 ++it;
+            }
         }
         return failed;
     }
@@ -920,6 +927,9 @@ namespace MWPhysics
             const std::shared_ptr<PtrHolder> part = ragdoll->second->findPart(eye, viewDirection);
             if (part == nullptr)
                 return false;
+            // Grabbing is the only way to release the 10-second freeze.
+            // Restore every limb's mass before setting up the hold constraint.
+            ragdoll->second->unfreezeForDragging();
             mHoldDistance = 70.f;
             mHoldingRagdoll = true;
             // A one-piece body hangs from where it was grabbed (and drags along the ground).

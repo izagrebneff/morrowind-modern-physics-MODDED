@@ -103,6 +103,7 @@ namespace MWPhysics
         std::unique_ptr<btCollisionShape> mShape;
         std::unique_ptr<RagdollMotionState> mMotionState;
         btRigidBody* mBody = nullptr; // owned by mCollisionObject
+        btScalar mOriginalMass = 0; // restored after dragging a frozen corpse
 
         void setBody(std::unique_ptr<btRigidBody> body)
         {
@@ -437,6 +438,7 @@ namespace MWPhysics
         // Keep their separately modelled buoyancy (relative density) unchanged.
         constexpr float massMultiplier = 2.75f;
         const float simulatedMass = mass * massMultiplier;
+        part.mOriginalMass = simulatedMass;
         btVector3 inertia(0, 0, 0);
         part.mShape->calculateLocalInertia(simulatedMass, inertia);
         part.mMotionState = std::make_unique<RagdollMotionState>(bodyWorld);
@@ -565,8 +567,42 @@ namespace MWPhysics
 
     void Ragdoll::setAtRest()
     {
+        // A previously saved corpse is already settled: restore it anchored.
+        updateFreezeTimer(10.f, false);
+    }
+
+    void Ragdoll::updateFreezeTimer(float duration, bool beingDragged)
+    {
+        if (mFrozen || beingDragged || duration <= 0.f)
+            return;
+
+        mTimeUntilFreeze = std::max(0.f, mTimeUntilFreeze - duration);
+        if (mTimeUntilFreeze > 0.f)
+            return;
+
+        // Freeze the WHOLE linked body at once. Sleeping alone is insufficient:
+        // a penetration/joint contact will immediately wake it and cause rattling.
+        std::vector<std::pair<btRigidBody*, btScalar>> bodies;
+        bodies.reserve(mParts.size());
         for (const auto& part : mParts)
-            mTaskScheduler->setAtRest(part->mBody);
+            bodies.emplace_back(part->mBody, part->mOriginalMass);
+        mTaskScheduler->setRagdollBodiesFrozen(bodies, true);
+        mFrozen = true;
+    }
+
+    void Ragdoll::unfreezeForDragging()
+    {
+        // Once released, permit another ten seconds to settle into a new pose.
+        mTimeUntilFreeze = 10.f;
+        if (!mFrozen)
+            return;
+
+        std::vector<std::pair<btRigidBody*, btScalar>> bodies;
+        bodies.reserve(mParts.size());
+        for (const auto& part : mParts)
+            bodies.emplace_back(part->mBody, part->mOriginalMass);
+        mTaskScheduler->setRagdollBodiesFrozen(bodies, false);
+        mFrozen = false;
     }
 
     void Ragdoll::liftStrayParts(const std::function<float(const osg::Vec3f&)>& groundAt, float depth)
