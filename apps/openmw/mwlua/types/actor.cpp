@@ -11,6 +11,7 @@
 #include "apps/openmw/mwbase/mechanicsmanager.hpp"
 #include "apps/openmw/mwbase/windowmanager.hpp"
 #include "apps/openmw/mwbase/world.hpp"
+#include "apps/openmw/mwrender/npcanimation.hpp"
 #include "apps/openmw/mwmechanics/actorutil.hpp"
 #include "apps/openmw/mwmechanics/creaturestats.hpp"
 #include "apps/openmw/mwmechanics/drawstate.hpp"
@@ -483,6 +484,35 @@ namespace MWLua
                     self.ptr().getClass().onHit(self.ptr(), damages, weaponId, attackerPtr, successful, sourceType);
                 },
                 "HitAction");
+        };
+
+        actor["_addBloodDecal"] = [context](const SelfObject& self, float x, float y, float z,
+            int hitType, bool powered, sol::optional<Object> attacker) {
+            context.mLuaManager->addAction(
+                [victim = Object(self), hit = osg::Vec3f(x, y, z), hitType, powered, attacker]() {
+                    const MWWorld::Ptr ptr = victim.ptrOrEmpty();
+                    if (ptr.isEmpty() || !ptr.getClass().isNpc())
+                        return;
+                    auto* animation = dynamic_cast<MWRender::NpcAnimation*>(
+                        MWBase::Environment::get().getWorld()->getAnimation(ptr));
+                    if (!animation)
+                        return;
+                    osg::Vec3f outward(0.f, -1.f, 0.f);
+                    if (attacker)
+                    {
+                        MWWorld::Ptr source = attacker->ptrOrEmpty();
+                        if (!source.isEmpty())
+                        {
+                            outward = source.getRefData().getPosition().asVec3()
+                                - ptr.getRefData().getPosition().asVec3();
+                            if (outward.normalize() < 1e-4f)
+                                outward.set(0.f, -1.f, 0.f);
+                        }
+                    }
+                    const std::string_view kind = hitType == 0 ? "chop" : hitType == 1 ? "slash" : "thrust";
+                    animation->addBloodDecal(hit, outward, kind, powered);
+                },
+                "NpcSurfaceBloodAction");
         };
 
         actor["setKnockedDown"] = [context](const Object& object, bool value) {

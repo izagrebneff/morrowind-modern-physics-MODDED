@@ -692,6 +692,7 @@ namespace MWRender
 
         if (wasArrowAttached)
             attachArrow();
+        rebuildBloodDecals();
     }
 
     PartHolderPtr NpcAnimation::insertBoundedPart(VFS::Path::NormalizedView model, std::string_view bonename,

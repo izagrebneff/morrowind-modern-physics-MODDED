@@ -10,6 +10,9 @@
 #include "../mwworld/inventorystore.hpp"
 
 #include <array>
+#include <map>
+#include <memory>
+#include <string_view>
 
 namespace ESM
 {
@@ -45,6 +48,11 @@ namespace MWRender
 
     private:
         static const PartBoneMap sPartList;
+
+        struct BloodDecals;
+        std::shared_ptr<BloodDecals> mBloodDecals;
+        void prewarmBloodDecals();
+        void rebuildBloodDecals();
 
         // Bounded Parts
         PartHolderPtr mObjectParts[ESM::PRT_Count];
@@ -167,6 +175,13 @@ namespace MWRender
         int getSlot(const osg::NodePath& path) const;
 
         const PartHolder* getPart(ESM::PartReferenceType type) const { return mObjectParts[type].get(); }
+
+        // Blood stains are surface-conforming overlays, separate from the game physics.
+        bool addBloodDecal(const osg::Vec3f& position, const osg::Vec3f& outward,
+            std::string_view kind, bool power, int hitPart = -1);
+        std::string getBloodDecalData() const;
+        bool restoreBloodDecals(std::string_view data);
+        std::map<std::string, double> getBloodDecalStats() const;
 
         void setVampire(bool vampire) override;
 

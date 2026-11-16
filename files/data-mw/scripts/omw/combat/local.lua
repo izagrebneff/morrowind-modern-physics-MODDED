@@ -120,6 +120,13 @@ local function onHit(data)
         core.sound.playSound3d('miss', self)
     end
     Actor._onHit(self, data)
+    -- Native C++ projection onto NPC armour/body; no new combat or physics rules.
+    if data.successful and not godMode() and not isPlayer
+        and not Creature.objectIsInstance(self) and data.sourceType ~= 'magic'
+        and common.getDamage(data, 'health') > 0 and data.hitPos then
+        Actor._addBloodDecal(self, data.hitPos.x, data.hitPos.y, data.hitPos.z,
+            data.type or 0, (data.strength or 0) > 0.8, data.attacker)
+    end
 end
 
 I.Combat.addOnHitHandler(onHit)
