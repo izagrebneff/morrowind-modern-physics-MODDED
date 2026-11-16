@@ -145,7 +145,17 @@ namespace MWRender
                 // Preserve the entire model path through skinning skeletons,
                 // without any Brutal Morrowind equipment-release dependencies.
                 const auto paths = root->getParentalNodePaths();
-                const osg::NodePath prefix = paths.empty() ? osg::NodePath{} : paths.front();
+                osg::NodePath prefix;
+                if (!paths.empty())
+                {
+                    prefix = paths.front();
+                    for (const auto& candidate : paths)
+                        if (std::find(candidate.begin(), candidate.end(), actor) != candidate.end())
+                        {
+                            prefix = candidate;
+                            break;
+                        }
+                }
                 for (std::size_t i = 0; i + 1 < prefix.size(); ++i)
                     pushOntoNodePath(prefix[i]);
                 root->accept(*this);
@@ -444,7 +454,8 @@ namespace MWRender
                         continue;
                     std::vector<osg::Vec3d> world(vertices->begin(), vertices->end());
                     auto projection = SceneUtil::DecalProjector::project(
-                        world, s.triangles, osg::Vec3d(position), osg::Vec3d(outward), tangent, size, size);
+                        world, s.triangles, osg::Vec3d(position), osg::Vec3d(outward), tangent, size, size,
+                        6.0, 96.0);
                     if (!projection.vertices.empty() && projection.distance < best.distance)
                     {
                         best = std::move(projection);
@@ -454,6 +465,13 @@ namespace MWRender
             if (!selected)
             {
                 ++blood.rejected;
+                static unsigned loggedRejected = 0;
+                if (loggedRejected++ < 20)
+                    Log(Debug::Warning) << "NPC blood: no projectable surface for "
+                        << mPtr.getCellRef().getRefId().serializeText()
+                        << "; surfaces=" << surfaces.size()
+                        << ", hit=" << position
+                        << ", direction=" << outward;
                 return false;
             }
             BloodDecals::Record record{ selected->part, selected->ordinal, style, selected->model,
@@ -472,6 +490,12 @@ namespace MWRender
             ++blood.added;
             blood.lastDistance = best.distance;
             rebuildBloodDecals();
+            static unsigned loggedAccepted = 0;
+            if (loggedAccepted++ < 20)
+                Log(Debug::Info) << "NPC blood: added to "
+                    << mPtr.getCellRef().getRefId().serializeText()
+                    << "; records=" << blood.records.size() << ", attached=" << blood.attached
+                    << ", distance=" << best.distance;
             blood.lastMilliseconds
                 = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
             return true;

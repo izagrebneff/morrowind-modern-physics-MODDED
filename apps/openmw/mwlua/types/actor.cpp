@@ -473,46 +473,47 @@ namespace MWLua
                 }
             }
 
+            // Capture the same combat event as the normal damage application.
+            // Blood must not depend on an extra Lua callback or updated user scripts.
+            const auto hitPos = options.get<sol::optional<osg::Vec3f>>("hitPos");
+            const int attackType = options.get_or<int>("type", 0);
+            const float strength = options.get_or<float>("strength", 0.f);
             context.mLuaManager->addAction(
                 [self = Object(self), damages = std::move(damageCpp),
                     attacker = options.get<sol::optional<Object>>("attacker"), weaponId,
-                    successful = options.get<bool>("successful"), sourceType = sourceType] {
-                    MWWorld::Ptr attackerPtr;
-                    MWWorld::Ptr weaponPtr;
-                    if (attacker)
-                        attackerPtr = attacker->ptr();
-                    self.ptr().getClass().onHit(self.ptr(), damages, weaponId, attackerPtr, successful, sourceType);
-                },
-                "HitAction");
-        };
-
-        actor["_addBloodDecal"] = [context](const SelfObject& self, float x, float y, float z,
-            int hitType, bool powered, sol::optional<Object> attacker) {
-            context.mLuaManager->addAction(
-                [victim = Object(self), hit = osg::Vec3f(x, y, z), hitType, powered, attacker]() {
-                    const MWWorld::Ptr ptr = victim.ptrOrEmpty();
-                    if (ptr.isEmpty() || !ptr.getClass().isNpc())
+                    successful = options.get<bool>("successful"), sourceType, hitPos, attackType, strength] {
+                    MWWorld::Ptr victim = self.ptrOrEmpty();
+                    if (victim.isEmpty())
                         return;
+                    MWWorld::Ptr attackerPtr;
+                    if (attacker)
+                        attackerPtr = attacker->ptrOrEmpty();
+                    victim.getClass().onHit(victim, damages, weaponId, attackerPtr, successful, sourceType);
+
+                    const auto damage = damages.find("health");
+                    if (!successful || !victim.getClass().isNpc()
+                        || sourceType == MWMechanics::DamageSourceType::Magical
+                        || damage == damages.end() || damage->second <= 0.f || !hitPos)
+                        return;
+
                     auto* animation = dynamic_cast<MWRender::NpcAnimation*>(
-                        MWBase::Environment::get().getWorld()->getAnimation(ptr));
+                        MWBase::Environment::get().getWorld()->getAnimation(victim));
                     if (!animation)
                         return;
                     osg::Vec3f outward(0.f, -1.f, 0.f);
-                    if (attacker)
+                    if (!attackerPtr.isEmpty())
                     {
-                        MWWorld::Ptr source = attacker->ptrOrEmpty();
-                        if (!source.isEmpty())
-                        {
-                            outward = source.getRefData().getPosition().asVec3()
-                                - ptr.getRefData().getPosition().asVec3();
-                            if (outward.normalize() < 1e-4f)
-                                outward.set(0.f, -1.f, 0.f);
-                        }
+                        outward = attackerPtr.getRefData().getPosition().asVec3()
+                            - victim.getRefData().getPosition().asVec3();
+                        outward.z() = 0.f;
+                        if (outward.normalize() < 1e-4f)
+                            outward.set(0.f, -1.f, 0.f);
                     }
-                    const std::string_view kind = hitType == 0 ? "chop" : hitType == 1 ? "slash" : "thrust";
-                    animation->addBloodDecal(hit, outward, kind, powered);
+                    const std::string_view kind
+                        = attackType == 0 ? "chop" : attackType == 1 ? "slash" : "thrust";
+                    animation->addBloodDecal(*hitPos, outward, kind, strength > 0.8f);
                 },
-                "NpcSurfaceBloodAction");
+                "HitAction");
         };
 
         actor["setKnockedDown"] = [context](const Object& object, bool value) {
