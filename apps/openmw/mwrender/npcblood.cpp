@@ -11,6 +11,8 @@
 #include <components/resource/imagemanager.hpp>
 #include <components/resource/resourcesystem.hpp>
 #include <components/resource/scenemanager.hpp>
+#include <components/sceneutil/riggeometry.hpp>
+#include <components/sceneutil/morphgeometry.hpp>
 #include <components/sceneutil/decalprojector.hpp>
 #include <components/sceneutil/depth.hpp>
 #include <components/sceneutil/positionattitudetransform.hpp>
