@@ -470,8 +470,8 @@ namespace MWRender
                     Log(Debug::Warning) << "NPC blood: no projectable surface for "
                         << mPtr.getCellRef().getRefId().serializeText()
                         << "; surfaces=" << surfaces.size()
-                        << ", hit=" << position
-                        << ", direction=" << outward;
+                        << ", hit=(" << position.x() << "," << position.y() << "," << position.z() << ")"
+                        << ", direction=(" << outward.x() << "," << outward.y() << "," << outward.z() << ")";
                 return false;
             }
             BloodDecals::Record record{ selected->part, selected->ordinal, style, selected->model,
