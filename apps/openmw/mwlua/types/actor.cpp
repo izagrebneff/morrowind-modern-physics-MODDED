@@ -476,8 +476,8 @@ namespace MWLua
             // Capture the same combat event as the normal damage application.
             // Blood must not depend on an extra Lua callback or updated user scripts.
             const auto hitPos = options.get<sol::optional<osg::Vec3f>>("hitPos");
-            const int attackType = options.get_or<int>("type", 0);
-            const float strength = options.get_or<float>("strength", 0.f);
+            const int attackType = options.get<sol::optional<int>>("type").value_or(0);
+            const float strength = options.get<sol::optional<float>>("strength").value_or(0.f);
             context.mLuaManager->addAction(
                 [self = Object(self), damages = std::move(damageCpp),
                     attacker = options.get<sol::optional<Object>>("attacker"), weaponId,
