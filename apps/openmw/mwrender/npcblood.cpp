@@ -39,7 +39,15 @@ namespace MWRender
     {
         using Anchors = std::vector<SceneUtil::SurfaceDecals::Anchor>;
         constexpr std::size_t MaxWounds = 24, MaxActorVertices = 8192, MaxSaveBytes = 400000;
-        const char* const Styles[]{ "slash", "small", "big", "tiny" };
+        constexpr unsigned BloodTextureCount = 6;
+        constexpr std::array<const char*, BloodTextureCount> BloodTextures{
+            "textures/npc_bloodstains/blood_1.png",
+            "textures/npc_bloodstains/blood_2.png",
+            "textures/npc_bloodstains/blood_3.png",
+            "textures/npc_bloodstains/blood_4.png",
+            "textures/npc_bloodstains/blood_5.png",
+            "textures/npc_bloodstains/blood_6.png"
+        };
 
         // Ordinary Geometry is often shared between actors. Replace only this
         // actor's parent edge, keeping source arrays/materials immutable.
@@ -311,41 +319,12 @@ namespace MWRender
             Anchors anchors;
         };
         std::vector<Record> records;
-        std::array<osg::ref_ptr<osg::StateSet>, 4> states;
+        std::array<osg::ref_ptr<osg::StateSet>, BloodTextureCount> states;
         bool prepared = false;
         std::uint64_t added = 0, rejected = 0, evicted = 0;
         std::size_t attached = 0, vertices = 0;
         double lastDistance = 0, lastMilliseconds = 0;
     };
-
-    namespace
-    {
-        // Self-contained procedural stains: no Dark Messiah import or external game assets.
-        osg::ref_ptr<osg::Image> makeBloodImage(unsigned style)
-        {
-            constexpr int N = 128;
-            osg::ref_ptr<osg::Image> img = new osg::Image;
-            img->allocateImage(N, N, 1, GL_RGBA, GL_UNSIGNED_BYTE);
-            for (int y = 0; y < N; ++y)
-                for (int x = 0; x < N; ++x)
-                {
-                    const float fx = (x - 63.5f) / 63.5f, fy = (y - 63.5f) / 63.5f;
-                    const float sx = style == 0 ? fx * 0.55f : fx;
-                    const float sy = style == 0 ? fy * 1.3f : fy;
-                    const float dist = std::sqrt(sx * sx + sy * sy);
-                    const float ragged = 0.84f + .11f * std::sin(17.f * fx + 7.f * fy + style * 2.f)
-                        + .06f * std::sin(38.f * fy - 15.f * fx + style * 4.f);
-                    const float opacity = std::clamp((ragged - dist) * 5.f, 0.f, 1.f)
-                        * (0.65f + .2f * std::sin(11.f * fx + 13.f * fy));
-                    unsigned char* p = img->data(x, y);
-                    p[0] = 157; // red component above neutral; dark green/blue below
-                    p[1] = 39;
-                    p[2] = 37;
-                    p[3] = static_cast<unsigned char>(std::clamp(opacity * 255.f, 0.f, 255.f));
-                }
-            return img;
-        }
-    }
 
     void NpcAnimation::prewarmBloodDecals()
     {
@@ -357,9 +336,26 @@ namespace MWRender
         if (blood.prepared)
             return;
         blood.prepared = true;
-        for (unsigned i = 0; i < 4; ++i)
+        // Load the supplied PNG textures through OpenMW's mod-aware VFS.
+        // Never paint the warning image or synthesize replacement blood.
+        static std::array<bool, BloodTextureCount> warnedMissing{};
+        auto* imageManager = mResourceSystem->getImageManager();
+        for (unsigned i = 0; i < BloodTextureCount; ++i)
         {
-            osg::ref_ptr<osg::Texture2D> texture = new osg::Texture2D(makeBloodImage(i));
+            const VFS::Path::NormalizedView path(BloodTextures[i]);
+            osg::ref_ptr<osg::Image> image;
+            if (mResourceSystem->getVFS()->exists(path))
+                image = imageManager->getImage(path);
+            if (!image || image.get() == imageManager->getWarningImage())
+            {
+                if (!warnedMissing[i])
+                {
+                    Log(Debug::Warning) << "NPC blood: missing or invalid decal texture: " << path;
+                    warnedMissing[i] = true;
+                }
+                continue;
+            }
+            osg::ref_ptr<osg::Texture2D> texture = new osg::Texture2D(image);
             texture->setWrap(osg::Texture::WRAP_S, osg::Texture::CLAMP_TO_EDGE);
             texture->setWrap(osg::Texture::WRAP_T, osg::Texture::CLAMP_TO_EDGE);
             mResourceSystem->getSceneManager()->applyFilterSettings(texture);
@@ -424,9 +420,14 @@ namespace MWRender
         if (!mBloodDecals)
             return false;
         auto& blood = *mBloodDecals;
-        const unsigned style = kind == "slash" || kind == "chop" ? 0 : power ? 2 : 1;
+        // Cycle across all installed stain variants without changing gameplay RNG.
+        static unsigned nextStyle = 0;
+        unsigned style = nextStyle;
+        for (unsigned i = 0; i < BloodTextureCount && !blood.states[style]; ++i)
+            style = (style + 1) % BloodTextureCount;
         if (!blood.states[style])
             return false;
+        nextStyle = (style + 1) % BloodTextureCount;
         const auto start = std::chrono::steady_clock::now();
         try
         {
@@ -444,8 +445,9 @@ namespace MWRender
             auto tangent = osg::Vec3d(0, 0, 1) ^ osg::Vec3d(outward);
             if (kind == "chop")
                 tangent = osg::Vec3d(0, 0, 1);
-            // Native units: the DM slash is 64 px at .1 Source inches/px.
-            const double size = (style == 0 ? 15. : 24.) * (power ? 1.35 : 1.);
+            // Attack type controls the projection size, not the selected PNG.
+            const bool slash = kind == "slash" || kind == "chop";
+            const double size = (slash ? 15. : 24.) * (power ? 1.35 : 1.);
             for (auto& s : surfaces)
                 if (auto geometry = posed(s, bones))
                 {
@@ -563,7 +565,7 @@ namespace MWRender
                     r.fingerprint = in.u32();
                     r.fingerprint |= std::uint64_t(in.u32()) << 32;
                     const auto size = in.u32();
-                    if (r.part < 0 || r.part >= ESM::PRT_Count || r.ordinal > 4096 || r.style >= 4 || !size || size % 3
+                    if (r.part < 0 || r.part >= ESM::PRT_Count || r.ordinal > 4096 || r.style >= BloodTextureCount || !size || size % 3
                         || size > 3072 || (total += size) > MaxActorVertices)
                         return false;
                     r.anchors.reserve(size);
@@ -605,7 +607,7 @@ namespace MWRender
         if (!mBloodDecals)
             return {{"enabled", 1.}, {"available", 0.}, {"records", 0.}};
         const auto& b = *mBloodDecals;
-        return {{"enabled", 1.}, {"available", b.states[0] ? 1. : 0.},
+        return {{"enabled", 1.}, {"available", std::any_of(b.states.begin(), b.states.end(), [](const auto& s) { return s.valid(); }) ? 1. : 0.},
             {"records", double(b.records.size())}, {"attached", double(b.attached)},
             {"added", double(b.added)}, {"rejected", double(b.rejected)}, {"evicted", double(b.evicted)}};
     }

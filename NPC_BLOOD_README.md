@@ -7,7 +7,8 @@ physics, flying-corpse and spell-light modifications.
 The implementation isolates the skin-conforming NPC blood-decal technique from
 `incident201/brutal-morrowind` v0.2.0 (GPL-3.0), including the barycentric
 mesh projection and cull-time pose tracking. No Dark Messiah of Might and Magic
-resources are used: blood textures are generated in C++ on demand.
+resources are used. The renderer loads external PNG textures from the OpenMW
+virtual filesystem, using the six supplied textures from NPC_Bloodstains_OpenMW_052.
 
 ### Scope
 - NPCs only (not creatures, not the player).
@@ -30,6 +31,27 @@ resources are used: blood textures are generated in C++ on demand.
   `files/data-mw/scripts/omw/combat/local.lua`: normal OpenMW hit callback
   integration, without any second damage event.
 - `files/shaders/compatibility/blooddecal.*`: renderer blending/fog shader.
+
+### Texture installation
+Install the **textures-only** package as a normal OpenMW data directory.
+The data directory must contain:
+
+```
+textures/npc_bloodstains/blood_1.png
+textures/npc_bloodstains/blood_2.png
+textures/npc_bloodstains/blood_3.png
+textures/npc_bloodstains/blood_4.png
+textures/npc_bloodstains/blood_5.png
+textures/npc_bloodstains/blood_6.png
+```
+
+Add that directory to `openmw.cfg` using `data="..." ` (or the launcher).
+Do not enable the previous Lua-only NPC Bloodstains mod or copy its scripts or
+meshes: the native port handles projection itself. PNG textures can be modified
+or replaced without recompiling OpenMW. All available variants are used in a
+round-robin cycle; unavailable or invalid images are skipped. If none are
+available, the native stain effect is disabled and warnings are written to the
+OpenMW log. Restart the game after replacing textures.
 
 ### Build and installation
 Build the branch as an ordinary OpenMW source tree using the existing repository
