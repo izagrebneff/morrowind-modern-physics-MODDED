@@ -45,7 +45,7 @@ namespace MWPhysics
         /// A body without the standard skeleton, as one box: bodyWorld/halfExtents place it, baseWorld is where the
         /// actor's model is, which then follows it (its pose is the only one, unnamed).
         Ragdoll(const MWWorld::Ptr& actor, const btTransform& bodyWorld, const osg::Vec3f& halfExtents, float mass,
-            const osg::Matrixf& baseWorld, PhysicsTaskScheduler* scheduler);
+            const osg::Matrixf& baseWorld, PhysicsTaskScheduler* scheduler, const osg::Vec3f& velocity = {});
         /// A bone of a skinned mesh, and the bounds (in its own space) of the part of the mesh it moves.
         struct SkinnedBone
         {

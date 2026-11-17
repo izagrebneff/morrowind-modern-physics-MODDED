@@ -268,6 +268,7 @@ namespace MWMechanics
             mDynamic[0].setCurrent(mDynamic[0].getBase());
             mDead = false;
             mDeathAnimationFinished = false;
+            setDeathKick(osg::Vec3f());
         }
     }
 

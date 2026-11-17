@@ -2880,8 +2880,11 @@ namespace MWMechanics
             return false;
         CreatureStats& stats = mPtr.getClass().getCreatureStats(mPtr);
         const osg::Vec3f kick = stats.getDeathKick();
+        // Allow a single rigid body for fatal magic if the creature has no usable ragdoll rig.
+        const bool madeRagdoll = MWBase::Environment::get().getWorld()->makeRagdoll(
+            mPtr, kick, stats.hasMagicDeathKick(), false);
         stats.setDeathKick(osg::Vec3f());
-        if (!MWBase::Environment::get().getWorld()->makeRagdoll(mPtr, kick, false, false))
+        if (!madeRagdoll)
             return false;
         mRagdoll = true;
         return true;

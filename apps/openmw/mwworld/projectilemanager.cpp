@@ -145,8 +145,10 @@ namespace
 
     osg::Vec4 getMagicBoltLightDiffuseColor(const ESM::EffectList& effects)
     {
-        // Calculate combined light diffuse color from magical effects
-        osg::Vec4 lightDiffuseColor;
+        // Calculate combined light diffuse color from magical effects, including modded records.
+        if (effects.mList.empty())
+            return osg::Vec4(0.8f, 0.8f, 1.f, 1.f);
+        osg::Vec4 lightDiffuseColor(0.f, 0.f, 0.f, 0.f);
         for (const ESM::IndexedENAMstruct& enam : effects.mList)
         {
             const ESM::MagicEffect* magicEffect
@@ -156,6 +158,16 @@ namespace
         size_t numberOfEffects = effects.mList.size();
         lightDiffuseColor /= static_cast<float>(numberOfEffects);
 
+        // Keep the original hue, but even dark-colored effects must illuminate the environment.
+        const float peak = std::max({ lightDiffuseColor.r(), lightDiffuseColor.g(), lightDiffuseColor.b() });
+        if (peak > 0.f)
+        {
+            const float boost = std::max(1.f, 0.85f / peak);
+            lightDiffuseColor *= boost;
+        }
+        else
+            lightDiffuseColor.set(0.8f, 0.8f, 1.f, 1.f);
+        lightDiffuseColor.a() = 1.f;
         return lightDiffuseColor;
     }
 
@@ -278,17 +290,19 @@ namespace MWWorld
         if (createLight)
         {
             osg::ref_ptr<SceneUtil::Light> projectileLight(new SceneUtil::Light);
-            projectileLight->setAmbient(osg::Vec4(1.0f, 1.0f, 1.0f, 1.0f));
+            // Real point light, attached to the moving transform and collected by the scene LightManager.
+            // No white ambient component: the bolt's ESM effect color lights nearby surfaces.
+            projectileLight->setAmbient(osg::Vec4(0.f, 0.f, 0.f, 1.f));
             projectileLight->setDiffuse(lightDiffuseColor);
-            projectileLight->setSpecular(osg::Vec4(0.0f, 0.0f, 0.0f, 0.0f));
-            projectileLight->setConstantAttenuation(0.f);
-            projectileLight->setLinearAttenuation(0.1f);
-            projectileLight->setQuadraticAttenuation(0.f);
-            projectileLight->setPosition(osg::Vec4(pos, 1.0));
+            projectileLight->setSpecular(osg::Vec4(0.f, 0.f, 0.f, 1.f));
+            projectileLight->setConstantAttenuation(1.f);
+            projectileLight->setLinearAttenuation(0.006f);
+            projectileLight->setQuadraticAttenuation(0.000045f);
+            projectileLight->setPosition(osg::Vec4(0.f, 0.f, 0.f, 1.f));
 
             SceneUtil::LightSource* projectileLightSource = new SceneUtil::LightSource;
             projectileLightSource->setNodeMask(MWRender::Mask_Lighting);
-            projectileLightSource->setRadius(66.f);
+            projectileLightSource->setRadius(240.f); // ~3.4 metres before renderer radius multiplier
 
             state.mNode->addChild(projectileLightSource);
             projectileLightSource->setLight(projectileLight);

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 
 #include <components/esm3/loadcrea.hpp>
 #include <components/esm3/loadench.hpp>
@@ -1378,8 +1379,28 @@ namespace MWMechanics
                 applied |= ESM::ActiveEffect::Flag_Applied;
             }
             else
+            {
+                const bool wasDead = stats.isDead();
                 applied |= applyActorMagicEffect(
                     target, caster, spellParams, effect, receivedMagicDamage, affectedHealth, recalculateMagicka);
+                // Active effects can kill long after the bolt hit, and bypass physical onHit damage.
+                // Only the live-to-dead transition from hostile magical health damage launches the body.
+                if (!wasDead && stats.isDead() && receivedMagicDamage && !caster.isEmpty() && caster != target
+                    && target != getPlayer())
+                {
+                    osg::Vec3f away = target.getRefData().getPosition().asVec3()
+                        - caster.getRefData().getPosition().asVec3();
+                    away.z() = 0.f;
+                    if (away.normalize() == 0.f)
+                    {
+                        const float yaw = target.getRefData().getPosition().rot[2];
+                        away.set(-std::sin(yaw), -std::cos(yaw), 0.f);
+                    }
+                    // About 70 game units per metre. Bounded launch velocity, not damage-scaled force.
+                    // The existing Bullet collisions and damping determine the actual travel distance.
+                    stats.setDeathKick(away * 235.f + osg::Vec3f(0.f, 0.f, 70.f), true);
+                }
+            }
             effect.mMagnitude = magnitude;
             magnitudes.add(EffectKey(effect.mEffectId, effect.getSkillOrAttribute()),
                 EffectParam(effect.mMagnitude - oldMagnitude));

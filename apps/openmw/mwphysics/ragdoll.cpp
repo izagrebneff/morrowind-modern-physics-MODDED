@@ -19,6 +19,7 @@
 #include <components/misc/convert.hpp>
 #include <components/misc/constants.hpp>
 
+#include "../mwmechanics/creaturestats.hpp"
 #include "../mwworld/class.hpp"
 
 #include "collisiontype.hpp"
@@ -243,7 +244,12 @@ namespace MWPhysics
 
             // Falling as it was moving, the upper body thrown back by the killing blow.
             btVector3 partVelocity = Misc::Convert::toBullet(velocity);
-            if (def.mBone == "Bip01 Spine1" || def.mBone == "Bip01 Head")
+            if (actor.getClass().getCreatureStats(actor).hasMagicDeathKick())
+            {
+                // Launch all parts together rather than stretching the joints with a torso-only kick.
+                partVelocity = Misc::Convert::toBullet(kick + osg::Vec3f(0.f, 0.f, std::min(velocity.z(), 0.f)));
+            }
+            else if (def.mBone == "Bip01 Spine1" || def.mBone == "Bip01 Head")
                 partVelocity += Misc::Convert::toBullet(kick);
             else if (def.mBone == "Bip01 Pelvis")
                 partVelocity += Misc::Convert::toBullet(kick) * 0.6f;
@@ -264,7 +270,7 @@ namespace MWPhysics
     }
 
     Ragdoll::Ragdoll(const MWWorld::Ptr& actor, const btTransform& bodyWorld, const osg::Vec3f& halfExtents,
-        float mass, const osg::Matrixf& baseWorld, PhysicsTaskScheduler* scheduler)
+        float mass, const osg::Matrixf& baseWorld, PhysicsTaskScheduler* scheduler, const osg::Vec3f& velocity)
         : mTaskScheduler(scheduler)
     {
         auto part = std::make_shared<Part>(actor);
@@ -272,6 +278,7 @@ namespace MWPhysics
         part->mShape = std::make_unique<btBoxShape>(Misc::Convert::toBullet(halfExtents));
         part->mBoneFromBody = bodyWorld.inverse() * withoutScale(baseWorld, part->mBoneScale);
         makeBody(*part, bodyWorld, mass, 0);
+        part->mBody->setLinearVelocity(Misc::Convert::toBullet(velocity));
         mParts.push_back(std::move(part));
         addToWorld();
     }
@@ -345,7 +352,10 @@ namespace MWPhysics
             const btVector3 size = aabbMax - aabbMin;
             const float volume = static_cast<float>(size.x() * size.y() * size.z()) * 0.6f / (70.f * 70.f * 70.f);
             makeBody(*part, bodyWorld, std::clamp(volume * 1000.f, 0.3f, 200.f), thickness);
-            part->mBody->setLinearVelocity(Misc::Convert::toBullet(velocity + kick * 0.7f));
+            const osg::Vec3f launchVelocity = actor.getClass().getCreatureStats(actor).hasMagicDeathKick()
+                ? kick + osg::Vec3f(0.f, 0.f, std::min(velocity.z(), 0.f))
+                : velocity + kick * 0.7f;
+            part->mBody->setLinearVelocity(Misc::Convert::toBullet(launchVelocity));
 
             partOfBone[i] = static_cast<int>(ragdoll->mParts.size());
             ragdoll->mParts.push_back(std::move(part));
@@ -481,8 +491,11 @@ namespace MWPhysics
             out.z() = 0;
             if (out.normalize() > 0)
                 out *= 50.f;
+            const osg::Vec3f launchVelocity = actor.getClass().getCreatureStats(actor).hasMagicDeathKick()
+                ? kick + osg::Vec3f(0.f, 0.f, std::min(velocity.z(), 0.f))
+                : velocity + kick * 0.7f;
             ragdoll->mParts[i]->mBody->setLinearVelocity(
-                Misc::Convert::toBullet(velocity + kick * 0.7f + out + osg::Vec3f(0, 0, 40)));
+                Misc::Convert::toBullet(launchVelocity + out + osg::Vec3f(0, 0, 40)));
         }
         ragdoll->addToWorld();
         return ragdoll;

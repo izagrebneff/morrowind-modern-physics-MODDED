@@ -66,6 +66,7 @@ namespace MWMechanics
         bool mHitRecovery = false;
         bool mBlock = false;
         osg::Vec3f mDeathKick; // how the killing blow throws the body
+        bool mMagicDeathKick = false; // transient; use a whole-body launch for fatal spells
         std::vector<std::pair<std::string, osg::Matrixf>> mRagdollPose;
         std::vector<StuckProjectile> mStuckProjectiles;
         std::map<ESM::RefId, int> mEmbeddedAmmo;
@@ -242,8 +243,13 @@ namespace MWMechanics
         bool getBlock() const;
 
         /// How the killing blow throws the body (velocity change; not saved).
-        void setDeathKick(const osg::Vec3f& kick) { mDeathKick = kick; }
+        void setDeathKick(const osg::Vec3f& kick, bool magic = false)
+        {
+            mDeathKick = kick;
+            mMagicDeathKick = magic;
+        }
         const osg::Vec3f& getDeathKick() const { return mDeathKick; }
+        bool hasMagicDeathKick() const { return mMagicDeathKick; }
 
         /// Where a dead body's ragdoll bones lie (world matrices; so it lies the same after loading, or coming back
         /// to it). Parents first.

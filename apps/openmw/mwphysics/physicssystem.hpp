@@ -224,7 +224,7 @@ namespace MWPhysics
         bool createRigidPieceRagdoll(
             const MWWorld::Ptr& actor, const std::vector<Ragdoll::RigidPiece>& pieces, const osg::Vec3f& kick);
         /// A dead actor in one piece, which its model follows.
-        bool createCorpseBody(const MWWorld::Ptr& actor);
+        bool createCorpseBody(const MWWorld::Ptr& actor, const osg::Vec3f& velocity = {});
         void addRagdoll(const MWWorld::Ptr& actor, std::unique_ptr<Ragdoll> ragdoll);
         /// Throw away ragdolls that came apart (see Ragdoll::hasComeApart); duration is the time since the last
         /// call. @return their actors

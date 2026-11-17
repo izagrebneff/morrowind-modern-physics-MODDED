@@ -785,7 +785,7 @@ namespace MWPhysics
         return velocity;
     }
 
-    bool PhysicsSystem::createCorpseBody(const MWWorld::Ptr& actor)
+    bool PhysicsSystem::createCorpseBody(const MWWorld::Ptr& actor, const osg::Vec3f& velocity)
     {
         const auto found = mActors.find(actor.mRef);
         const SceneUtil::PositionAttitudeTransform* base = actor.getRefData().getBaseNode();
@@ -806,7 +806,8 @@ namespace MWPhysics
         const float mass = std::clamp(volume * 500.f, 3.f, 400.f);
         const osg::Matrixf baseWorld = osg::Matrixf::scale(base->getScale())
             * osg::Matrixf::rotate(base->getAttitude()) * osg::Matrixf::translate(base->getPosition());
-        addRagdoll(actor, std::make_unique<Ragdoll>(actor, bodyWorld, half, mass, baseWorld, mTaskScheduler.get()));
+        addRagdoll(actor,
+            std::make_unique<Ragdoll>(actor, bodyWorld, half, mass, baseWorld, mTaskScheduler.get(), velocity));
         return true;
     }
 

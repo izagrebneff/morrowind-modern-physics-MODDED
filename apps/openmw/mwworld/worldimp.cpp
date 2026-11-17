@@ -1459,12 +1459,14 @@ namespace MWWorld
         // them fall as one physically simulated collider rather than rejecting
         // corpse physics and leaving the death animation suspended in the air.
         allowOnePiece = allowOnePiece || actor.getClass().canFly(actor);
+        const osg::Vec3f fallbackVelocity
+            = actor.getClass().getCreatureStats(actor).hasMagicDeathKick() ? kick : osg::Vec3f();
         const MWRender::Animation* animation = mRendering->getAnimation(actor);
         if (animation == nullptr)
             return false;
         // A creature whose ragdoll came apart before (see doPhysics) is moved about in one piece.
         if (mFailedRagdollModels.count(std::string(actor.getClass().getModel(actor).value())) != 0)
-            return allowOnePiece && mPhysics->createCorpseBody(actor);
+            return allowOnePiece && mPhysics->createCorpseBody(actor, fallbackVelocity);
 
         // People, and things built like people (skeletons, dremora...): the hand-made body. Many four-legged
         // beasts (guars, rats, wolves...) have bones of the same names, but they aren't shaped like people.
@@ -1497,7 +1499,7 @@ namespace MWWorld
             return true;
 
         // Anything else (bending its mesh as a whole, or partly skinned) stays in one piece.
-        return allowOnePiece && mPhysics->createCorpseBody(actor);
+        return allowOnePiece && mPhysics->createCorpseBody(actor, fallbackVelocity);
     }
 
     void World::removeRagdoll(const MWWorld::ConstPtr& actor)
