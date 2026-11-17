@@ -65,6 +65,7 @@ namespace MWMechanics
         bool mKnockdownOverOneFrame = false;
         bool mHitRecovery = false;
         bool mBlock = false;
+        std::string mNpcBloodData; // BMD1 decal anchors for this actor, independent of rendering lifetime
         osg::Vec3f mDeathKick; // how the killing blow throws the body
         bool mMagicDeathKick = false; // transient; use a whole-body launch for fatal spells
         std::vector<std::pair<std::string, osg::Matrixf>> mRagdollPose;
@@ -248,6 +249,8 @@ namespace MWMechanics
             mDeathKick = kick;
             mMagicDeathKick = magic;
         }
+        const std::string& getNpcBloodData() const { return mNpcBloodData; }
+        void setNpcBloodData(std::string data) { mNpcBloodData = std::move(data); }
         const osg::Vec3f& getDeathKick() const { return mDeathKick; }
         bool hasMagicDeathKick() const { return mMagicDeathKick; }
 

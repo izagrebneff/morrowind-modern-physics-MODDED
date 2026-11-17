@@ -49,6 +49,8 @@ set(SHADER_FILES
     compatibility/globalmap.frag
     compatibility/water.vert
     compatibility/water.frag
+    compatibility/blooddecal.vert
+    compatibility/blooddecal.frag
     compatibility/objects.vert
     compatibility/objects.frag
     compatibility/terrain.vert

@@ -80,6 +80,14 @@ namespace MWRender
         bool mAccurateAiming;
         float mAimingFactor;
 
+        struct BloodDecals;
+        std::shared_ptr<BloodDecals> mBloodDecals;
+        void prewarmBloodDecals();
+        void rebuildBloodDecals();
+        void syncBloodDecals(bool rebuild = false);
+        bool restoreBloodDecals(std::string_view data);
+        std::string getBloodDecalData() const;
+
         void updateNpcBase();
 
         NpcType getNpcType() const;
@@ -159,6 +167,10 @@ namespace MWRender
         void setViewMode(ViewMode viewMode);
 
         void updateParts();
+        bool addBloodDecal(const osg::Vec3f& position, const osg::Vec3f& outward,
+            std::string_view kind, bool power, int hitPart = -1);
+        void addHitBloodDecal(const osg::Vec3f& position, const osg::Vec3f& outward,
+            std::string_view kind, bool power);
 
         /// Rebuilds the NPC, updating their root model, animation sources, and equipment.
         void rebuild();

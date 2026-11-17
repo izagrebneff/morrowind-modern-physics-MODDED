@@ -20,6 +20,7 @@ namespace Settings
         using WithIndex::WithIndex;
 
         SettingValue<int> mShowOwned{ mIndex, "Game", "show owned", makeEnumSanitizerInt({ 0, 1, 2, 3 }) };
+        SettingValue<bool> mNpcBloodDecals{ mIndex, "Game", "npc blood decals" };
         SettingValue<bool> mShowProjectileDamage{ mIndex, "Game", "show projectile damage" };
         SettingValue<bool> mShowMeleeInfo{ mIndex, "Game", "show melee info" };
         SettingValue<bool> mShowEnchantChance{ mIndex, "Game", "show enchant chance" };

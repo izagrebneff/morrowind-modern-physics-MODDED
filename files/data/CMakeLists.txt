@@ -171,6 +171,10 @@ set(BUILTIN_DATA_FILES
     scripts/omw/input/smoothmovement.lua
     scripts/omw/input/gamepadcontrols.lua
     
+    textures/npc_blood/model_blood_slash.png
+    textures/npc_blood/model_blood_small.png
+    textures/npc_blood/model_blood_big.png
+    textures/npc_blood/model_blood_tiny.png
     shaders/adjustments.omwfx
     shaders/bloomlinear.omwfx
     shaders/debug.omwfx

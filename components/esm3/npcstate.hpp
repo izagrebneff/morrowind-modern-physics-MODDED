@@ -1,6 +1,7 @@
 #ifndef OPENMW_ESM_NPCSTATE_H
 #define OPENMW_ESM_NPCSTATE_H
 
+#include <string>
 #include "creaturestats.hpp"
 #include "inventorystate.hpp"
 #include "npcstats.hpp"
@@ -15,6 +16,7 @@ namespace ESM
         InventoryState mInventory;
         NpcStats mNpcStats;
         CreatureStats mCreatureStats;
+        std::string mBloodDecals;
 
         /// Initialize to default state
         void blank() override;

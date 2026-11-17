@@ -269,6 +269,7 @@ namespace MWMechanics
             mDead = false;
             mDeathAnimationFinished = false;
             setDeathKick(osg::Vec3f());
+            mNpcBloodData.clear();
         }
     }
 

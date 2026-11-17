@@ -2,6 +2,9 @@
 #define OPENMW_COMPONENTS_NIFOSG_RIGGEOMETRY_H
 
 #include <osg/Geometry>
+#include "surfacedecals.hpp"
+#include <functional>
+#include <optional>
 #include <osg/Matrixf>
 
 #include <string_view>
@@ -63,6 +66,13 @@ namespace SceneUtil
         void setRootBone(std::string_view name);
 
         osg::ref_ptr<osg::Geometry> getSourceGeometry() const;
+        SurfaceDecals* getOrCreateSurfaceDecals();
+        SurfaceDecals* getSurfaceDecals() const { return mSurfaceDecals.get(); }
+        osg::ref_ptr<osg::Geometry> snapshotWorldGeometry(const osg::NodePath& path,
+            const std::function<std::optional<osg::Matrixf>(std::string_view)>& boneWorld,
+            bool positionsOnly = true, bool dynamicArraysOnly = false,
+            const std::optional<osg::Vec3d>& referenceOrigin = {});
+
 
         void accept(osg::NodeVisitor& nv) override;
         bool supports(const osg::PrimitiveFunctor&) const override { return true; }
@@ -90,6 +100,7 @@ namespace SceneUtil
         osg::Geometry* getGeometry(unsigned int frame) const;
 
         osg::ref_ptr<osg::Geometry> mSourceGeometry;
+        osg::ref_ptr<SurfaceDecals> mSurfaceDecals;
         osg::ref_ptr<const osg::Vec4Array> mSourceTangents;
         Skeleton* mSkeleton{ nullptr };
 

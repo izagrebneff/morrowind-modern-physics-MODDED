@@ -1250,6 +1250,7 @@ namespace MWClass
         if (spellsInitialised)
             customData.mNpcStats.getSpells().clear();
         customData.mNpcStats.readState(npcState.mCreatureStats);
+        customData.mNpcStats.setNpcBloodData(npcState.mBloodDecals);
     }
 
     void Npc::writeAdditionalState(const MWWorld::ConstPtr& ptr, ESM::ObjectState& state) const
@@ -1272,6 +1273,7 @@ namespace MWClass
         customData.mInventoryStore.writeState(npcState.mInventory);
         customData.mNpcStats.writeState(npcState.mNpcStats);
         customData.mNpcStats.writeState(npcState.mCreatureStats);
+        npcState.mBloodDecals = customData.mNpcStats.getNpcBloodData();
     }
 
     int Npc::getBaseGold(const MWWorld::ConstPtr& ptr) const

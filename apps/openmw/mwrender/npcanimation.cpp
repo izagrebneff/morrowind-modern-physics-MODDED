@@ -692,6 +692,7 @@ namespace MWRender
 
         if (wasArrowAttached)
             attachArrow();
+        syncBloodDecals(true);
     }
 
     PartHolderPtr NpcAnimation::insertBoundedPart(VFS::Path::NormalizedView model, std::string_view bonename,
@@ -707,6 +708,7 @@ namespace MWRender
     osg::Vec3f NpcAnimation::runAnimation(float timepassed)
     {
         osg::Vec3f ret = Animation::runAnimation(timepassed);
+        syncBloodDecals();
 
         mHeadAnimationTime->update(timepassed);
 
