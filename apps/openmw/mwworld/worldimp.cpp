@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <cmath>
 #include "worldimp.hpp"
 
 #include <charconv>
@@ -1391,6 +1393,37 @@ namespace MWWorld
     void World::updateAnimatedCollisionShape(const Ptr& ptr)
     {
         mPhysics->updateAnimatedCollisionShape(ptr);
+    }
+
+    void World::wakeLuaCorpseDrop(const MWWorld::Ptr& ptr)
+    {
+        if (!ptr.isEmpty() && ptr.isInCell() && ptr.getCellRef().getCount() > 0)
+            mPhysics->wakeNewObject(ptr);
+    }
+
+    bool World::launchLuaCorpseDrop(const MWWorld::Ptr& ptr, const osg::Vec3f& impulse)
+    {
+        if (ptr.isEmpty() || !ptr.isInCell() || ptr.getCellRef().getCount() <= 0
+            || !ptr.getRefData().isEnabled())
+            return false;
+        const auto* object = mPhysics->getObject(ptr);
+        if (!object || !object->isDynamic())
+            return false;
+        if (!std::isfinite(impulse.x()) || !std::isfinite(impulse.y()) || !std::isfinite(impulse.z()))
+            return false;
+
+        // LuaPhysics's impulse is in game units and scales inversely with the item's weight.
+        // Keep that feel rather than dividing by the fork's internally tripled Bullet mass.
+        const float mass = std::clamp(ptr.getClass().getWeight(ptr), 1.f, 50.f);
+        osg::Vec3f velocity = impulse / mass;
+        constexpr float maxLaunchSpeed = 400.f;
+        if (velocity.length2() > maxLaunchSpeed * maxLaunchSpeed)
+        {
+            velocity.normalize();
+            velocity *= maxLaunchSpeed;
+        }
+        mPhysics->launchObject(ptr, velocity);
+        return true;
     }
 
     bool World::canGrabObject(const MWWorld::ConstPtr& ptr) const

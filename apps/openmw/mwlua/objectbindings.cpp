@@ -1,5 +1,7 @@
 #include "objectbindings.hpp"
 
+#include <cmath>
+
 #include <components/esm3/loadfact.hpp>
 #include <components/esm3/loadnpc.hpp>
 #include <components/lua/luastate.hpp>
@@ -110,7 +112,7 @@ namespace MWLua
             MWBase::Environment::get().getLuaManager()->objectTeleported(newPtr);
         }
 
-        void teleportNotPlayer(const MWWorld::Ptr& ptr, MWWorld::CellStore* destCell, const osg::Vec3f& pos,
+        MWWorld::Ptr teleportNotPlayer(const MWWorld::Ptr& ptr, MWWorld::CellStore* destCell, const osg::Vec3f& pos,
             const osg::Vec3f& rot, bool placeOnGround)
         {
             MWBase::World* world = MWBase::Environment::get().getWorld();
@@ -156,6 +158,17 @@ namespace MWLua
             if (!newPtr.getRefData().isEnabled())
                 world->enable(newPtr);
             MWBase::Environment::get().getLuaManager()->objectTeleported(newPtr);
+            return newPtr;
+        }
+
+        // Identify the original container before the delayed teleport transfers its reference into the world.
+        bool isCorpseInventoryItem(const MWWorld::Ptr& item)
+        {
+            if (item.isEmpty() || !item.getContainerStore())
+                return false;
+            const MWWorld::Ptr owner = item.getContainerStore()->getPtr();
+            return !owner.isEmpty() && owner.getClass().isActor()
+                && owner.getClass().getCreatureStats(owner).isDead();
         }
 
         template <typename ObjT>
@@ -346,6 +359,44 @@ namespace MWLua
             objectT[sol::meta_function::equal_to] = [](const ObjectT& a, const ObjectT& b) { return a.id() == b.id(); };
             objectT[sol::meta_function::to_string] = &ObjectT::toString;
             objectT["sendEvent"] = [context](const ObjectT& dest, std::string eventName, const sol::object& eventData) {
+                // Combat Juice 1.2.4: teleport from a dead actor's inventory, then send the
+                // LuaPhysics impulse in the same global update. The teleport queues its action and
+                // immediately sets the old count to zero. Deliver that one impulse to native Bullet
+                // only after the transfer: otherwise LuaPhysics and Bullet both own the same item.
+                // The normal event remains the fallback for objects without a native dynamic body.
+                if constexpr (std::is_same_v<ObjectT, GObject>)
+                {
+                    if (eventName == "LuaPhysics_ApplyImpulse" && eventData.is<sol::table>())
+                    {
+                        const MWWorld::Ptr item = dest.ptrOrEmpty();
+                        if (!item.isEmpty() && item.getCellRef().getCount() == 0
+                            && isCorpseInventoryItem(item))
+                        {
+                            const sol::table data = eventData.as<sol::table>();
+                            const sol::object impulseArg = data["impulse"];
+                            const sol::object culprit = data["culprit"];
+                            if (culprit == sol::nil && impulseArg.is<osg::Vec3f>())
+                            {
+                                const auto impulse = impulseArg.as<osg::Vec3f>();
+                                if (std::isfinite(impulse.x()) && std::isfinite(impulse.y())
+                                    && std::isfinite(impulse.z()))
+                                {
+                                    auto serialized = LuaUtil::serialize(eventData, context.mSerializer);
+                                    context.mLuaManager->addAction(
+                                        [context, dest, impulse, serialized = std::move(serialized)] {
+                                            const auto itemInWorld = dest.ptrOrEmpty();
+                                            auto world = MWBase::Environment::get().getWorld();
+                                            if (!world->launchLuaCorpseDrop(itemInWorld, impulse))
+                                                context.mLuaEvents->addLocalEvent(
+                                                    { dest.id(), "LuaPhysics_ApplyImpulse", serialized });
+                                        },
+                                        "NativeCorpseGearImpulse");
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
                 context.mLuaEvents->addLocalEvent(
                     { dest.id(), std::move(eventName), LuaUtil::serialize(eventData, context.mSerializer) });
             };
@@ -534,16 +585,19 @@ namespace MWLua
                     }
                     if (ptr.getContainerStore())
                     {
+                        const bool corpseDrop = isCorpseInventoryItem(ptr);
                         DelayedRemovalFn delayedRemovalFn = *removeFn(ptr, count);
                         context.mLuaManager->addAction(
-                            [object, cell, pos, rot, count, delayedRemovalFn, placeOnGround] {
+                            [object, cell, pos, rot, count, delayedRemovalFn, placeOnGround, corpseDrop] {
                                 MWWorld::Ptr oldPtr = object.ptr();
                                 oldPtr.getCellRef().setCount(count);
                                 MWWorld::Ptr newPtr = oldPtr.getClass().moveToCell(oldPtr, *cell);
                                 oldPtr.getCellRef().setCount(0);
                                 newPtr.getRefData().disable();
-                                teleportNotPlayer(newPtr, cell, pos, rot, placeOnGround);
+                                const MWWorld::Ptr placed = teleportNotPlayer(newPtr, cell, pos, rot, placeOnGround);
                                 delayedRemovalFn(oldPtr);
+                                if (corpseDrop)
+                                    MWBase::Environment::get().getWorld()->wakeLuaCorpseDrop(placed);
                             },
                             "TeleportFromContainerAction");
                     }

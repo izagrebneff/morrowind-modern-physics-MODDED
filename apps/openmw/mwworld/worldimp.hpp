@@ -388,6 +388,8 @@ namespace MWWorld
             MWBase::RotationFlags flags = MWBase::RotationFlag_inverseOrder) override;
 
         bool canGrabObject(const MWWorld::ConstPtr& ptr) const override;
+        void wakeLuaCorpseDrop(const MWWorld::Ptr& ptr) override;
+        bool launchLuaCorpseDrop(const MWWorld::Ptr& ptr, const osg::Vec3f& impulse) override;
         /// A dead actor whose body can be made a ragdoll (see grabObject).
         bool canRagdollCorpse(const MWWorld::ConstPtr& ptr) const;
         bool makeRagdollBody(const MWWorld::Ptr& actor, const osg::Vec3f& kick, bool allowOnePiece);

@@ -968,6 +968,8 @@ namespace MWRender
                         attachArrow();
                 }
             }
+            else
+                removeIndividualPart(ESM::PRT_Weapon);
         }
         else
         {

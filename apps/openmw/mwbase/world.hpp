@@ -298,6 +298,11 @@ namespace MWBase
 
         // Player carrying a simulated object in front of the camera.
         virtual bool canGrabObject(const MWWorld::ConstPtr& ptr) const = 0;
+        // A Lua teleport out of a corpse's inventory creates a new loose item, not a loaded sleeping reference.
+        virtual void wakeLuaCorpseDrop(const MWWorld::Ptr&) {}
+        // Combat Juice sends LuaPhysics_ApplyImpulse immediately after that teleport.
+        // Return false when there is no native body, allowing the original Lua event to be delivered.
+        virtual bool launchLuaCorpseDrop(const MWWorld::Ptr&, const osg::Vec3f&) { return false; }
         virtual bool grabObject(const MWWorld::Ptr& ptr) = 0;
         /// Drop the carried object, or throw it where the camera is looking.
         virtual void releaseGrabbedObject(bool throwObject) = 0;
