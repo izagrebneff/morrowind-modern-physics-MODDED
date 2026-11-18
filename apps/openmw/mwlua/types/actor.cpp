@@ -14,7 +14,7 @@
 #include "apps/openmw/mwmechanics/actorutil.hpp"
 #include "apps/openmw/mwmechanics/creaturestats.hpp"
 #include "apps/openmw/mwmechanics/drawstate.hpp"
-#include "apps/openmw/mwrender/npcanimation.hpp"
+#include "apps/openmw/mwrender/actoranimation.hpp"
 #include <components/debug/debuglog.hpp>
 #include "apps/openmw/mwworld/class.hpp"
 #include "apps/openmw/mwworld/inventorystore.hpp"
@@ -479,6 +479,8 @@ namespace MWLua
                     attacker = options.get<sol::optional<Object>>("attacker"), weaponId,
                     successful = options.get<bool>("successful"), sourceType = sourceType,
                     hitPos = options.get<sol::optional<Misc::FiniteVec3f>>("hitPos"),
+                    savedHitPos = options.get<sol::optional<Misc::FiniteVec3f>>("npcBloodHitPos"),
+                    diverseTexture = options.get<sol::optional<std::string>>("npcBloodTexture").value_or(std::string()),
                     attackType = options.get<sol::optional<int>>("type").value_or(-1),
                     strength = options.get<sol::optional<float>>("strength").value_or(0.f)] {
                     MWWorld::Ptr attackerPtr;
@@ -488,26 +490,27 @@ namespace MWLua
                     const auto victim = self.ptr();
                     // The standard Combat path has already adjusted damage; do not change combat or particles.
                     const auto health = damages.find("health");
-                    if (Settings::game().mNpcBloodDecals && successful && hitPos
+                    const auto bloodHitPos = hitPos ? hitPos : savedHitPos;
+                    if (Settings::game().mNpcBloodDecals && successful && bloodHitPos
                         && health != damages.end() && health->second > 0
                         && (sourceType == MWMechanics::DamageSourceType::Melee
                             || sourceType == MWMechanics::DamageSourceType::Ranged)
-                        && victim.getClass().isNpc() && victim != MWMechanics::getPlayer()
+                        && victim.getClass().isActor() && victim != MWMechanics::getPlayer()
                         && !victim.getClass().getCreatureStats(victim).isDead())
                     {
                         try
                         {
                             auto world = MWBase::Environment::get().getWorld();
-                            if (auto* npc = dynamic_cast<MWRender::NpcAnimation*>(world->getAnimation(victim)))
+                            if (auto* npc = dynamic_cast<MWRender::ActorAnimation*>(world->getAnimation(victim)))
                             {
-                                const osg::Vec3f point = hitPos->mValue;
+                                const osg::Vec3f point = bloodHitPos->mValue;
                                 osg::Vec3f outward = attackerPtr.isEmpty() ? osg::Vec3f(0, 1, 0)
                                     : attackerPtr.getRefData().getPosition().asVec3()
                                         - victim.getRefData().getPosition().asVec3();
                                 outward.z() += 12.f;
                                 const std::string_view kind = sourceType == MWMechanics::DamageSourceType::Melee
                                     ? (attackType == 0 ? "chop" : attackType == 1 ? "slash" : "thrust") : "ranged";
-                                npc->addHitBloodDecal(point, outward, kind, strength >= 0.8f);
+                                npc->addHitBloodDecal(point, outward, kind, strength >= 0.8f, diverseTexture);
                             }
                         }
                         catch (const std::exception& e)

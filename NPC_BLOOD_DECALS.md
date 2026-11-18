@@ -1,9 +1,10 @@
-# NPC Blood Decals (OpenMW 0.52)
-Standalone surface blood decals, based on the geometric approach in [Brutal Morrowind](https://github.com/incident201/brutal-morrowind/tree/16843789f84d588334c74417ee25a8cdf3d71e80). GPL code adapted only for surface projection / rendering, no imported proprietary resources. Base: adc000d0e9ea529f91ed4ea7808501ece0d93276.
-- Native C++ on-hit callback, after standard armor/difficulty calculation; only successful melee/ranged health damage, NPCs other than player, including killing blows.
-- Original blood particles and all gameplay/physics remain unchanged.
-- Per-surface barycentric anchors, current-pose skinning, rigid and morph support. Max 24 stains/8192 decal vertices per NPC.
-- NBLO optional save subrecord; existing saves without it load normally. Saves with NBLO should be used with this branch; compatibility with unmodified OpenMW not guaranteed.
-- Enabled by default. In settings.cfg: [Game] npc blood decals = true.
-- Four original, procedurally drawn RGBA PNG placeholder textures bundled via resources/vfs/textures/npc_blood. Replace with same names in a higher priority data directory, use neutral RGB128 and alpha as mask (DecalModulate). No Dark Messiah, no imported Lua, animations, sounds, particles, or sparks are required.
-- Build and in-game verification required.
+# NPC and creature blood decals, OpenMW 0.52
+Based on previous Magic Physics / NPC Blood Decals branch (3518395f72a159710537f376d4c63d137ccdd680).
+Native C++ surface projection from Brutal Morrowind; no Dark Messiah resources or scripts.
+- NPCs except player; creatures with both CreatureAnimation and CreatureWeaponAnimation.
+- Successful melee and ranged health-damage hits only; original particles unchanged. The standard combat interface preserves hit position if Diverse Blood clears it and reads its exposed texture override.
+- Diverse Blood 2.4.2: exact normalized model lookup (257 models supplied), live user color overrides when exposed; red fallback. No energy stains. Ghosts, skeletons, bonewalkers, atronachs, frost elementals, Dwemer constructs, golems, fabricants, spriggans and similar models/IDs excluded before choosing any color.
+- 12 distinct PNGs per color: red, dark, blue, green, orange, gold, white. 01–04 cuts, 05–08 small, 09–12 large. Selection is randomized within group. Textures in original ZIP at files/data/npc_blood_textures.zip; build installs them in resources/vfs/textures/npc_blood. Each PNG uses alpha as mask; neutral RGB128 has no modulation. Put replacements at textures/npc_blood/model_blood_COLOR_01.png etc. in an OpenMW data directory after other data directories. No ESP required. Restart OpenMW after replacing.
+- BMD2 records keep color and variant; BMD1 old red records load and map to four equivalent new textures. NBLO optional subrecord for both actor types. Old saves compatible with this branch; compatibility in reverse not guaranteed.
+- Default setting [Game] npc blood decals = true. Max 24 stains/8192 vertices per actor. New creature models with unknown names may need an added exclusion.
+- Build and in-game validation required. 

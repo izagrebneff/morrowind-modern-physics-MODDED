@@ -41,6 +41,7 @@ namespace MWRender
         void showCarriedLeft(bool show) override;
 
         void updateParts();
+        std::vector<osg::Node*> bloodExcludedNodes() const override;
 
         void updatePart(PartHolderPtr& scene, int slot);
 

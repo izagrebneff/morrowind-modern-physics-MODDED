@@ -171,10 +171,6 @@ set(BUILTIN_DATA_FILES
     scripts/omw/input/smoothmovement.lua
     scripts/omw/input/gamepadcontrols.lua
     
-    textures/npc_blood/model_blood_slash.png
-    textures/npc_blood/model_blood_small.png
-    textures/npc_blood/model_blood_big.png
-    textures/npc_blood/model_blood_tiny.png
     shaders/adjustments.omwfx
     shaders/bloomlinear.omwfx
     shaders/debug.omwfx
@@ -274,3 +270,21 @@ set(BUILTIN_DATA_FILES
 foreach (f ${BUILTIN_DATA_FILES})
     copy_resource_file("${CMAKE_CURRENT_SOURCE_DIR}/${f}" "${OPENMW_RESOURCES_ROOT}" "resources/vfs/${f}")
 endforeach (f)
+
+# Original standalone 12-variant sets. Extract at configure time for CMake 3.16 compatibility.
+set(NPC_BLOOD_ASSETS "${CMAKE_CURRENT_BINARY_DIR}/npc_blood_assets")
+file(MAKE_DIRECTORY "${NPC_BLOOD_ASSETS}")
+execute_process(COMMAND "${CMAKE_COMMAND}" -E tar xf "${CMAKE_CURRENT_SOURCE_DIR}/npc_blood_textures.zip"
+    WORKING_DIRECTORY "${NPC_BLOOD_ASSETS}" RESULT_VARIABLE NPC_BLOOD_EXTRACT_RESULT)
+if(NOT NPC_BLOOD_EXTRACT_RESULT EQUAL 0)
+    message(FATAL_ERROR "Could not extract NPC/creature blood texture pack")
+endif()
+foreach(color red dark blue green orange gold white)
+    foreach(index 01 02 03 04 05 06 07 08 09 10 11 12)
+        set(f "textures/npc_blood/model_blood_${color}_${index}.png")
+        if(NOT EXISTS "${NPC_BLOOD_ASSETS}/${f}")
+            message(FATAL_ERROR "Missing blood texture: ${f}")
+        endif()
+        copy_resource_file("${NPC_BLOOD_ASSETS}/${f}" "${OPENMW_RESOURCES_ROOT}" "resources/vfs/${f}")
+    endforeach()
+endforeach()

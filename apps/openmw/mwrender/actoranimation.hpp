@@ -44,8 +44,24 @@ namespace MWRender
         bool updateCarriedLeftVisible(ESM::RefId weaptype) const override;
 
         void removeFromScene() override;
+        osg::Vec3f runAnimation(float duration) override;
+        void addHitBloodDecal(const osg::Vec3f& position, const osg::Vec3f& outward,
+            std::string_view kind, bool power, std::string_view diverseTexture = {});
+        virtual std::vector<osg::Node*> bloodExcludedNodes() const;
+
 
     protected:
+        struct BloodDecals;
+        std::shared_ptr<BloodDecals> mBloodDecals;
+        void prewarmBloodDecals();
+        osg::StateSet* prepareBloodStyle(unsigned style);
+        void rebuildBloodDecals();
+        void syncBloodDecals(bool rebuild = false);
+        bool restoreBloodDecals(std::string_view data);
+        std::string getBloodDecalData() const;
+        bool bloodAllowed() const;
+        bool addBloodDecal(const osg::Vec3f& position, const osg::Vec3f& outward,
+            std::string_view kind, bool power, unsigned style);
         osg::Group* getBoneByName(std::string_view boneName) const;
         void updateHolsteredWeapon(bool showHolsteredWeapons);
         void updateHolsteredShield(bool showCarriedLeft);

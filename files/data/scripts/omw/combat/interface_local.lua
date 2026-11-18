@@ -139,7 +139,14 @@ return {
         --- (Local) Hit this actor. Normally called as Hit event from the attacking actor, with the same parameters.
         -- @function [parent=#Combat] onHit
         -- @param #AttackInfo attackInfo
-        onHit = function(attackInfo) auxUtil.callEventHandlers(onHitHandlers, attackInfo) end,
+        onHit = function(attackInfo)
+            -- Diverse Blood 2.4.2 can clear hitPos to replace vanilla particles.
+            -- Save only metadata for the native surface stain; do not alter particle behavior.
+            attackInfo.npcBloodHitPos = attackInfo.hitPos
+            local diverse = I.DiverseBlood
+            attackInfo.npcBloodTexture = diverse and diverse.texture or nil
+            auxUtil.callEventHandlers(onHitHandlers, attackInfo)
+        end,
 
         --- (Local, Global) Picks a random armor slot and returns the item equipped in that slot.
         -- Used to pick which armor to damage / skill to increase when hit during combat.

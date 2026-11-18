@@ -40,6 +40,21 @@
 
 namespace MWRender
 {
+    osg::Vec3f ActorAnimation::runAnimation(float duration)
+    {
+        auto movement = Animation::runAnimation(duration);
+        syncBloodDecals();
+        return movement;
+    }
+
+    std::vector<osg::Node*> ActorAnimation::bloodExcludedNodes() const
+    {
+        std::vector<osg::Node*> result;
+        for (const auto* part : { mScabbard.get(), mHolsteredShield.get() })
+            if (part) result.push_back(part->getNode().get());
+        return result;
+    }
+
 
     ActorAnimation::ActorAnimation(
         const MWWorld::Ptr& ptr, osg::ref_ptr<osg::Group> parentNode, Resource::ResourceSystem* resourceSystem)

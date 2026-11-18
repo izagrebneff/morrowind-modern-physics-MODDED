@@ -32,6 +32,7 @@ namespace MWRender
 
             if (animated)
                 addAnimSource(model, model);
+            syncBloodDecals(true);
         }
     }
 
@@ -93,6 +94,15 @@ namespace MWRender
             updatePart(mWeapon, MWWorld::InventoryStore::Slot_CarriedRight);
         if (mShowCarriedLeft)
             updatePart(mShield, MWWorld::InventoryStore::Slot_CarriedLeft);
+        syncBloodDecals(true);
+    }
+
+    std::vector<osg::Node*> CreatureWeaponAnimation::bloodExcludedNodes() const
+    {
+        auto result = ActorAnimation::bloodExcludedNodes();
+        for (const auto* part : { mWeapon.get(), mShield.get() })
+            if (part) result.push_back(part->getNode().get());
+        return result;
     }
 
     void CreatureWeaponAnimation::updatePart(PartHolderPtr& scene, int slot)
@@ -265,7 +275,7 @@ namespace MWRender
 
     osg::Vec3f CreatureWeaponAnimation::runAnimation(float duration)
     {
-        osg::Vec3f ret = Animation::runAnimation(duration);
+        osg::Vec3f ret = ActorAnimation::runAnimation(duration);
 
         WeaponAnimation::configureControllers(mPtr.getRefData().getPosition().rot[0] + getBodyPitchRadians());
 

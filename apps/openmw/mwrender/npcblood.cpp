@@ -4,10 +4,16 @@
 #include "../mwmechanics/actorutil.hpp"
 #include "../mwworld/class.hpp"
 #include "npcanimation.hpp"
+#include "creatureanimation.hpp"
+#include "bloodcolors.hpp"
+#include <random>
+#include <array>
+#include <cctype>
 #include "vismask.hpp"
 #include <chrono>
 #include <components/debug/debuglog.hpp>
 #include <components/esm3/loadarmo.hpp>
+#include <components/esm3/loadcrea.hpp>
 #include <components/resource/imagemanager.hpp>
 #include <components/resource/resourcesystem.hpp>
 #include <components/resource/scenemanager.hpp>
@@ -44,7 +50,57 @@ namespace MWRender
     {
         using Anchors = std::vector<SceneUtil::SurfaceDecals::Anchor>;
         constexpr std::size_t MaxWounds = 24, MaxActorVertices = 8192, MaxSaveBytes = 400000;
-        const char* const Styles[]{ "slash", "small", "big", "tiny" };
+        constexpr unsigned Variants = 12;
+        constexpr unsigned ColorCount = 7;
+        constexpr unsigned StyleCount = Variants * ColorCount;
+        constexpr int CreaturePart = ESM::PRT_Count;
+        const char* const Colors[]{ "red", "dark", "blue", "green", "orange", "gold", "white" };
+
+        std::string lower(std::string s)
+        {
+            std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            std::replace(s.begin(), s.end(), '\\', '/');
+            return s;
+        }
+
+        std::string creatureModel(const MWWorld::ConstPtr& ptr)
+        {
+            auto model = lower(std::string(ptr.getClass().getModel(ptr).value()));
+            if (model.starts_with("meshes/")) model.erase(0, 7);
+            return model;
+        }
+
+        bool bloodless(const MWWorld::ConstPtr& ptr)
+        {
+            if (ptr.getType() != ESM::Creature::sRecordId) return false;
+            const auto model = creatureModel(ptr);
+            const auto id = lower(ptr.getCellRef().getRefId().serializeText());
+            const auto key = model + " " + id;
+            if (knownBloodColor(model) == "energy") return true;
+            for (const char* word : { "ghost", "specter", "spectre", "wraith", "spirit", "ancestor_", "skeleton",
+                     "skeletal", "skel_", "/skel", "skel.", "bonewalker", "atronach", "atro_", "centurion", "spherearcher",
+                     "dwemer", "dwarven", "dwspecter", "automat", "golem", "construct", "iceminion", "ice_minion",
+                     "monarch_frost", "monarch_flame", "storm_tyrant", "fabricant", "spriggan", "lich", "ayl_guard" })
+                if (key.find(word) != std::string::npos) return true;
+            return false;
+        }
+
+        int selectColor(const MWWorld::ConstPtr& ptr, std::string_view texture)
+        {
+            if (bloodless(ptr)) return -1;
+            auto name = lower(std::string(texture));
+            if (name.find("tx_blood_energy.dds") != std::string::npos) return -1;
+            for (unsigned i = 1; i < ColorCount; ++i)
+                if (name.ends_with(std::string("tx_blood_") + Colors[i] + ".dds")) return static_cast<int>(i);
+            if (name.ends_with("tx_blood.dds")) return 0;
+            if (ptr.getType() == ESM::Creature::sRecordId)
+            {
+                const auto color = knownBloodColor(creatureModel(ptr));
+                for (unsigned i = 1; i < ColorCount; ++i)
+                    if (color == Colors[i]) return static_cast<int>(i);
+            }
+            return 0;
+        }
 
         // Ordinary Geometry is often shared between actors. Replace only this
         // actor's parent edge, keeping source arrays/materials immutable.
@@ -138,6 +194,7 @@ namespace MWRender
             int part;
             std::string model;
             unsigned ordinal = 0;
+            std::vector<osg::Node*> excluded;
             SurfacesVisitor(std::vector<Surface>& output, int p, std::string m)
                 : osg::NodeVisitor(TRAVERSE_ALL_CHILDREN)
                 , out(output)
@@ -161,6 +218,9 @@ namespace MWRender
             }
             void apply(osg::Drawable& drawable) override
             {
+                for (auto* node : excluded)
+                    if (std::find(getNodePath().begin(), getNodePath().end(), node) != getNodePath().end())
+                        return;
                 Surface s;
                 s.part = part;
                 s.model = model;
@@ -204,6 +264,28 @@ namespace MWRender
             }
         };
 
+        void collectSurfaces(ActorAnimation& actor, std::vector<Surface>& surfaces)
+        {
+            const auto ptr = actor.getPtr();
+            auto* root = ptr.getRefData().getBaseNode();
+            if (auto* npc = dynamic_cast<NpcAnimation*>(&actor))
+            {
+                for (int part = 0; part < ESM::PRT_Count; ++part)
+                    if (part != ESM::PRT_Weapon && part != ESM::PRT_Shield && part != ESM::PRT_Hair)
+                        if (const auto* holder = npc->getPart(static_cast<ESM::PartReferenceType>(part)))
+                        {
+                            SurfacesVisitor visitor(surfaces, part, holder->getModel().value());
+                            visitor.collect(holder->getNode(), root);
+                        }
+            }
+            else if (ptr.getType() == ESM::Creature::sRecordId && actor.getObjectRoot())
+            {
+                SurfacesVisitor visitor(surfaces, CreaturePart, creatureModel(ptr));
+                visitor.excluded = actor.bloodExcludedNodes();
+                visitor.collect(actor.getObjectRoot(), root);
+            }
+        }
+
         osg::ref_ptr<osg::Geometry> posed(
             const Surface& s, const std::function<std::optional<osg::Matrixf>(std::string_view)>& bones)
         {
@@ -240,7 +322,7 @@ namespace MWRender
 
         struct Writer
         {
-            std::string data = "BMD1";
+            std::string data = "BMD2";
             void u32(std::uint32_t n)
             {
                 for (unsigned i = 0; i < 4; ++i)
@@ -292,7 +374,7 @@ namespace MWRender
         };
     }
 
-    struct NpcAnimation::BloodDecals
+    struct ActorAnimation::BloodDecals
     {
         struct Record
         {
@@ -303,31 +385,41 @@ namespace MWRender
             Anchors anchors;
         };
         std::vector<Record> records;
-        std::array<osg::ref_ptr<osg::StateSet>, 4> states;
+        std::array<osg::ref_ptr<osg::StateSet>, StyleCount> states;
+        std::array<bool, StyleCount> attempted{};
         std::string lastData;
         bool active = false;
-        bool prepared = false;
         std::uint64_t added = 0, rejected = 0, evicted = 0;
         std::size_t attached = 0, vertices = 0;
         double lastDistance = 0, lastMilliseconds = 0;
     };
 
-    void NpcAnimation::prewarmBloodDecals()
+    bool ActorAnimation::bloodAllowed() const
     {
-        if (!Settings::game().mNpcBloodDecals || mPtr == MWMechanics::getPlayer() || mViewMode != VM_Normal)
-            return;
-        if (!mBloodDecals)
+        if (mPtr == MWMechanics::getPlayer() || !mObjectRoot)
+            return false;
+        if (const auto* npc = dynamic_cast<const NpcAnimation*>(this))
+            return npc->isBloodView();
+        return mPtr.getType() == ESM::Creature::sRecordId && !bloodless(mPtr);
+    }
+
+    void ActorAnimation::prewarmBloodDecals()
+    {
+        if (Settings::game().mNpcBloodDecals && bloodAllowed() && !mBloodDecals)
             mBloodDecals = std::make_shared<BloodDecals>();
+    }
+
+    osg::StateSet* ActorAnimation::prepareBloodStyle(unsigned i)
+    {
+        if (!mBloodDecals || i >= StyleCount) return nullptr;
         auto& blood = *mBloodDecals;
-        if (blood.prepared)
-            return;
-        blood.prepared = true;
-        osg::ref_ptr<osg::Group> warm = new osg::Group;
-        for (unsigned i = 0; i < 4; ++i)
-        {
-            const VFS::Path::Normalized path(std::string("textures/npc_blood/model_blood_") + Styles[i] + ".png");
-            if (!mResourceSystem->getVFS()->exists(path))
-                continue;
+        if (blood.attempted[i]) return blood.states[i].get();
+        blood.attempted[i] = true;
+        const unsigned variant = i % Variants + 1;
+        const std::string filename = std::string("textures/npc_blood/model_blood_") + Colors[i / Variants]
+            + "_" + (variant < 10 ? "0" : "") + std::to_string(variant) + ".png";
+        const VFS::Path::Normalized path(filename);
+        if (!mResourceSystem->getVFS()->exists(path)) return nullptr;
             osg::ref_ptr<osg::Texture2D> texture
                 = new osg::Texture2D(mResourceSystem->getImageManager()->getImage(path));
             texture->setWrap(osg::Texture::WRAP_S, osg::Texture::CLAMP_TO_EDGE);
@@ -355,17 +447,13 @@ namespace MWRender
             state = geometry->getStateSet();
             if (auto* program = state->getAttribute(osg::StateAttribute::PROGRAM))
                 state->setAttributeAndModes(program, flags);
-            blood.states[i] = state;
-            warm->addChild(geometry);
-        }
-        if (warm->getNumChildren())
-        {
-            if (auto* compile = mResourceSystem->getSceneManager()->getIncrementalCompileOperation())
-                compile->add(warm);
-        }
+        blood.states[i] = state;
+        if (auto* compile = mResourceSystem->getSceneManager()->getIncrementalCompileOperation())
+            compile->add(geometry);
+        return blood.states[i].get();
     }
 
-    void NpcAnimation::rebuildBloodDecals()
+    void ActorAnimation::rebuildBloodDecals()
     {
         if (!mBloodDecals)
             return;
@@ -373,22 +461,18 @@ namespace MWRender
         blood.attached = 0;
         blood.vertices = 0;
         std::vector<Surface> surfaces;
-        for (int part = 0; part < ESM::PRT_Count; ++part)
-            if (part != ESM::PRT_Weapon && part != ESM::PRT_Shield && mObjectParts[part])
-            {
-                SurfacesVisitor visitor(surfaces, part, mObjectParts[part]->getModel().value());
-                visitor.collect(mObjectParts[part]->getNode(), mPtr.getRefData().getBaseNode());
-            }
+        collectSurfaces(*this, surfaces);
         for (auto& s : surfaces)
             if (auto* marks = s.marks())
                 marks->clear();
-        if (!Settings::game().mNpcBloodDecals) return;
+        if (!Settings::game().mNpcBloodDecals || !bloodAllowed()) return;
         for (const auto& record : blood.records)
             for (auto& s : surfaces)
                 if (record.part == s.part && record.ordinal == s.ordinal && record.model == s.model
                     && record.fingerprint == s.fingerprint)
                     if (auto* marks = s.attach())
-                        if (marks->addPatch(record.anchors, blood.states[record.style], Mask_Effect))
+                        if (auto* state = prepareBloodStyle(record.style))
+                        if (marks->addPatch(record.anchors, state, Mask_Effect))
                         {
                             ++blood.attached;
                             blood.vertices += record.anchors.size();
@@ -396,35 +480,27 @@ namespace MWRender
                         }
     }
 
-    bool NpcAnimation::addBloodDecal(
-        const osg::Vec3f& position, const osg::Vec3f& outward, std::string_view kind, bool power, int hitPart)
+    bool ActorAnimation::addBloodDecal(
+        const osg::Vec3f& position, const osg::Vec3f& outward, std::string_view kind, bool power, unsigned style)
     {
         prewarmBloodDecals();
         if (!mBloodDecals || !Settings::game().mNpcBloodDecals)
             return false;
         auto& blood = *mBloodDecals;
-        const unsigned style = kind == "slash" || kind == "chop" ? 0 : power ? 2 : 1;
-        if (!blood.states[style])
+        if (!prepareBloodStyle(style))
             return false;
         const auto start = std::chrono::steady_clock::now();
         try
         {
             std::vector<Surface> surfaces;
-            for (int part = 0; part < ESM::PRT_Count; ++part)
-                if (part != ESM::PRT_Weapon && part != ESM::PRT_Shield && part != ESM::PRT_Hair && mObjectParts[part]
-                    && (hitPart < 0 || hitPart == part))
-                {
-                    SurfacesVisitor visitor(surfaces, part, mObjectParts[part]->getModel().value());
-                    visitor.collect(mObjectParts[part]->getNode(), mPtr.getRefData().getBaseNode());
-                }
+            collectSurfaces(*this, surfaces);
             const auto bones = [this](std::string_view name) { return getBoneWorldMatrix(name); };
             SceneUtil::DecalProjector::Result best;
             Surface* selected = nullptr;
             auto tangent = osg::Vec3d(0, 0, 1) ^ osg::Vec3d(outward);
             if (kind == "chop")
                 tangent = osg::Vec3d(0, 0, 1);
-            // Native units: the DM slash is 64 px at .1 Source inches/px.
-            const double size = (style == 0 ? 15. : 24.) * (power ? 1.35 : 1.);
+            const double size = (style % Variants < 4 ? 15. : style % Variants < 8 ? 21. : 27.) * (power ? 1.2 : 1.);
             for (auto& s : surfaces)
                 if (auto geometry = posed(s, bones))
                 {
@@ -476,7 +552,7 @@ namespace MWRender
         }
     }
 
-    std::string NpcAnimation::getBloodDecalData() const
+    std::string ActorAnimation::getBloodDecalData() const
     {
         if (!mBloodDecals || mBloodDecals->records.empty())
             return {};
@@ -504,7 +580,7 @@ namespace MWRender
         return out.data;
     }
 
-    bool NpcAnimation::restoreBloodDecals(std::string_view data)
+    bool ActorAnimation::restoreBloodDecals(std::string_view data)
     {
         prewarmBloodDecals();
         if (!mBloodDecals || !Settings::game().mNpcBloodDecals)
@@ -514,7 +590,8 @@ namespace MWRender
             std::vector<BloodDecals::Record> records;
             if (!data.empty())
             {
-                if (data.size() > MaxSaveBytes || data.substr(0, 4) != "BMD1")
+                const bool legacy = data.substr(0, 4) == "BMD1";
+                if (data.size() > MaxSaveBytes || (!legacy && data.substr(0, 4) != "BMD2"))
                     return false;
                 Reader in{ data };
                 const auto count = in.u32();
@@ -527,11 +604,17 @@ namespace MWRender
                     r.part = in.u32();
                     r.ordinal = in.u32();
                     r.style = in.u32();
+                    if (legacy)
+                    {
+                        if (r.style >= 4) return false;
+                        constexpr unsigned oldStyles[]{ 0, 4, 8, 5 };
+                        r.style = oldStyles[r.style];
+                    }
                     r.model = in.string();
                     r.fingerprint = in.u32();
                     r.fingerprint |= std::uint64_t(in.u32()) << 32;
                     const auto size = in.u32();
-                    if (r.part < 0 || r.part >= ESM::PRT_Count || r.ordinal > 4096 || r.style >= 4 || !size || size % 3
+                    if (r.part < 0 || r.part > CreaturePart || r.ordinal > 4096 || r.style >= StyleCount || !size || size % 3
                         || size > 3072 || (total += size) > MaxActorVertices)
                         return false;
                     r.anchors.reserve(size);
@@ -569,11 +652,13 @@ namespace MWRender
     }
 
 
-    void NpcAnimation::syncBloodDecals(bool rebuild)
+    void ActorAnimation::syncBloodDecals(bool rebuild)
     {
-        if (mViewMode != VM_Normal || mPtr == MWMechanics::getPlayer())
-            return;
         const auto& saved = mPtr.getClass().getCreatureStats(mPtr).getNpcBloodData();
+        if (!mBloodDecals && saved.empty())
+            return;
+        if (!bloodAllowed())
+            return;
         if (!Settings::game().mNpcBloodDecals)
         {
             if (mBloodDecals && mBloodDecals->active)
@@ -599,23 +684,29 @@ namespace MWRender
         blood.active = true;
     }
 
-    void NpcAnimation::addHitBloodDecal(const osg::Vec3f& position, const osg::Vec3f& direction,
-        std::string_view kind, bool power)
+    void ActorAnimation::addHitBloodDecal(const osg::Vec3f& position, const osg::Vec3f& direction,
+        std::string_view kind, bool power, std::string_view diverseTexture)
     {
-        if (!Settings::game().mNpcBloodDecals || mViewMode != VM_Normal || mPtr == MWMechanics::getPlayer())
+        if (!Settings::game().mNpcBloodDecals || !bloodAllowed())
             return;
+        const int color = selectColor(mPtr, diverseTexture);
+        if (color < 0) return;
+        static std::mt19937 rng(0xB100D);
+        const unsigned group = kind == "slash" || kind == "chop" ? 0 : power ? 8 : 4;
+        const unsigned style = static_cast<unsigned>(color) * Variants + group
+            + std::uniform_int_distribution<unsigned>(0, 3)(rng);
         syncBloodDecals();
         osg::Vec3f outward = direction;
         if (outward.normalize() < 0.001f)
             outward.set(0, 1, 0);
-        if (addBloodDecal(position, outward, kind, power))
+        if (addBloodDecal(position, outward, kind, power, style))
             return;
         auto world = MWBase::Environment::get().getWorld();
         const auto tryRay = [&](const osg::Vec3f& p) {
             MWPhysics::RayCastingResult ray;
             if (world->castRenderingRay(ray, p + outward * 96.f, p - outward * 96.f, true, false, true)
                 && ray.mHitObject == mPtr)
-                return addBloodDecal(ray.mHitPos, ray.mHitNormal, kind, power);
+                return addBloodDecal(ray.mHitPos, ray.mHitNormal, kind, power, style);
             return false;
         };
         if (tryRay(position))
@@ -624,7 +715,7 @@ namespace MWRender
             if (const auto anchor = getBoneWorldMatrix(bone))
             {
                 const osg::Vec3f p = anchor->getTrans();
-                if (tryRay(p) || addBloodDecal(p + outward * 10.f, outward, kind, power))
+                if (tryRay(p) || addBloodDecal(p + outward * 10.f, outward, kind, power, style))
                     return;
             }
     }
