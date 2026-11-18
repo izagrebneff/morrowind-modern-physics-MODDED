@@ -479,8 +479,8 @@ namespace MWLua
                     attacker = options.get<sol::optional<Object>>("attacker"), weaponId,
                     successful = options.get<bool>("successful"), sourceType = sourceType,
                     hitPos = options.get<sol::optional<Misc::FiniteVec3f>>("hitPos"),
-                    attackType = options.get_or<int>("type", -1),
-                    strength = options.get_or<float>("strength", 0.f)] {
+                    attackType = options.get<sol::optional<int>>("type").value_or(-1),
+                    strength = options.get<sol::optional<float>>("strength").value_or(0.f)] {
                     MWWorld::Ptr attackerPtr;
                     MWWorld::Ptr weaponPtr;
                     if (attacker)
