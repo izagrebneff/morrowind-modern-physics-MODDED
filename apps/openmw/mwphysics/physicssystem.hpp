@@ -231,6 +231,8 @@ namespace MWPhysics
         std::vector<MWWorld::Ptr> removeFailedRagdolls(float duration);
         /// Make the ragdoll start out still and asleep (one that was lying there before).
         void settleRagdoll(const MWWorld::ConstPtr& actor);
+        void setActiveRagdollTargets(const MWWorld::ConstPtr& actor,
+            const std::vector<std::pair<std::string, osg::Matrixf>>& targets);
         void removeRagdoll(const MWWorld::ConstPtr& actor);
         bool hasRagdoll(const MWWorld::ConstPtr& actor) const;
         /// Push the dead actor's ragdoll where it was hit (point, world space) with impulse. False without one.

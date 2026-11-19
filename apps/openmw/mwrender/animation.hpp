@@ -192,6 +192,16 @@ namespace MWRender
         AnimSourceList mAnimSources;
         // Opt-in marker from a Lua replacement death animation, consumed synchronously by CharacterController.
         std::string mHybridDeathGroup;
+        struct ActiveDeathTrack
+        {
+            osg::Matrixf mLocalRotation;
+            osg::ref_ptr<SceneUtil::KeyframeController> mController;
+        };
+        std::vector<std::pair<std::string, std::vector<ActiveDeathTrack>>> mActiveDeathTracks;
+        std::shared_ptr<AnimationTime> mActiveDeathClock;
+        std::shared_ptr<float> mActiveDeathTime;
+        float mActiveDeathStop = 0.f;
+        float mActiveDeathSpeed = 1.f;
 
         std::unordered_set<std::string_view> mSupportedAnimations;
         mutable std::vector<std::pair<std::string, MWWorld::MovementDirectionFlags>> mSupportedDirections;
@@ -476,6 +486,11 @@ namespace MWRender
         void setBoneWorldMatrix(std::string_view bone, const osg::Matrixf& world);
         /// Stop every animation, leaving the bones as they are.
         void stopAllAnimations();
+        // Isolated rotation-only sampler: never writes the displayed skeleton.
+        bool beginActiveDeath(std::string_view group,
+            const std::vector<std::pair<std::string, osg::Matrixf>>& physicalBones);
+        std::vector<std::pair<std::string, osg::Matrixf>> sampleActiveDeath(float duration);
+        void endActiveDeath();
         void markHybridDeathGroup(const std::string& group)
         {
             if (getCurrentTime(group) >= 0.f)

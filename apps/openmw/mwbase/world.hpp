@@ -323,6 +323,8 @@ namespace MWBase
             const MWWorld::Ptr& actor, const osg::Vec3f& kick, bool allowOnePiece, bool atRest)
             = 0;
         virtual void removeRagdoll(const MWWorld::ConstPtr& actor) = 0;
+        virtual void setActiveRagdollTargets(const MWWorld::ConstPtr&,
+            const std::vector<std::pair<std::string, osg::Matrixf>>&) {}
 
         /// A simulated object fell into water here, going down at speed: ripples, and a splash if fast.
         virtual void objectEnteredWater(const MWWorld::Ptr& object, const osg::Vec3f& position, float speed) = 0;

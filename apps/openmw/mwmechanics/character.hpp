@@ -167,7 +167,6 @@ namespace MWMechanics
         bool mRagdollRestored = false; // tried to bring back how it lay (see restoreRagdoll)
         bool mDying = false; // in kill()
         std::string mHybridDeathGroup;
-        bool mHybridDeathPoseReady = false;
         float mHybridDeathElapsed = 0.f;
         bool mResetIdleOnAttackEnd{ false };
 

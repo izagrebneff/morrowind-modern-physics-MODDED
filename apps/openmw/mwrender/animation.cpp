@@ -1180,6 +1180,94 @@ namespace MWRender
         found->second->setMatrix(world * osg::Matrixf::inverse(osg::computeLocalToWorld(toParent)));
     }
 
+    bool Animation::beginActiveDeath(std::string_view group,
+        const std::vector<std::pair<std::string, osg::Matrixf>>& physicalBones)
+    {
+        endActiveDeath();
+        const auto state = mStates.find(group);
+        if (state == mStates.end() || !state->second.mSource || physicalBones.empty())
+            return false;
+        mActiveDeathTime = std::make_shared<float>(state->second.getTime());
+        mActiveDeathClock = std::make_shared<AnimationTime>();
+        mActiveDeathClock->setTimePtr(mActiveDeathTime);
+        mActiveDeathStop = state->second.mStopTime;
+        mActiveDeathSpeed = state->second.mSpeedMult;
+
+        // Copy controllers with a private clock. Keep the original local orientation
+        // for unanimated ancestors, including the actor's initial world heading.
+        // Paths are cached only for the short lifetime of this clip.
+        NodeMap const& nodes = getNodeMap();
+        for (const auto& [bone, ignored] : physicalBones)
+        {
+            const auto found = nodes.find(bone);
+            if (found == nodes.end())
+                continue;
+            const auto paths = found->second->getParentalNodePaths();
+            if (paths.empty())
+                continue;
+            std::vector<ActiveDeathTrack> tracks;
+            for (osg::Node* node : paths.front())
+            {
+                ActiveDeathTrack track;
+                const osg::Matrixf local = osg::computeLocalToWorld(osg::NodePath{node});
+                track.mLocalRotation = osg::Matrixf::rotate(local.getRotate());
+                for (size_t mask = 0; mask < sNumBlendMasks && !track.mController; ++mask)
+                {
+                    for (const auto& [name, controller] : state->second.mSource->mControllerMap[mask])
+                    {
+                        if (!Misc::StringUtils::ciEqual(name, node->getName()))
+                            continue;
+                        track.mController = osg::clone(controller.get(), osg::CopyOp::SHALLOW_COPY);
+                        track.mController->setSource(mActiveDeathClock);
+                        break;
+                    }
+                }
+                tracks.push_back(std::move(track));
+            }
+            mActiveDeathTracks.emplace_back(bone, std::move(tracks));
+        }
+        if (mActiveDeathTracks.empty())
+        {
+            endActiveDeath();
+            return false;
+        }
+        return true;
+    }
+
+    std::vector<std::pair<std::string, osg::Matrixf>> Animation::sampleActiveDeath(float duration)
+    {
+        if (!mActiveDeathTime || *mActiveDeathTime >= mActiveDeathStop)
+            return {};
+        *mActiveDeathTime = std::min(mActiveDeathStop,
+            *mActiveDeathTime + std::max(duration, 0.f) * mActiveDeathSpeed);
+        std::vector<std::pair<std::string, osg::Matrixf>> result;
+        result.reserve(mActiveDeathTracks.size());
+        for (auto& [bone, tracks] : mActiveDeathTracks)
+        {
+            osg::Matrixf rotation;
+            for (auto& track : tracks)
+            {
+                osg::Matrixf local = track.mLocalRotation;
+                if (track.mController)
+                {
+                    const auto transform = track.mController->getCurrentTransformation(nullptr);
+                    if (transform.mRotation)
+                        local = osg::Matrixf::rotate(*transform.mRotation);
+                }
+                rotation = local * rotation;
+            }
+            result.emplace_back(bone, rotation);
+        }
+        return result;
+    }
+
+    void Animation::endActiveDeath()
+    {
+        mActiveDeathTracks.clear();
+        mActiveDeathClock.reset();
+        mActiveDeathTime.reset();
+    }
+
     void Animation::stopAllAnimations()
     {
         mStates.clear();

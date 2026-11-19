@@ -26,6 +26,7 @@ namespace MWPhysics
 {
     class PhysicsTaskScheduler;
     class RagdollMotionState;
+    class ActiveDeathDrive;
 
     /// A dead actor's body as linked simulated parts (pelvis, chest, head, arms, legs...), each driving a bone of
     /// its skeleton.
@@ -88,6 +89,7 @@ namespace MWPhysics
         std::vector<std::pair<std::string, osg::Matrixf>> getBonePoses(float interpolation) const;
 
         void updatePtr(const MWWorld::Ptr& updated);
+        void setActiveDeathTargets(const std::vector<std::pair<std::string, osg::Matrixf>>& targets);
 
         float getMass() const;
 
@@ -164,6 +166,7 @@ namespace MWPhysics
         bool mFlyingCorpse = false;
         bool mDisableInternalCollision = false; // Procedural creature rigs have overlapping limb shapes.
         std::unique_ptr<btActionInterface> mJointFriction;
+        std::unique_ptr<ActiveDeathDrive> mActiveDeathDrive;
         std::unique_ptr<btActionInterface> mFlyingFallController;
         std::optional<osg::Vec2f> mActorOffset; // from the main part to the actor, along the ground
         std::optional<float> mFlyingActorOffsetZ; // actor origin is not at the flying creature's torso

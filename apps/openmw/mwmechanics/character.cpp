@@ -916,10 +916,25 @@ namespace MWMechanics
             if (!group.empty() && mAnimation->getActiveGroup(MWRender::BoneGroup_LowerBody) == group
                 && mAnimation->getCurrentTime(group) >= 0.f)
             {
-                mHybridDeathGroup = std::move(group);
-                mHybridDeathPoseReady = false;
-                mHybridDeathElapsed = 0.f;
-                return;
+                // Activate collision and gravity NOW, from the living pose.
+                // The animation is only a source of bounded rotational targets.
+                auto world = MWBase::Environment::get().getWorld();
+                if (world->makeRagdoll(mPtr, osg::Vec3f(), false, false))
+                {
+                    mRagdoll = true;
+                    mPtr.getClass().getCreatureStats(mPtr).setDeathKick(osg::Vec3f());
+                    if (mAnimation->beginActiveDeath(group, world->getRagdollBonePoses(mPtr)))
+                    {
+                        mHybridDeathGroup = std::move(group);
+                        mHybridDeathElapsed = 0.f;
+                        world->setActiveRagdollTargets(mPtr, mAnimation->sampleActiveDeath(0.f));
+                    }
+                    mAnimation->stopAllAnimations();
+                    return;
+                }
+                // Do not hold a nonphysical clip in midair if a rig cannot be created.
+                // Fall through to the original fallback.
+
             }
         }
 
@@ -2494,8 +2509,7 @@ namespace MWMechanics
                 mRagdollRestored = true;
                 restoreRagdoll();
             }
-            // The last clip frame is held by HRA (autoDisable=false).
-            // Wait for the scene graph to evaluate that frame before capturing bones.
+            // The clip drives only angular targets; Bullet owns all visible positions.
             updateHybridDeath(duration);
             if (mRagdoll || mAnimation != nullptr)
                 driveRagdoll();
@@ -2881,7 +2895,7 @@ namespace MWMechanics
         }
 
         MWMechanics::CreatureStats& cStats = mPtr.getClass().getCreatureStats(mPtr);
-        if (!mHybridDeathGroup.empty() || isAnimPlaying(mCurrentDeath))
+        if (!mRagdoll && (!mHybridDeathGroup.empty() || isAnimPlaying(mCurrentDeath)))
             return Result_DeathAnimPlaying;
         if (!cStats.isDeathAnimationFinished())
         {
@@ -2893,10 +2907,9 @@ namespace MWMechanics
 
     void CharacterController::resurrect()
     {
-        if (!mHybridDeathGroup.empty() && mAnimation)
-            mAnimation->disable(mHybridDeathGroup);
+        if (mAnimation)
+            mAnimation->endActiveDeath();
         mHybridDeathGroup.clear();
-        mHybridDeathPoseReady = false;
         mHybridDeathElapsed = 0.f;
         if (mAnimation)
             mAnimation->takeHybridDeathGroup();
@@ -2919,36 +2932,18 @@ namespace MWMechanics
     {
         if (mHybridDeathGroup.empty() || !mAnimation)
             return;
-
-        // Safety for another mod freezing the animation or replacing its state.
-        // Normal clips are governed by their actual stop key, not a fixed delay.
+        auto world = MWBase::Environment::get().getWorld();
         mHybridDeathElapsed += std::max(duration, 0.f);
-        constexpr float maxPendingTime = 15.f;
-        if (mAnimation->isPlaying(mHybridDeathGroup) && mHybridDeathElapsed < maxPendingTime)
+        auto targets = mAnimation->sampleActiveDeath(duration);
+        if (!mRagdoll || targets.empty() || mHybridDeathElapsed >= 15.f)
         {
-            mHybridDeathPoseReady = false;
+            world->setActiveRagdollTargets(mPtr, {});
+            mAnimation->endActiveDeath();
+            mHybridDeathGroup.clear();
+            mHybridDeathElapsed = 0.f;
             return;
         }
-        if (!mHybridDeathPoseReady)
-        {
-            mHybridDeathPoseReady = true;
-            return;
-        }
-
-        // The animation has already supplied the fatal motion; never apply the
-        // original physical/magic hit a second time. Existing corpse code reads
-        // the evaluated bone world matrices and inherits bounded actor velocity.
-        mHybridDeathGroup.clear();
-        mHybridDeathPoseReady = false;
-        mHybridDeathElapsed = 0.f;
-        mPtr.getClass().getCreatureStats(mPtr).setDeathKick(osg::Vec3f());
-        if (MWBase::Environment::get().getWorld()->makeRagdoll(mPtr, osg::Vec3f(), false, false))
-        {
-            mRagdoll = true;
-            mAnimation->stopAllAnimations();
-        }
-        // If a compatible articulated body cannot be built, keep the held
-        // death pose rather than replacing it with a standing one-piece box.
+        world->setActiveRagdollTargets(mPtr, targets);
     }
 
     bool CharacterController::startRagdoll()

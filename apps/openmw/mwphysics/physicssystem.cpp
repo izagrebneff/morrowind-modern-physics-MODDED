@@ -827,6 +827,19 @@ namespace MWPhysics
         return found->second->getBonePoses(std::clamp(mTimeAccum / mPhysicsDt, 0.f, 1.f));
     }
 
+    void PhysicsSystem::setActiveRagdollTargets(const MWWorld::ConstPtr& actor,
+        const std::vector<std::pair<std::string, osg::Matrixf>>& targets)
+    {
+        const auto found = mRagdolls.find(actor.mRef);
+        if (found == mRagdolls.end())
+            return;
+        const auto held = mTaskScheduler->getHeldObject();
+        if (held && held->getPtr() == actor)
+            found->second->setActiveDeathTargets({});
+        else
+            found->second->setActiveDeathTargets(targets);
+    }
+
     void PhysicsSystem::removeRagdoll(const MWWorld::ConstPtr& actor)
     {
         mBodyHeights.erase(actor.mRef);

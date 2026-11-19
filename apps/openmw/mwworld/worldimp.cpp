@@ -1491,6 +1491,12 @@ namespace MWWorld
         return mPhysics->getRagdollBonePoses(actor);
     }
 
+    void World::setActiveRagdollTargets(const MWWorld::ConstPtr& actor,
+        const std::vector<std::pair<std::string, osg::Matrixf>>& targets)
+    {
+        mPhysics->setActiveRagdollTargets(actor, targets);
+    }
+
     bool World::makeRagdoll(const MWWorld::Ptr& actor, const osg::Vec3f& kick, bool allowOnePiece, bool atRest)
     {
         if (!makeRagdollBody(actor, kick, allowOnePiece))

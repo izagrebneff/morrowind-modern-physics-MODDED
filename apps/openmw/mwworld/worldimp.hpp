@@ -406,6 +406,8 @@ namespace MWWorld
         bool makeRagdoll(
             const MWWorld::Ptr& actor, const osg::Vec3f& kick, bool allowOnePiece, bool atRest) override;
         void removeRagdoll(const MWWorld::ConstPtr& actor) override;
+        void setActiveRagdollTargets(const MWWorld::ConstPtr& actor,
+            const std::vector<std::pair<std::string, osg::Matrixf>>& targets) override;
         void knockObjectsWithMeleeAttack(const MWWorld::Ptr& attacker, const MWWorld::Ptr& weapon, int attackType,
             float attackStrength) override;
         /// A melee swing that hit no one and nothing loose: the sound of it meeting the world, if it does (from

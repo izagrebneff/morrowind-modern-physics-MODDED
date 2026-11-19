@@ -125,6 +125,76 @@ namespace MWPhysics
         void debugDraw(btIDebugDraw*) override {}
     };
 
+    // Physics-thread-only drive. No position targets, kinematic bodies or
+    // teleportation: contacts and existing joint limits remain authoritative.
+    class ActiveDeathDrive final : public btActionInterface
+    {
+    public:
+        struct Target
+        {
+            btRigidBody* mParent;
+            btRigidBody* mChild;
+            btQuaternion mRotation;
+        };
+        void publish(std::vector<Target> targets)
+        {
+            std::lock_guard lock(mMutex);
+            mTargets = std::move(targets);
+            mAge = 0.f;
+        }
+        void updateAction(btCollisionWorld*, btScalar dt) override
+        {
+            std::lock_guard lock(mMutex);
+            mAge += dt;
+            if (mAge > 0.35f || dt <= 0.f)
+                return;
+            for (const auto& target : mTargets)
+            {
+                auto* a = target.mParent;
+                auto* b = target.mChild;
+                if (b->isStaticOrKinematicObject() || (a && a->isStaticOrKinematicObject()))
+                    continue;
+                const btQuaternion desired = a
+                    ? a->getWorldTransform().getRotation() * target.mRotation : target.mRotation;
+                btQuaternion error = desired * b->getWorldTransform().getRotation().inverse();
+                error.normalize();
+                if (error.w() < 0)
+                    error = -error;
+                const btVector3 axis(error.x(), error.y(), error.z());
+                const btScalar sinHalf = axis.length();
+                btVector3 wanted(0, 0, 0);
+                if (sinHalf > 1e-5f)
+                {
+                    const btScalar angle = 2 * btAtan2(sinHalf, error.w());
+                    wanted = axis / sinHalf * btMin(btScalar(4), angle * btScalar(5));
+                }
+                const btVector3 relative = b->getAngularVelocity() - (a ? a->getAngularVelocity() : btVector3(0,0,0));
+                btVector3 delta = wanted - relative;
+                const btScalar cap = (a ? btScalar(14) : btScalar(7)) * dt;
+                if (delta.length2() > cap * cap)
+                    delta *= cap / delta.length();
+                btMatrix3x3 inverseInertia = b->getInvInertiaTensorWorld();
+                if (a)
+                    inverseInertia = inverseInertia + a->getInvInertiaTensorWorld();
+                if (btFabs(inverseInertia.determinant()) < btScalar(1e-20))
+                    continue;
+                const btVector3 impulse = inverseInertia.inverse() * delta;
+                b->activate(true);
+                b->applyTorqueImpulse(impulse);
+                if (a)
+                {
+                    a->activate(true);
+                    a->applyTorqueImpulse(-impulse);
+                }
+            }
+        }
+        void debugDraw(btIDebugDraw*) override {}
+    private:
+        std::mutex mMutex;
+        std::vector<Target> mTargets;
+        btScalar mAge = 1.f;
+    };
+
     struct Ragdoll::Part final : public PtrHolder
     {
         explicit Part(const MWWorld::Ptr& ptr)
@@ -731,12 +801,57 @@ namespace MWPhysics
         return false;
     }
 
+    void Ragdoll::setActiveDeathTargets(const std::vector<std::pair<std::string, osg::Matrixf>>& targets)
+    {
+        if (targets.empty() || mFrozen || mParts.empty() || mJoints.empty())
+        {
+            if (mActiveDeathDrive)
+                mActiveDeathDrive->publish({});
+            return;
+        }
+        std::map<btRigidBody*, btQuaternion> orientations;
+        for (const auto& part : mParts)
+        {
+            const auto it = std::find_if(targets.begin(), targets.end(),
+                [&](const auto& entry) { return entry.first == part->mBone; });
+            if (it == targets.end())
+                continue;
+            osg::Vec3f scale;
+            const btQuaternion rotation = (withoutScale(it->second, scale) * part->mBoneFromBody.inverse()).getRotation();
+            if (!std::isfinite(rotation.x()) || !std::isfinite(rotation.y())
+                || !std::isfinite(rotation.z()) || !std::isfinite(rotation.w()) || rotation.length2() < 0.001f)
+                continue;
+            orientations.emplace(part->mBody, rotation.normalized());
+        }
+        std::vector<ActiveDeathDrive::Target> drives;
+        // Mild world-space pelvis orientation, never a world-space position.
+        if (const auto root = orientations.find(mParts[mMainPartIndex]->mBody); root != orientations.end())
+            drives.push_back({nullptr, root->first, root->second});
+        for (const auto& joint : mJoints)
+        {
+            auto* a = &joint->getRigidBodyA();
+            auto* b = &joint->getRigidBodyB();
+            const auto pa = orientations.find(a);
+            const auto pb = orientations.find(b);
+            if (pa != orientations.end() && pb != orientations.end())
+                drives.push_back({a, b, pa->second.inverse() * pb->second});
+        }
+        if (!mActiveDeathDrive)
+        {
+            mActiveDeathDrive = std::make_unique<ActiveDeathDrive>();
+            mTaskScheduler->addAction(mActiveDeathDrive.get());
+        }
+        mActiveDeathDrive->publish(std::move(drives));
+    }
+
     void Ragdoll::setAtRest()
     {
         // Restored corpses already have their saved pose; do not let them
         // restart a fall or jitter every time a cell is loaded.
         if (mFrozen)
             return;
+        if (mActiveDeathDrive)
+            mActiveDeathDrive->publish({});
         std::vector<std::pair<btRigidBody*, btScalar>> bodies;
         bodies.reserve(mParts.size());
         for (const auto& part : mParts)
@@ -945,6 +1060,8 @@ namespace MWPhysics
 
     Ragdoll::~Ragdoll()
     {
+        if (mActiveDeathDrive)
+            mTaskScheduler->removeAction(mActiveDeathDrive.get());
         if (mFlyingFallController != nullptr)
             mTaskScheduler->removeAction(mFlyingFallController.get());
         if (mJointFriction != nullptr)
