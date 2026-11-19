@@ -56,6 +56,7 @@ namespace MWRender
     class ResetAccumRootCallback;
     class RotateController;
     class TransparencyUpdater;
+    struct AnimationCompatibilityCache;
 
     using ActiveControllersVector = std::vector<std::pair<osg::ref_ptr<osg::Node>, osg::ref_ptr<osg::Callback>>>;
 
@@ -220,6 +221,8 @@ namespace MWRender
 
         mutable NodeMap mNodeMap;
         mutable bool mNodeMapCreated;
+        // Shared by skeletons with exactly the same case-insensitive set of node names.
+        std::shared_ptr<AnimationCompatibilityCache> mAnimationCompatibility;
 
         // Stuck projectiles: the bone each is attached to, and its node.
         std::deque<std::pair<osg::observer_ptr<osg::Group>, osg::ref_ptr<osg::Node>>> mStuckProjectiles;

@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <set>
 #include <limits>
+#include <mutex>
+#include <tuple>
+#include <memory>
 
 #include <osg/BlendFunc>
 #include <osg/ComputeBoundsVisitor>
@@ -431,6 +434,104 @@ namespace
 
 namespace MWRender
 {
+    // Keep only immutable source iterators here, never actor-specific scene nodes,
+    // controller clones, blend masks or time sources. The observer invalidates an
+    // entry if the resource manager evicts/reloads its original keyframe holder.
+    struct CompatibleAnimationControllers
+    {
+        osg::observer_ptr<const SceneUtil::KeyframeHolder> mSource;
+        using Iterator = SceneUtil::KeyframeHolder::KeyframeControllerMap::const_iterator;
+        std::vector<std::pair<std::string, Iterator>> mControllers;
+    };
+
+    struct AnimationCompatibilityCache
+    {
+        std::map<std::string, std::shared_ptr<const CompatibleAnimationControllers>, std::less<>> mSources;
+    };
+
+    namespace
+    {
+        struct AnimationCompatibilityState
+        {
+            std::mutex mMutex;
+            std::map<std::vector<std::string>, std::shared_ptr<AnimationCompatibilityCache>> mSkeletons;
+            // Diagnostics are independent of cache eviction: no repeated warnings
+            // for the same model, source and missing bone in the current process.
+            std::set<std::tuple<std::string, std::string, std::string>> mReportedMissing;
+        };
+
+        AnimationCompatibilityState& animationCompatibilityState()
+        {
+            static AnimationCompatibilityState state;
+            return state;
+        }
+
+        std::shared_ptr<AnimationCompatibilityCache> getAnimationCompatibility(const Animation::NodeMap& nodes)
+        {
+            std::vector<std::string> names;
+            names.reserve(nodes.size());
+            for (const auto& entry : nodes)
+                names.push_back(Misc::StringUtils::lowerCase(entry.first));
+            std::sort(names.begin(), names.end());
+
+            auto& state = animationCompatibilityState();
+            std::lock_guard lock(state.mMutex);
+            if (const auto found = state.mSkeletons.find(names); found != state.mSkeletons.end())
+                return found->second;
+
+            // Bound retained layouts. Existing Animation instances keep their
+            // own shared entry alive even when the global index is cleared.
+            constexpr size_t maxSkeletonLayouts = 128;
+            if (state.mSkeletons.size() >= maxSkeletonLayouts)
+                state.mSkeletons.clear();
+            auto result = std::make_shared<AnimationCompatibilityCache>();
+            state.mSkeletons.emplace(std::move(names), result);
+            return result;
+        }
+
+        std::shared_ptr<const CompatibleAnimationControllers> getCompatibleAnimationControllers(
+            AnimationCompatibilityCache& cache, const Animation::NodeMap& nodes,
+            const osg::ref_ptr<const SceneUtil::KeyframeHolder>& holder, VFS::Path::NormalizedView filename,
+            const std::string& baseModel)
+        {
+            auto& state = animationCompatibilityState();
+            std::lock_guard lock(state.mMutex);
+            const std::string path(filename.value());
+            if (const auto found = cache.mSources.find(path); found != cache.mSources.end())
+            {
+                osg::ref_ptr<const SceneUtil::KeyframeHolder> oldSource;
+                if (found->second->mSource.lock(oldSource) && oldSource.get() == holder.get())
+                    return found->second;
+                cache.mSources.erase(found);
+            }
+
+            auto result = std::make_shared<CompatibleAnimationControllers>();
+            result->mSource = holder.get();
+            const auto& controllers = holder->mKeyframeControllers;
+            result->mControllers.reserve(controllers.size());
+            for (auto it = controllers.cbegin(); it != controllers.cend(); ++it)
+            {
+                std::string bone = Misc::StringUtils::lowerCase(it->first);
+                if (nodes.find(bone) == nodes.end())
+                {
+                    if (state.mReportedMissing.emplace(baseModel, path, bone).second)
+                        Log(Debug::Warning) << "Warning: addAnimSource: can't find bone '" << bone << "' in "
+                                            << baseModel << " (referenced by " << filename << ")";
+                    continue;
+                }
+                result->mControllers.emplace_back(std::move(bone), it);
+            }
+
+            // Bounded even with very large animation mod lists. Invalidation
+            // changes performance only; it cannot suppress valid controllers.
+            constexpr size_t maxSourcesPerLayout = 1024;
+            if (cache.mSources.size() >= maxSourcesPerLayout)
+                cache.mSources.clear();
+            cache.mSources.emplace(path, result);
+            return result;
+        }
+    }
+
     class TransparencyUpdater : public SceneUtil::StateSetUpdater
     {
     public:
@@ -682,19 +783,17 @@ namespace MWRender
         animsrc->mKeyframes = std::move(keyframes);
 
         const NodeMap& nodeMap = getNodeMap();
-        const auto& controllerMap = animsrc->mKeyframes->mKeyframeControllers;
-        for (SceneUtil::KeyframeHolder::KeyframeControllerMap::const_iterator it = controllerMap.begin();
-             it != controllerMap.end(); ++it)
+        if (!mAnimationCompatibility)
+            mAnimationCompatibility = getAnimationCompatibility(nodeMap);
+        const auto compatible = getCompatibleAnimationControllers(
+            *mAnimationCompatibility, nodeMap, animsrc->mKeyframes, kfname, baseModel);
+        for (const auto& [bonename, it] : compatible->mControllers)
         {
-            std::string bonename = Misc::StringUtils::lowerCase(it->first);
-            NodeMap::const_iterator found = nodeMap.find(bonename);
+            // Nodes and blend masks are specific to this instance. Do not cache
+            // them with the source compatibility list.
+            const auto found = nodeMap.find(bonename);
             if (found == nodeMap.end())
-            {
-                Log(Debug::Warning) << "Warning: addAnimSource: can't find bone '" + bonename << "' in " << baseModel
-                                    << " (referenced by " << kfname << ")";
                 continue;
-            }
-
             osg::Node* node = found->second;
 
             size_t blendMask = detectBlendMask(node, it->second->getName());
@@ -727,10 +826,9 @@ namespace MWRender
                 found = nodeMap.find(name);
                 if (found == nodeMap.end())
                     continue;
-                for (SceneUtil::KeyframeHolder::KeyframeControllerMap::const_iterator it = controllerMap.begin();
-                     it != controllerMap.end(); ++it)
+                for (const auto& entry : compatible->mControllers)
                 {
-                    if (Misc::StringUtils::ciEqual(it->first, name))
+                    if (entry.first == name)
                     {
                         mAccumRoot = found->second;
                         break;
@@ -1921,6 +2019,7 @@ namespace MWRender
 
         mNodeMap.clear();
         mNodeMapCreated = false;
+        mAnimationCompatibility.reset();
         mActiveControllers.clear();
         mAccumRoot = nullptr;
         mAccumCtrl = nullptr;
