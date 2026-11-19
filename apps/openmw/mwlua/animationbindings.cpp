@@ -228,6 +228,11 @@ namespace MWLua
             auto animation = getMutableAnimationOrThrow(object);
             animation->play(lowerGroup, priority, blendMask, autoDisable, speed, start, stop, startPoint, loops,
                 forceLoop || animation->isLoopingAnimation(lowerGroup));
+            // Extension used by a death replacement that keeps its terminal pose.
+            // Never register a looping or auto-disabled animation for a corpse handoff.
+            if (options.get_or("hybridDeath", false) && !autoDisable && loops == 0
+                && blendMask == BlendMask::BlendMask_All && speed > 0.f)
+                animation->markHybridDeathGroup(lowerGroup);
         };
 
         api["hasGroup"] = [](const LObject& object, std::string_view groupname) -> bool {

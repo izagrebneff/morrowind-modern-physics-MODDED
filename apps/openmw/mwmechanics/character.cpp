@@ -27,6 +27,7 @@
 #include <components/misc/resourcehelpers.hpp>
 #include <components/misc/rng.hpp>
 #include <components/misc/strings/algorithm.hpp>
+#include <components/misc/strings/lower.hpp>
 #include <components/misc/strings/conversion.hpp>
 
 #include <components/settings/values.hpp>
@@ -870,6 +871,9 @@ namespace MWMechanics
 
     void CharacterController::playRandomDeath(float startpoint)
     {
+        // Equipment/view rebuilds and forceStateUpdate must not restart a pending fall.
+        if (!mHybridDeathGroup.empty())
+            return;
         if (mPtr == getPlayer())
         {
             // The first-person animations do not include death, so we need to
@@ -889,10 +893,36 @@ namespace MWMechanics
         if (!mAnimation || isScriptedAnimPlaying())
             return;
 
-        // The body goes limp right away: a ragdoll instead of a death animation (which is still recorded, for
-        // how the corpse lies after loading a save). Only as it dies; a ragdoll already going keeps going.
+        // The Lua play hook is synchronous. Give humanoid death-replacement mods a chance
+        // to select their clip before Bullet takes control. If no replacement opts in,
+        // the original immediate ragdoll path still runs.
         if (mRagdoll)
             return;
+        bool dispatchedDeath = false;
+        if (mDying && mLuaAnimations && mPtr != getPlayer() && mPtr.getClass().isBipedal(mPtr))
+        {
+            mAnimation->takeHybridDeathGroup();
+            playDeath(startpoint, mDeathState);
+            dispatchedDeath = true;
+            std::string group = mAnimation->takeHybridDeathGroup();
+
+            // Dremora mesh visibility/particle controllers need the original death
+            // timeline to dissolve the body. Do not turn their dust into a ragdoll.
+            if (mPtr.getType() == ESM::Creature::sRecordId
+                && Misc::StringUtils::lowerCase(mPtr.getClass().getModel(mPtr).value()).find("dremora")
+                    != std::string::npos)
+                return;
+
+            if (!group.empty() && mAnimation->getActiveGroup(MWRender::BoneGroup_LowerBody) == group
+                && mAnimation->getCurrentTime(group) >= 0.f)
+            {
+                mHybridDeathGroup = std::move(group);
+                mHybridDeathPoseReady = false;
+                mHybridDeathElapsed = 0.f;
+                return;
+            }
+        }
+
         if (mDying && startRagdoll())
         {
             mCurrentDeath = deathStateToAnimGroup(mDeathState);
@@ -909,7 +939,8 @@ namespace MWMechanics
             return;
         }
 
-        playDeath(startpoint, mDeathState);
+        if (!dispatchedDeath)
+            playDeath(startpoint, mDeathState);
     }
 
     std::string CharacterController::chooseRandomAttackAnimation() const
@@ -2463,6 +2494,9 @@ namespace MWMechanics
                 mRagdollRestored = true;
                 restoreRagdoll();
             }
+            // The last clip frame is held by HRA (autoDisable=false).
+            // Wait for the scene graph to evaluate that frame before capturing bones.
+            updateHybridDeath(duration);
             if (mRagdoll || mAnimation != nullptr)
                 driveRagdoll();
 
@@ -2847,7 +2881,7 @@ namespace MWMechanics
         }
 
         MWMechanics::CreatureStats& cStats = mPtr.getClass().getCreatureStats(mPtr);
-        if (isAnimPlaying(mCurrentDeath))
+        if (!mHybridDeathGroup.empty() || isAnimPlaying(mCurrentDeath))
             return Result_DeathAnimPlaying;
         if (!cStats.isDeathAnimationFinished())
         {
@@ -2859,6 +2893,14 @@ namespace MWMechanics
 
     void CharacterController::resurrect()
     {
+        if (!mHybridDeathGroup.empty() && mAnimation)
+            mAnimation->disable(mHybridDeathGroup);
+        mHybridDeathGroup.clear();
+        mHybridDeathPoseReady = false;
+        mHybridDeathElapsed = 0.f;
+        if (mAnimation)
+            mAnimation->takeHybridDeathGroup();
+        mPtr.getClass().getCreatureStats(mPtr).setDeathKick(osg::Vec3f());
         if (mRagdoll)
         {
             MWBase::Environment::get().getWorld()->removeRagdoll(mPtr);
@@ -2871,6 +2913,42 @@ namespace MWMechanics
 
         resetCurrentDeathState();
         mWeaponTypeId = {};
+    }
+
+    void CharacterController::updateHybridDeath(float duration)
+    {
+        if (mHybridDeathGroup.empty() || !mAnimation)
+            return;
+
+        // Safety for another mod freezing the animation or replacing its state.
+        // Normal clips are governed by their actual stop key, not a fixed delay.
+        mHybridDeathElapsed += std::max(duration, 0.f);
+        constexpr float maxPendingTime = 15.f;
+        if (mAnimation->isPlaying(mHybridDeathGroup) && mHybridDeathElapsed < maxPendingTime)
+        {
+            mHybridDeathPoseReady = false;
+            return;
+        }
+        if (!mHybridDeathPoseReady)
+        {
+            mHybridDeathPoseReady = true;
+            return;
+        }
+
+        // The animation has already supplied the fatal motion; never apply the
+        // original physical/magic hit a second time. Existing corpse code reads
+        // the evaluated bone world matrices and inherits bounded actor velocity.
+        mHybridDeathGroup.clear();
+        mHybridDeathPoseReady = false;
+        mHybridDeathElapsed = 0.f;
+        mPtr.getClass().getCreatureStats(mPtr).setDeathKick(osg::Vec3f());
+        if (MWBase::Environment::get().getWorld()->makeRagdoll(mPtr, osg::Vec3f(), false, false))
+        {
+            mRagdoll = true;
+            mAnimation->stopAllAnimations();
+        }
+        // If a compatible articulated body cannot be built, keep the held
+        // death pose rather than replacing it with a standing one-piece box.
     }
 
     bool CharacterController::startRagdoll()

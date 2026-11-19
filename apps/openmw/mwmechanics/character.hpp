@@ -166,6 +166,9 @@ namespace MWMechanics
         bool mRagdoll = false; // the body is a ragdoll, which drives the bones
         bool mRagdollRestored = false; // tried to bring back how it lay (see restoreRagdoll)
         bool mDying = false; // in kill()
+        std::string mHybridDeathGroup;
+        bool mHybridDeathPoseReady = false;
+        float mHybridDeathElapsed = 0.f;
         bool mResetIdleOnAttackEnd{ false };
 
         JumpingState mJumpState{ JumpState_None };
@@ -236,6 +239,7 @@ namespace MWMechanics
 
         void playDeath(float startpoint, CharacterState death);
         bool startRagdoll();
+        void updateHybridDeath(float duration);
         void driveRagdoll();
         void restoreRagdoll();
         CharacterState chooseRandomDeathState() const;

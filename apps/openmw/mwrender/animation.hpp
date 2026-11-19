@@ -190,6 +190,8 @@ namespace MWRender
 
         typedef std::vector<std::shared_ptr<AnimSource>> AnimSourceList;
         AnimSourceList mAnimSources;
+        // Opt-in marker from a Lua replacement death animation, consumed synchronously by CharacterController.
+        std::string mHybridDeathGroup;
 
         std::unordered_set<std::string_view> mSupportedAnimations;
         mutable std::vector<std::pair<std::string, MWWorld::MovementDirectionFlags>> mSupportedDirections;
@@ -474,6 +476,17 @@ namespace MWRender
         void setBoneWorldMatrix(std::string_view bone, const osg::Matrixf& world);
         /// Stop every animation, leaving the bones as they are.
         void stopAllAnimations();
+        void markHybridDeathGroup(const std::string& group)
+        {
+            if (getCurrentTime(group) >= 0.f)
+                mHybridDeathGroup = group;
+        }
+        std::string takeHybridDeathGroup()
+        {
+            std::string group;
+            group.swap(mHybridDeathGroup);
+            return group;
+        }
 
         /// A bone of the skinned meshes, and the bounds (in its own space) of the vertices it moves.
         struct SkinnedBone
