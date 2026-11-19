@@ -591,7 +591,7 @@ namespace MWLua
                         context.mLuaManager->addAction(
                             [object, cell, pos, rot, count, delayedRemovalFn, placeOnGround, corpseDrop] {
                                 MWWorld::Ptr oldPtr = object.ptr();
-                                auto* world = MWBase::Environment::get().getWorld();
+                                auto world = MWBase::Environment::get().getWorld();
                                 osg::Vec3f releasePos = pos;
                                 osg::Vec3f releaseRot = rot;
                                 auto pose = oldPtr.getRefData().mCorpseGearPose;

@@ -81,7 +81,7 @@ namespace MWLua
         // transforms here, before any inventory callback can rebuild either hand.
         if (!isPlayer && actor.getClass().getCreatureStats(actor).isDead())
         {
-            auto* world = MWBase::Environment::get().getWorld();
+            auto world = MWBase::Environment::get().getWorld();
             if (auto* animation = dynamic_cast<MWRender::ActorAnimation*>(world->getAnimation(actor)))
             {
                 for (const int slot : { MWWorld::InventoryStore::Slot_CarriedRight,
