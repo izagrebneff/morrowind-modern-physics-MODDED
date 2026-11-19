@@ -211,7 +211,7 @@ namespace MWPhysics
                     + btVector3(velocity.x(), velocity.y(), 0) * (magic ? 0.f : 0.18f);
                 linear.setZ(std::min(velocity.z(), 0.f) - 15.f);
                 const btScalar pitch = magic ? (humanoid ? 2.35f : 1.65f)
-                    : (humanoid ? 2.45f : 1.6f) + std::min(strength / 280.f, 1.f) * 0.7f;
+                    : (humanoid ? 2.45f : 1.6f) + std::min<btScalar>(strength / btScalar(280), btScalar(1)) * 0.7f;
                 const float yaw = actor.getRefData().getPosition().rot[2];
                 const btVector3 forward(std::sin(yaw), std::cos(yaw), 0);
                 const float side = static_cast<float>(forward.cross(direction).z());
