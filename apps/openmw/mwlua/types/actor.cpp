@@ -1,6 +1,8 @@
 #include "types.hpp"
 
 #include <array>
+#include <cmath>
+#include <components/misc/mathutil.hpp>
 
 #include <components/detournavigator/agentbounds.hpp>
 #include <components/lua/luastate.hpp>
@@ -17,6 +19,8 @@
 #include "apps/openmw/mwworld/class.hpp"
 #include "apps/openmw/mwworld/inventorystore.hpp"
 #include "apps/openmw/mwworld/worldmodel.hpp"
+#include "apps/openmw/mwworld/datetimemanager.hpp"
+#include "apps/openmw/mwrender/actoranimation.hpp"
 
 #include "../localscripts.hpp"
 #include "../luamanagerimp.hpp"
@@ -73,6 +77,40 @@ namespace MWLua
     {
         bool isPlayer = actor == MWBase::Environment::get().getWorld()->getPlayerPtr();
         MWWorld::InventoryStore& store = actor.getClass().getInventoryStore(actor);
+        // Combat Juice strips both slots before its global throw event. Capture both
+        // transforms here, before any inventory callback can rebuild either hand.
+        if (!isPlayer && actor.getClass().getCreatureStats(actor).isDead())
+        {
+            auto* world = MWBase::Environment::get().getWorld();
+            if (auto* animation = dynamic_cast<MWRender::ActorAnimation*>(world->getAnimation(actor)))
+            {
+                for (const int slot : { MWWorld::InventoryStore::Slot_CarriedRight,
+                         MWWorld::InventoryStore::Slot_CarriedLeft })
+                {
+                    auto it = store.getSlot(slot);
+                    if (it == store.end() || equipment.find(slot) != equipment.end())
+                        continue;
+                    const auto matrix = animation->getCarriedItemWorldMatrix(slot == MWWorld::InventoryStore::Slot_CarriedLeft);
+                    if (!matrix)
+                        continue;
+                    osg::Vec3f pos, scale;
+                    osg::Quat rotation, scaleOrientation;
+                    matrix->decompose(pos, rotation, scale, scaleOrientation);
+                    const osg::Vec3f rot = Misc::toEulerAnglesZYX(rotation);
+                    if (!std::isfinite(pos.x()) || !std::isfinite(pos.y()) || !std::isfinite(pos.z())
+                        || !std::isfinite(rot.x()) || !std::isfinite(rot.y()) || !std::isfinite(rot.z()))
+                        continue;
+                    ESM::Position release{};
+                    for (int i = 0; i < 3; ++i)
+                    {
+                        release.pos[i] = pos[i];
+                        release.rot[i] = rot[i];
+                    }
+                    (*it).getRefData().mCorpseGearPose = MWWorld::RefData::CorpseGearPose{
+                        release, world->getTimeManager()->getSimulationTime() };
+                }
+            }
+        }
         std::array<bool, MWWorld::InventoryStore::Slots> usedSlots;
         std::fill(usedSlots.begin(), usedSlots.end(), false);
 

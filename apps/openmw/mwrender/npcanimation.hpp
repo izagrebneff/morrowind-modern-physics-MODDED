@@ -167,6 +167,10 @@ namespace MWRender
         int getSlot(const osg::NodePath& path) const;
 
         const PartHolder* getPart(ESM::PartReferenceType type) const { return mObjectParts[type].get(); }
+        const PartHolder* getCarriedItemPart(bool left) const override
+        {
+            return mObjectParts[left ? ESM::PRT_Shield : ESM::PRT_Weapon].get();
+        }
 
         void setVampire(bool vampire) override;
 

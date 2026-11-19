@@ -185,6 +185,58 @@ namespace MWPhysics
             { "Bip01 R Calf", "Bip01 R Foot", 5.f, 4.f, 9, 70, 10, 10, 0.98f },
         };
 
+        // A coherent initial rigid-body velocity field: the torso pitches away from the
+        // blow, the feet lag, and the entire body turns slightly. Unlike independent limb
+        // kicks this keeps the starting joint velocities approximately compatible.
+        struct FatalImpact
+        {
+            btVector3 linear;
+            btVector3 angular{ 0, 0, 0 };
+            bool active = false;
+
+            FatalImpact(const MWWorld::Ptr& actor, const osg::Vec3f& velocity, const osg::Vec3f& kick,
+                bool humanoid)
+                : linear(Misc::Convert::toBullet(velocity))
+            {
+                btVector3 direction(kick.x(), kick.y(), 0);
+                const btScalar strength = direction.length();
+                if (strength < 1.f)
+                    return;
+                active = true;
+                direction /= strength;
+                const bool magic = actor.getClass().getCreatureStats(actor).hasMagicDeathKick();
+                // Retain a little horizontal locomotion for a physical hit, but never inherit
+                // upward movement from jumping. Magic translates the whole body much faster.
+                linear = direction * (magic ? strength : strength * 0.62f)
+                    + btVector3(velocity.x(), velocity.y(), 0) * (magic ? 0.f : 0.18f);
+                linear.setZ(std::min(velocity.z(), 0.f) - 15.f);
+                const btScalar pitch = magic ? (humanoid ? 2.35f : 1.65f)
+                    : (humanoid ? 2.45f : 1.6f) + std::min(strength / 280.f, 1.f) * 0.7f;
+                const float yaw = actor.getRefData().getPosition().rot[2];
+                const btVector3 forward(std::sin(yaw), std::cos(yaw), 0);
+                const float side = static_cast<float>(forward.cross(direction).z());
+                const float turn = (side < -0.05f ? -1.f : 1.f) * (0.4f + 0.35f * std::abs(side));
+                angular = btVector3(0, 0, 1).cross(direction) * pitch + btVector3(0, 0, turn);
+            }
+
+            void apply(btRigidBody& body, const btVector3& pivot, const btVector3& extra = btVector3(0, 0, 0)) const
+            {
+                btVector3 v = linear + extra;
+                if (active)
+                {
+                    btVector3 rotational = angular.cross(body.getWorldTransform().getOrigin() - pivot);
+                    constexpr btScalar maxDifferential = 180.f;
+                    if (rotational.length2() > maxDifferential * maxDifferential)
+                        rotational *= maxDifferential / rotational.length();
+                    v += rotational;
+                    // No initially upward-moving limb; gravity and ordinary contacts remain active.
+                    v.setZ(std::min(v.z(), btScalar(0)));
+                    body.setAngularVelocity(angular);
+                }
+                body.setLinearVelocity(v);
+            }
+        };
+
         btTransform withoutScale(const osg::Matrixf& matrix, osg::Vec3f& scale)
         {
             osg::Vec3f translation;
@@ -209,6 +261,8 @@ namespace MWPhysics
         : mTaskScheduler(scheduler)
     {
         const auto position = [&](std::string_view bone) { return bones.find(bone)->second.getTrans(); };
+        const FatalImpact impact(actor, velocity, kick, true);
+        const btVector3 pivot = Misc::Convert::toBullet(position("Bip01 Pelvis"));
 
         for (const PartDef& def : sPartDefs)
         {
@@ -242,18 +296,7 @@ namespace MWPhysics
             part->mRelativeDensity = def.mDensity;
             makeBody(*part, bodyWorld, def.mMass, def.mRadius);
 
-            // Falling as it was moving, the upper body thrown back by the killing blow.
-            btVector3 partVelocity = Misc::Convert::toBullet(velocity);
-            if (actor.getClass().getCreatureStats(actor).hasMagicDeathKick())
-            {
-                // Launch all parts together rather than stretching the joints with a torso-only kick.
-                partVelocity = Misc::Convert::toBullet(kick + osg::Vec3f(0.f, 0.f, std::min(velocity.z(), 0.f)));
-            }
-            else if (def.mBone == "Bip01 Spine1" || def.mBone == "Bip01 Head")
-                partVelocity += Misc::Convert::toBullet(kick);
-            else if (def.mBone == "Bip01 Pelvis")
-                partVelocity += Misc::Convert::toBullet(kick) * 0.6f;
-            part->mBody->setLinearVelocity(partVelocity);
+            impact.apply(*part->mBody, pivot);
 
             mParts.push_back(std::move(part));
         }
@@ -278,7 +321,9 @@ namespace MWPhysics
         part->mShape = std::make_unique<btBoxShape>(Misc::Convert::toBullet(halfExtents));
         part->mBoneFromBody = bodyWorld.inverse() * withoutScale(baseWorld, part->mBoneScale);
         makeBody(*part, bodyWorld, mass, 0);
-        part->mBody->setLinearVelocity(Misc::Convert::toBullet(velocity));
+        const auto& kick = actor.getClass().getCreatureStats(actor).getDeathKick();
+        const FatalImpact impact(actor, kick.length2() > 1.f ? osg::Vec3f() : velocity, kick, false);
+        impact.apply(*part->mBody, bodyWorld.getOrigin());
         mParts.push_back(std::move(part));
         addToWorld();
     }
@@ -352,16 +397,11 @@ namespace MWPhysics
             const btVector3 size = aabbMax - aabbMin;
             const float volume = static_cast<float>(size.x() * size.y() * size.z()) * 0.6f / (70.f * 70.f * 70.f);
             makeBody(*part, bodyWorld, std::clamp(volume * 1000.f, 0.3f, 200.f), thickness);
-            const osg::Vec3f launchVelocity = actor.getClass().getCreatureStats(actor).hasMagicDeathKick()
-                ? kick + osg::Vec3f(0.f, 0.f, std::min(velocity.z(), 0.f))
-                : velocity + kick * 0.7f;
-            part->mBody->setLinearVelocity(Misc::Convert::toBullet(launchVelocity));
+
 
             partOfBone[i] = static_cast<int>(ragdoll->mParts.size());
             ragdoll->mParts.push_back(std::move(part));
         }
-        ragdoll->addToWorld();
-
         // Joined to the part above; any parts with none (bits not under the main body) to the biggest.
         const auto parentPart = [&](size_t bone) {
             for (int parent = bones[bone].mParent; parent >= 0; parent = bones[parent].mParent)
@@ -373,6 +413,12 @@ namespace MWPhysics
         for (size_t i = 0; i < chosen.size(); ++i)
             if (parentPart(chosen[i]) < 0 && bones[chosen[i]].mRadius > bones[chosen[root]].mRadius)
                 root = static_cast<int>(i);
+        const FatalImpact impact(actor, velocity, kick, false);
+        const btVector3 pivot = ragdoll->mParts[static_cast<size_t>(root)]->mBody->getWorldTransform().getOrigin();
+        for (const auto& part : ragdoll->mParts)
+            impact.apply(*part->mBody, pivot);
+        ragdoll->addToWorld();
+
         for (size_t i = 0; i < chosen.size(); ++i)
         {
             int parent = parentPart(chosen[i]);
@@ -484,18 +530,15 @@ namespace MWPhysics
         }
         middle /= static_cast<float>(chosen.size());
 
-        // Falling apart: the pieces spread a little from the middle, as the killing blow throws them.
+        // Falling apart: the pieces spread a little from the middle, but never get a vertical launch.
+        const FatalImpact impact(actor, velocity, kick, false);
         for (size_t i = 0; i < ragdoll->mParts.size(); ++i)
         {
             osg::Vec3f out = Misc::Convert::toOsg(bodies[i].getOrigin()) - middle;
             out.z() = 0;
             if (out.normalize() > 0)
-                out *= 50.f;
-            const osg::Vec3f launchVelocity = actor.getClass().getCreatureStats(actor).hasMagicDeathKick()
-                ? kick + osg::Vec3f(0.f, 0.f, std::min(velocity.z(), 0.f))
-                : velocity + kick * 0.7f;
-            ragdoll->mParts[i]->mBody->setLinearVelocity(
-                Misc::Convert::toBullet(launchVelocity + out + osg::Vec3f(0, 0, 40)));
+                out *= 25.f;
+            impact.apply(*ragdoll->mParts[i]->mBody, Misc::Convert::toBullet(middle), Misc::Convert::toBullet(out));
         }
         ragdoll->addToWorld();
         return ragdoll;
@@ -519,9 +562,9 @@ namespace MWPhysics
         btRigidBody::btRigidBodyConstructionInfo info(
             simulatedMass, part.mMotionState.get(), part.mShape.get(), inertia);
         info.m_friction = 0.8f;
-        info.m_restitution = 0.05f;
+        info.m_restitution = 0.f;
         info.m_linearDamping = 0.15f;
-        info.m_angularDamping = 0.7f;
+        info.m_angularDamping = 0.5f;
         // In game units (~70 per meter), like the other simulated objects.
         info.m_linearSleepingThreshold = 4.f;
         info.m_angularSleepingThreshold = 1.f;

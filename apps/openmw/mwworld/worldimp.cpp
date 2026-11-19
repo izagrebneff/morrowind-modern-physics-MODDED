@@ -1416,6 +1416,20 @@ namespace MWWorld
         // Keep that feel rather than dividing by the fork's internally tripled Bullet mass.
         const float mass = std::clamp(ptr.getClass().getWeight(ptr), 1.f, 50.f);
         osg::Vec3f velocity = impulse / mass;
+        // Hand gear begins at the recorded attachment transform. Let it drop from the
+        // grip rather than being flung upwards by Combat Juice's generic scatter launch.
+        if (ptr.getRefData().mCorpseGearPose)
+        {
+            const auto now = getTimeManager()->getSimulationTime();
+            if (now >= ptr.getRefData().mCorpseGearPose->mSimulationTime
+                && now - ptr.getRefData().mCorpseGearPose->mSimulationTime < 2.0)
+            {
+                velocity.x() *= 0.25f;
+                velocity.y() *= 0.25f;
+                velocity.z() = std::clamp(velocity.z(), -45.f, -12.f);
+            }
+            ptr.getRefData().mCorpseGearPose.reset();
+        }
         constexpr float maxLaunchSpeed = 400.f;
         if (velocity.length2() > maxLaunchSpeed * maxLaunchSpeed)
         {
@@ -1492,8 +1506,7 @@ namespace MWWorld
         // them fall as one physically simulated collider rather than rejecting
         // corpse physics and leaving the death animation suspended in the air.
         allowOnePiece = allowOnePiece || actor.getClass().canFly(actor);
-        const osg::Vec3f fallbackVelocity
-            = actor.getClass().getCreatureStats(actor).hasMagicDeathKick() ? kick : osg::Vec3f();
+        const osg::Vec3f fallbackVelocity = kick;
         const MWRender::Animation* animation = mRendering->getAnimation(actor);
         if (animation == nullptr)
             return false;

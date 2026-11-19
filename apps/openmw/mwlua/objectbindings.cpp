@@ -14,6 +14,7 @@
 #include "../mwworld/cellstore.hpp"
 #include "../mwworld/class.hpp"
 #include "../mwworld/containerstore.hpp"
+#include "../mwworld/datetimemanager.hpp"
 #include "../mwworld/localscripts.hpp"
 #include "../mwworld/player.hpp"
 #include "../mwworld/scene.hpp"
@@ -590,14 +591,39 @@ namespace MWLua
                         context.mLuaManager->addAction(
                             [object, cell, pos, rot, count, delayedRemovalFn, placeOnGround, corpseDrop] {
                                 MWWorld::Ptr oldPtr = object.ptr();
+                                auto* world = MWBase::Environment::get().getWorld();
+                                osg::Vec3f releasePos = pos;
+                                osg::Vec3f releaseRot = rot;
+                                auto pose = oldPtr.getRefData().mCorpseGearPose;
+                                oldPtr.getRefData().mCorpseGearPose.reset();
+                                const double now = world->getTimeManager()->getSimulationTime();
+                                const auto owner = oldPtr.getContainerStore()
+                                    ? oldPtr.getContainerStore()->getPtr() : MWWorld::Ptr();
+                                // Use the actual held pose only for the immediate drop near that corpse.
+                                // Other corpse inventory items and unrelated teleports retain their Lua positions.
+                                if (corpseDrop && pose && !placeOnGround && !owner.isEmpty() && owner.isInCell()
+                                    && owner.getCell() == cell && now >= pose->mSimulationTime
+                                    && now - pose->mSimulationTime < 2.0
+                                    && (pose->mPosition.asVec3() - pos).length2() < 300.f * 300.f)
+                                {
+                                    releasePos = pose->mPosition.asVec3();
+                                    releaseRot = pose->mPosition.asRotationVec3();
+                                }
+                                else
+                                    pose.reset();
+
                                 oldPtr.getCellRef().setCount(count);
                                 MWWorld::Ptr newPtr = oldPtr.getClass().moveToCell(oldPtr, *cell);
                                 oldPtr.getCellRef().setCount(0);
                                 newPtr.getRefData().disable();
-                                const MWWorld::Ptr placed = teleportNotPlayer(newPtr, cell, pos, rot, placeOnGround);
+                                const MWWorld::Ptr placed
+                                    = teleportNotPlayer(newPtr, cell, releasePos, releaseRot, placeOnGround);
                                 delayedRemovalFn(oldPtr);
                                 if (corpseDrop)
-                                    MWBase::Environment::get().getWorld()->wakeLuaCorpseDrop(placed);
+                                {
+                                    placed.getRefData().mCorpseGearPose = pose;
+                                    world->wakeLuaCorpseDrop(placed);
+                                }
                             },
                             "TeleportFromContainerAction");
                     }

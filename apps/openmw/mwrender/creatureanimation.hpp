@@ -50,6 +50,7 @@ namespace MWRender
         // WeaponAnimation
         osg::Group* getArrowBone() override;
         osg::Node* getWeaponNode() override;
+        const PartHolder* getCarriedItemPart(bool left) const override { return left ? mShield.get() : mWeapon.get(); }
         Resource::ResourceSystem* getResourceSystem() override;
         void showWeapon(bool show) override { showWeapons(show); }
         void setWeaponGroup(const std::string& group, bool relativeDuration) override

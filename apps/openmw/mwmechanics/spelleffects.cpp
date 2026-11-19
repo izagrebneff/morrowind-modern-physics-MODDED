@@ -1396,9 +1396,9 @@ namespace MWMechanics
                         const float yaw = target.getRefData().getPosition().rot[2];
                         away.set(-std::sin(yaw), -std::cos(yaw), 0.f);
                     }
-                    // About 70 game units per metre. Bounded launch velocity, not damage-scaled force.
-                    // The existing Bullet collisions and damping determine the actual travel distance.
-                    stats.setDeathKick(away * 235.f + osg::Vec3f(0.f, 0.f, 70.f), true);
+                    // Twice the previous horizontal launch speed, with no vertical lift.
+                    // Actual distance depends on friction, obstacles, terrain and the creature's shape.
+                    stats.setDeathKick(away * 470.f, true);
                 }
             }
             effect.mMagnitude = magnitude;

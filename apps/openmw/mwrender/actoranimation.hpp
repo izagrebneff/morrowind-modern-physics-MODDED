@@ -44,6 +44,9 @@ namespace MWRender
         bool updateCarriedLeftVisible(ESM::RefId weaptype) const override;
 
         void removeFromScene() override;
+        // Transform of the displayed held mesh, including its attachment offset.
+        std::optional<osg::Matrixf> getCarriedItemWorldMatrix(bool left) const;
+        virtual const PartHolder* getCarriedItemPart(bool) const { return nullptr; }
 
     protected:
         osg::Group* getBoneByName(std::string_view boneName) const;

@@ -11,6 +11,7 @@
 #include <osg/ref_ptr>
 
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace SceneUtil
@@ -60,6 +61,14 @@ namespace MWWorld
 
     public:
         bool mPhysicsPostponed : 1;
+        // Short-lived release transform captured before a dead actor's Lua setEquipment
+        // removes the visible held model. Not serialized or propagated to copied items.
+        struct CorpseGearPose
+        {
+            ESM::Position mPosition;
+            double mSimulationTime;
+        };
+        std::optional<CorpseGearPose> mCorpseGearPose;
 
     private:
         bool mChanged : 1;

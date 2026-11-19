@@ -42,6 +42,7 @@ namespace MWWorld
         mDeletedByContentFile = refData.mDeletedByContentFile;
         mFlags = refData.mFlags;
         mPhysicsPostponed = refData.mPhysicsPostponed;
+        mCorpseGearPose.reset();
 
         mAnimationState = refData.mAnimationState;
 

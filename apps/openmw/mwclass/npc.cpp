@@ -796,8 +796,8 @@ namespace MWClass
                 away.z() = 0;
                 if (away.normalize() > 0)
                 {
-                    away.z() = 0.3f;
-                    stats.setDeathKick(away * std::clamp(100.f + healthDamage * 5.f, 100.f, 320.f));
+                    // Horizontal fatal impact; tipping is produced by the ragdoll, not an upward kick.
+                    stats.setDeathKick(away * std::clamp(120.f + healthDamage * 4.f, 140.f, 280.f));
                 }
             }
 

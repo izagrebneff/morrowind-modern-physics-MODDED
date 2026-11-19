@@ -1,5 +1,7 @@
 #include "actoranimation.hpp"
 #include <utility>
+#include <algorithm>
+#include <osg/Transform>
 
 #include <osg/Group>
 #include <osg/Node>
@@ -40,6 +42,25 @@
 
 namespace MWRender
 {
+
+    std::optional<osg::Matrixf> ActorAnimation::getCarriedItemWorldMatrix(bool left) const
+    {
+        const auto* part = getCarriedItemPart(left);
+        if (!part || !part->getNode())
+            return std::nullopt;
+        const auto paths = part->getNode()->getParentalNodePaths();
+        for (const auto& path : paths)
+        {
+            if (std::find(path.begin(), path.end(), mObjectRoot.get()) == path.end())
+                continue;
+            // Skinned shields may be parented directly to the actor root rather than the hand.
+            // In that case the hand's attachment bone is the better release origin.
+            if (path.size() >= 2 && path[path.size() - 2] == mObjectRoot.get())
+                return getBoneWorldMatrix(left ? "Shield Bone" : "Weapon Bone");
+            return osg::computeLocalToWorld(path);
+        }
+        return std::nullopt;
+    }
 
     ActorAnimation::ActorAnimation(
         const MWWorld::Ptr& ptr, osg::ref_ptr<osg::Group> parentNode, Resource::ResourceSystem* resourceSystem)
