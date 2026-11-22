@@ -540,6 +540,17 @@ namespace MWRender
         if (customArgonianSwim)
             addAnimSource(Settings::models().mXargonianswimkna.get().value(), smodel);
 
+        // Optional Dark Messiah animation replacer. The source directories are isolated
+        // from the game's base skeleton KF directories, and later sources have priority.
+        // No Brutal Morrowind runtime, physics, or gameplay code is needed to load them.
+        if (Settings::game().mUseAdditionalAnimSources && !isWerewolf)
+        {
+            if (is1stPerson)
+                loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/dm_replacer/firstperson.nif"), smodel);
+            else
+                loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/dm_replacer/thirdperson.nif"), smodel);
+        }
+
         if (is1stPerson)
         {
             mObjectRoot->setNodeMask(Mask_FirstPerson);
