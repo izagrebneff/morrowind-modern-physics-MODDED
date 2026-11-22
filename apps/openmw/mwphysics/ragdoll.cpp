@@ -562,9 +562,12 @@ namespace MWPhysics
         btRigidBody::btRigidBodyConstructionInfo info(
             simulatedMass, part.mMotionState.get(), part.mShape.get(), inertia);
         info.m_friction = 0.8f;
-        info.m_restitution = 0.f;
+        // Brutal Morrowind's low rebound and higher angular damping reduce
+        // jittering of dead humanoid limbs without changing this fork's mass,
+        // buoyancy or dedicated flying-creature fall controller.
+        info.m_restitution = mFlyingCorpse ? 0.f : 0.05f;
         info.m_linearDamping = 0.15f;
-        info.m_angularDamping = 0.5f;
+        info.m_angularDamping = mFlyingCorpse ? 0.5f : 0.7f;
         // In game units (~70 per meter), like the other simulated objects.
         info.m_linearSleepingThreshold = 4.f;
         info.m_angularSleepingThreshold = 1.f;
@@ -647,7 +650,22 @@ namespace MWPhysics
         joint->setLimit(btRadians(swing1 * flyingScale), btRadians(swing2 * flyingScale),
             btRadians(twist * flyingScale), 0.9f, 0.55f, 0.9f);
         if (mFlyingCorpse)
+        {
+            // Preserve the existing lightweight flying-corpse solver.
             joint->setOverrideNumSolverIterations(28);
+        }
+        else
+        {
+            // Ported from Brutal Morrowind's rigid joint stabilization:
+            // extra iterations and stiff anchors keep a heavy impact from
+            // pulling the neck, shoulders and other connected parts apart.
+            joint->setOverrideNumSolverIterations(120);
+            for (int axis = 0; axis < 3; ++axis)
+            {
+                joint->setParam(BT_CONSTRAINT_ERP, 0.9f, axis);
+                joint->setParam(BT_CONSTRAINT_CFM, 0.f, axis);
+            }
+        }
         mTaskScheduler->addConstraint(joint.get());
         mJoints.push_back(std::move(joint));
     }
