@@ -329,6 +329,20 @@ namespace MWPhysics
                     planeNormal.normalize();
                 }
 
+                // Brutal Morrowind collision response: do not retain momentum
+                // into a blocking wall, or the next frame would retry an
+                // impossible movement and accumulate impulses behind it.
+                if (actor.mUseBrutalKinetics && !isWalkableSlope(origPlaneNormal))
+                {
+                    osg::Vec3f wallNormal(planeNormal.x(), planeNormal.y(), 0.f);
+                    if (wallNormal.normalize() > 0.001f
+                        && actor.mBrutalLocomotionVelocity * wallNormal < 0.f)
+                        actor.mBrutalLocomotionVelocity
+                            = reject(actor.mBrutalLocomotionVelocity, wallNormal);
+                    if (origPlaneNormal.z() < -0.5f && actor.mInertia.z() > 0.f)
+                        actor.mInertia.z() = 0.f;
+                }
+
                 // Move up to what we ran into (with a bit of a collision margin)
                 if ((newPosition - tracer.mEndPos).length2() > sCollisionMargin * sCollisionMargin)
                 {
