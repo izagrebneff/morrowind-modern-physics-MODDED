@@ -74,6 +74,33 @@ namespace Settings
         SettingValue<DetourNavigator::CollisionShapeType> mActorCollisionShapeType{ mIndex, "Game",
             "actor collision shape type" };
         SettingValue<bool> mPlayerMovementIgnoresAnimation{ mIndex, "Game", "player movement ignores animation" };
+        SettingValue<bool> mBrutalAdrenalineHud{ mIndex, "Game", "brutal adrenaline hud" };
+        SettingValue<bool> mBrutalEnabled{ mIndex, "Game", "brutal enabled" };
+        SettingValue<bool> mBrutalFirstPersonBody{ mIndex, "Game", "brutal first person body" };
+        SettingValue<bool> mBrutalRagdoll{ mIndex, "Game", "brutal ragdoll" };
+        SettingValue<bool> mBrutalDynamicProps{ mIndex, "Game", "brutal dynamic props" };
+        SettingValue<bool> mBrutalEquipmentPhysics{ mIndex, "Game", "brutal equipment physics" };
+        SettingValue<bool> mBrutalMeleeGeometry{ mIndex, "Game", "brutal melee geometry" };
+        SettingValue<bool> mBrutalWallBounce{ mIndex, "Game", "brutal wall bounce" };
+        SettingValue<bool> mBrutalStamina{ mIndex, "Game", "brutal stamina" };
+        SettingValue<bool> mBrutalSlide{ mIndex, "Game", "brutal slide" };
+        SettingValue<bool> mBrutalControlsEnabled{ mIndex, "Game", "brutal controls enabled" };
+        SettingValue<bool> mBrutalFastAttacks{ mIndex, "Game", "brutal fast attacks" };
+        SettingValue<bool> mBrutalClinch{ mIndex, "Game", "brutal clinch" };
+        SettingValue<bool> mBrutalCombatSounds{ mIndex, "Game", "brutal combat sounds" };
+        SettingValue<bool> mBrutalBloodEffects{ mIndex, "Game", "brutal blood effects" };
+        SettingValue<bool> mBrutalSparkEffects{ mIndex, "Game", "brutal spark effects" };
+        SettingValue<bool> mBrutalImpactEffects{ mIndex, "Game", "brutal impact effects" };
+        SettingValue<bool> mKineticPlayerMovement{ mIndex, "Game", "kinetic player movement" };
+        SettingValue<bool> mDarkMessiahNpcCombat{ mIndex, "Game", "dark messiah npc combat" };
+        SettingValue<bool> mDarkMessiahSwordParry{ mIndex, "Game", "dark messiah sword parry" };
+        SettingValue<float> mDarkMessiahParryWindow{ mIndex, "Game", "dark messiah parry window", makeClampSanitizerFloat(0, 1) };
+        SettingValue<bool> mDarkMessiahComboAttacks{ mIndex, "Game", "dark messiah combo attacks" };
+        SettingValue<bool> mDarkMessiahStandUp{ mIndex, "Game", "dark messiah stand up" };
+        SettingValue<bool> mBrutalClassicFirstPerson{ mIndex, "Game", "brutal classic first person" };
+        SettingValue<bool> mBrutalClassicNpcAnimations{ mIndex, "Game", "brutal classic npc animations" };
+        SettingValue<bool> mBrutalDismemberment{ mIndex, "Game", "brutal dismemberment" };
+        SettingValue<bool> mBrutalKickAlwaysRagdoll{ mIndex, "Game", "brutal kick always ragdoll" };
         SettingValue<bool> mTerrainObstructsFocus{ mIndex, "Game", "terrain obstructs focus" };
     };
 }
