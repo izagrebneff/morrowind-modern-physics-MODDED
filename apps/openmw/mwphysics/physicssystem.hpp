@@ -123,6 +123,9 @@ namespace MWPhysics
         ActorFrameData(Actor& actor, bool inert, bool waterCollision, float slowFall, float waterlevel, bool isPlayer);
         osg::Vec3f mPosition;
         osg::Vec3f mInertia;
+        // Actor-local Brutal movement state, carried through the threaded simulation.
+        osg::Vec3f mBrutalLocomotionVelocity;
+        const bool mUseBrutalKinetics;
         const btCollisionObject* mStandingOn;
         bool mIsOnGround;
         bool mIsOnSlope;
@@ -246,6 +249,9 @@ namespace MWPhysics
         void deflectObject(const MWWorld::Ptr& ptr, const osg::Vec3f& hitPoint, const osg::Vec3f& velocity);
         /// Set a simulated object moving.
         void launchObject(const MWWorld::Ptr& ptr, const osg::Vec3f& velocity);
+        /// Brutal dynamic-body impulses are additive; unlike launchObject they
+        /// retain an object's previous momentum.
+        bool applyBrutalObjectImpulse(const MWWorld::Ptr& ptr, const osg::Vec3f& impulse);
 
         // Carrying simulated objects (one at a time)
         bool canHoldObject(const MWWorld::ConstPtr& ptr) const;

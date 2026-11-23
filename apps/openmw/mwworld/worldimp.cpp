@@ -1418,6 +1418,7 @@ namespace MWWorld
         osg::Vec3f velocity = impulse / mass;
         // Hand gear begins at the recorded attachment transform. Let it drop from the
         // grip rather than being flung upwards by Combat Juice's generic scatter launch.
+        const bool hasCorpseGearPose = static_cast<bool>(ptr.getRefData().mCorpseGearPose);
         if (ptr.getRefData().mCorpseGearPose)
         {
             const auto now = getTimeManager()->getSimulationTime();
@@ -1436,6 +1437,15 @@ namespace MWWorld
             velocity.normalize();
             velocity *= maxLaunchSpeed;
         }
+        // Ordinary dropped items receive the additive physical impulse used
+        // by Brutal Morrowind, rather than resetting their existing velocity.
+        // The game-unit impulse is scaled using the internal Bullet mass so
+        // the original LuaPhysics weight adjustment remains unchanged.
+        // Keep the original launch route for hand gear, whose saved attachment
+        // pose deliberately forces a downward release.
+        if (!hasCorpseGearPose && object->getMass() > 0.f
+            && mPhysics->applyBrutalObjectImpulse(ptr, velocity * object->getMass()))
+            return true;
         mPhysics->launchObject(ptr, velocity);
         return true;
     }

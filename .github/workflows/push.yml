@@ -4,11 +4,24 @@ on:
 - push
 - pull_request
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+
 env:
   BUILD_TYPE: RelWithDebInfo
 
 jobs:
+  preflight:
+    name: Verify physics-port interfaces
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+    - name: Validate includes and API calls
+      run: python3 CI/brutal_port_preflight.py
+
   Ubuntu:
+    needs: preflight
     runs-on: ubuntu-latest
 
     steps:
@@ -67,6 +80,7 @@ jobs:
     #     name: build_artifact.7z
 
   MacOS:
+    needs: preflight
     strategy:
       fail-fast: true
       matrix:
@@ -78,6 +92,7 @@ jobs:
       image: ${{ matrix.args.image }}
 
   Windows:
+    needs: preflight
     strategy:
       fail-fast: true
       matrix:

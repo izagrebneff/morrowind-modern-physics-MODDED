@@ -437,6 +437,9 @@ namespace
                     actor->setOnSlope(frameData.mIsOnSlope);
                     actor->setWalkingOnWater(frameData.mWalkingOnWater);
                     actor->setInertialForce(frameData.mInertia);
+                    // Publish only after a completed step; preserve frame-to-frame
+                    // Brutal momentum without touching the existing gravity state.
+                    actor->setBrutalLocomotionVelocity(frameData.mBrutalLocomotionVelocity);
                 }
             }
             void operator()(MWPhysics::ProjectileSimulation& sim) const
@@ -915,6 +918,26 @@ namespace MWPhysics
         MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
         body->activate(true);
         body->applyImpulse(impulse, point - body->getCenterOfMassPosition());
+    }
+
+    bool PhysicsTaskScheduler::applyBrutalObjectImpulse(
+        const std::shared_ptr<Object>& object, const btVector3& impulse)
+    {
+        const std::shared_ptr<PtrHolder> held = getHeldObject();
+        MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
+        if (!object || object == held || object->isStuck())
+            return false;
+        btRigidBody* body = object->getRigidBody();
+        if (!body || body->getInvMass() <= btScalar(0))
+            return false;
+        body->activate(true);
+        body->applyCentralImpulse(impulse);
+        // Ported from Brutal Morrowind's Object::applyDynamicImpulse.
+        constexpr btScalar maxSpeed = 2000.f;
+        const btVector3 velocity = body->getLinearVelocity();
+        if (velocity.length2() > maxSpeed * maxSpeed)
+            body->setLinearVelocity(velocity.normalized() * maxSpeed);
+        return true;
     }
 
     void PhysicsTaskScheduler::removeCollisionObject(btCollisionObject* collisionObject)

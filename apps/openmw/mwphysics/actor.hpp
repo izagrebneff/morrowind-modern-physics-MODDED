@@ -116,6 +116,11 @@ namespace MWPhysics
          */
         const osg::Vec3f& getInertialForce() const { return mForce; }
 
+        // Source/Brutal-style planar momentum. Retain it across physics frames
+        // without modifying the original Morrowind gravity/inertia state.
+        const osg::Vec3f& getBrutalLocomotionVelocity() const { return mBrutalLocomotionVelocity; }
+        void setBrutalLocomotionVelocity(const osg::Vec3f& velocity) { mBrutalLocomotionVelocity = velocity; }
+
         void setOnGround(bool grounded);
 
         bool getOnGround() const { return mOnGround; }
@@ -183,6 +188,7 @@ namespace MWPhysics
         osg::Vec3f mLastStuckPosition;
 
         osg::Vec3f mForce;
+        osg::Vec3f mBrutalLocomotionVelocity;
         bool mOnGround;
         bool mOnSlope;
         bool mInternalCollisionMode;

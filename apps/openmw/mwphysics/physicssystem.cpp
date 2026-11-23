@@ -1,6 +1,7 @@
 #include "physicssystem.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <vector>
 
@@ -904,6 +905,16 @@ namespace MWPhysics
         found->second->requestVelocity(velocity);
         found->second->requestWake();
         mTaskScheduler->updateSingleAabb(found->second);
+    }
+
+    bool PhysicsSystem::applyBrutalObjectImpulse(const MWWorld::Ptr& ptr, const osg::Vec3f& impulse)
+    {
+        if (!std::isfinite(impulse.x()) || !std::isfinite(impulse.y()) || !std::isfinite(impulse.z()))
+            return false;
+        const auto found = mObjects.find(ptr.mRef);
+        if (found == mObjects.end() || !found->second->isDynamic() || found->second->isAnimated())
+            return false;
+        return mTaskScheduler->applyBrutalObjectImpulse(found->second, Misc::Convert::toBullet(impulse));
     }
 
     bool PhysicsSystem::canHoldObject(const MWWorld::ConstPtr& ptr) const
@@ -1823,6 +1834,8 @@ namespace MWPhysics
     ActorFrameData::ActorFrameData(
         Actor& actor, bool inert, bool waterCollision, float slowFall, float waterlevel, bool isPlayer)
         : mPosition()
+        , mBrutalLocomotionVelocity(actor.getBrutalLocomotionVelocity())
+        , mUseBrutalKinetics(isPlayer)
         , mStandingOn(nullptr)
         , mIsOnGround(actor.getOnGround())
         , mIsOnSlope(actor.getOnSlope())
