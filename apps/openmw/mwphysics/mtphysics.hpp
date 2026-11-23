@@ -2,28 +2,32 @@
 #define OPENMW_MWPHYSICS_MTPHYSICS_H
 
 #include <atomic>
+#include <array>
 #include <condition_variable>
+#include <cstdint>
 #include <memory>
-#include <mutex>
+#include <map>
+#include <string>
 #include <optional>
 #include <set>
 #include <shared_mutex>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 
 #include <BulletCollision/CollisionDispatch/btCollisionWorld.h>
 
-class btDiscreteDynamicsWorld;
-class btRigidBody;
-class btTypedConstraint;
-class btActionInterface;
-class btPoint2PointConstraint;
-
 #include <osg/Timer>
 
 #include "components/misc/budgetmeasurement.hpp"
+#include "components/esm3/refnum.hpp"
 #include "physicssystem.hpp"
 #include "ptrholder.hpp"
+#include "dynamictransform.hpp"
+
+class btRigidBody;
+class btTypedConstraint;
+class btActionInterface;
 
 namespace Misc
 {
@@ -47,8 +51,7 @@ namespace MWPhysics
     class PhysicsTaskScheduler
     {
     public:
-        PhysicsTaskScheduler(
-            float physicsDt, btDiscreteDynamicsWorld* dynamicsWorld, MWRender::DebugDrawer* debugDrawer);
+        PhysicsTaskScheduler(float physicsDt, btCollisionWorld* collisionWorld, MWRender::DebugDrawer* debugDrawer);
         ~PhysicsTaskScheduler();
 
         /// @brief move actors taking into account desired movements and collisions
@@ -60,6 +63,104 @@ namespace MWPhysics
             unsigned int frameNumber, osg::Stats& stats);
 
         void resetSimulation(const ActorMap& actors);
+        void applyObjectImpulse(const std::shared_ptr<Object>& object, const osg::Vec3f& impulse, float mass);
+        void addReleasedObject(const std::shared_ptr<Object>& object, const std::vector<osg::Vec3f>& vertices, float mass);
+        void setReleasedObjectMotion(const std::shared_ptr<Object>& object, const osg::Vec3f& linear,
+            const osg::Vec3f& angular, const std::vector<btRigidBody*>& gripBodies);
+        std::vector<osg::Vec3f> readReleasedObject(const std::shared_ptr<Object>& object) const;
+        void changeRagdollVelocities(const std::vector<std::pair<btRigidBody*, btVector3>>& changes);
+        void configureRagdoll(btActionInterface* action, const struct RagdollControlConfig& config);
+        bool applyRagdollImpact(btActionInterface* action, const struct RagdollImpact& event);
+        bool applyRagdollKick(btActionInterface* action, std::size_t part, const btVector3& point,
+            const btVector3& velocity, std::uint64_t id);
+        std::map<std::string, double> readRagdollControl(btActionInterface* action) const;
+        struct SuperKickActor
+        {
+            const btCollisionObject* object;
+            osg::Vec3f velocity;
+            ESM::RefNum refNum;
+        };
+        void setSuperKickActors(const std::vector<SuperKickActor>& actors);
+        bool hasActiveSuperKicks() const;
+        void startSuperKick(std::uint64_t token, std::uint64_t kickId, const std::vector<btRigidBody*>& bodies,
+            const osg::Vec3f& velocity, const btCollisionObject* attacker);
+        std::map<std::string, double> readSuperKick(std::uint64_t token) const;
+        void cancelSuperKick(std::uint64_t token);
+        struct SuperKickContact
+        {
+            std::uint64_t token;
+            const btCollisionObject* actor;
+            osg::Vec3f transfer;
+        };
+        std::vector<SuperKickContact> takeSuperKickContacts();
+        // Newly created victims can overlap the projectile by the time the main
+        // thread receives its witness. Exclude only genuinely overlapping pairs
+        // until narrow-phase separation, without changing normal world contacts.
+        void guardSuperKickSpawn(const std::vector<btRigidBody*>& bodies);
+        // Resolve the current batch once before selecting a render timestamp.
+        void waitForRagdollStep();
+
+        void addRagdollBodies(const std::vector<btRigidBody*>& bodies,
+            const std::vector<btTypedConstraint*>& constraints, btActionInterface* action);
+        void removeRagdollBodies(const std::vector<btRigidBody*>& bodies,
+            const std::vector<btTypedConstraint*>& constraints, btActionInterface* action);
+        struct RagdollDetachSnapshot
+        {
+            btTransform before, after;
+            btVector3 linearBefore, linearAfter, angularBefore, angularAfter;
+            struct Momentum
+            {
+                btVector3 center{ 0, 0, 0 }, linear{ 0, 0, 0 }, angular{ 0, 0, 0 };
+                btScalar mass = 0;
+            } retainedBefore, retainedAfter;
+            btScalar retainedTransformError = 0, retainedLinearVelocityError = 0,
+                     retainedAngularVelocityError = 0;
+            btVector3 requestedVelocity{ 0, 0, 0 }, requestedHeadImpulse{ 0, 0, 0 },
+                headAngularExpected{ 0, 0, 0 }, appliedHeadImpulse{ 0, 0, 0 };
+            btScalar targetLinearVelocityError = 0, unclampedHeadAngularSpeed = 0;
+            bool launched = false;
+            std::vector<btVector3> partLinearAfter;
+        };
+        RagdollDetachSnapshot detachRagdollConstraint(btTypedConstraint* constraint, btActionInterface* oldAction,
+            btActionInterface* newAction, btRigidBody* detachedBody, const std::vector<btRigidBody*>& bodies,
+            const btVector3& cutVelocity, const btVector3& headAngularImpulse);
+        // Remove one torso joint and replace its controller under one world lock.
+        // Return maximum transform, requested-linear and preserved-angular errors.
+        struct RagdollTorsoDetachSnapshot
+        {
+            // Errors are relative to the intended transforms/velocities, which
+            // include the deliberate fragment placement when restoring a save.
+            std::array<btScalar, 3> errors{};
+            bool poseRestored = false;
+            btScalar poseRestoreError = 0, poseRestoreDisplacement = 0,
+                poseRestoreRotation = 0, poseAnchorDistance = 0;
+        };
+        RagdollTorsoDetachSnapshot detachRagdollTorso(btTypedConstraint* constraint,
+            btActionInterface* oldAction, btActionInterface* newAction,
+            const std::vector<btRigidBody*>& bodies, const btVector3& cutVelocity,
+            const btVector3& upperSeparation,
+            const std::optional<std::array<btTransform, 2>>& desiredAnchors = {});
+        struct RagdollLimbDetachSnapshot
+        {
+            std::array<btScalar, 3> errors{};
+            bool poseRestored = false;
+            btScalar poseRestoreError = 0;
+        };
+        RagdollLimbDetachSnapshot detachRagdollLimbs(const std::vector<btTypedConstraint*>& constraints,
+            btActionInterface* oldAction, btActionInterface* newAction,
+            const std::vector<btRigidBody*>& bodies, unsigned mask, const btVector3& cutVelocity,
+            const std::optional<std::array<btTransform, 11>>& desiredPose = {});
+        std::vector<btTransform> readRigidBodyTransforms(const std::vector<btRigidBody*>& bodies,
+            std::vector<btVector3>* linear = nullptr, std::vector<btVector3>* angular = nullptr,
+            std::vector<btTransform>* rendered = nullptr, std::optional<float> interpolation = std::nullopt) const;
+        struct DynamicObjectTransform
+        {
+            MWWorld::Ptr ptr;
+            btTransform authoritative, rendered;
+            bool authoritativeChanged;
+        };
+        std::vector<DynamicObjectTransform> readDynamicObjectTransforms();
+        void disableDynamicObjects(bool props, bool equipment);
 
         // Thread safe wrappers
         void rayTest(const btVector3& rayFromWorld, const btVector3& rayToWorld,
@@ -72,87 +173,6 @@ namespace MWPhysics
         void getAabb(const btCollisionObject* obj, btVector3& min, btVector3& max);
         void setCollisionFilterMask(btCollisionObject* collisionObject, int collisionFilterMask);
         void addCollisionObject(btCollisionObject* collisionObject, int collisionFilterGroup, int collisionFilterMask);
-        void addRigidBody(btRigidBody* body, int collisionFilterGroup, int collisionFilterMask);
-        /// A joint between two rigid bodies already added (its bodies don't collide with each other).
-        void addConstraint(btTypedConstraint* constraint);
-        void removeConstraint(btTypedConstraint* constraint);
-        /// Something run every simulation step (inside it, with the world locked).
-        void addAction(btActionInterface* action);
-        void removeAction(btActionInterface* action);
-        /// Stop a body and put it to sleep.
-        void setAtRest(btRigidBody* body);
-        /// Apply a corpse-specific gravity value without altering living actors.
-        void setBodyGravity(btRigidBody* body, const btVector3& gravity);
-        /// Freeze or unfreeze all parts of a ragdoll together. Frozen parts remain solid
-        /// but cannot be woken by actors, constraints or contacts. Restores original
-        /// simulated masses (not the temporary carrying masses) when unfrozen.
-        void setRagdollBodiesFrozen(const std::vector<std::pair<btRigidBody*, btScalar>>& bodies, bool frozen);
-        /// Moves a simulated body to transform, still.
-        void placeBody(btRigidBody* body, const btTransform& transform);
-        /// Wake the body and push it: impulse applied at point (world space).
-        void applyImpulse(btRigidBody* body, const btVector3& impulse, const btVector3& point);
-
-        // Carrying a dynamic object: each physics step it is steered towards the hold target.
-        /// steerRotation: also turn it to the target orientation. holdMass: if set, its mass while held (a heavier
-        /// grip drags what it is jointed to, e.g. the rest of a ragdoll).
-        /// grabPoint: if set, it isn't carried but hangs from this world point (pinned there), which then follows
-        /// the hold target.
-        /// lightened: other objects (the rest of a ragdoll) whose mass is scaled by lightenScale while it's held.
-        void holdObject(const std::shared_ptr<PtrHolder>& object, bool steerRotation, btScalar holdMass,
-            const std::optional<btVector3>& grabPoint = std::nullopt,
-            const std::vector<std::shared_ptr<PtrHolder>>& lightened = {}, btScalar lightenScale = 1);
-        void setHoldTarget(const btVector3& position, const btQuaternion& rotation);
-        /// Let go of the held object, optionally setting its velocity (for throwing).
-        void releaseHeldObject(const std::optional<btVector3>& velocity);
-        std::shared_ptr<PtrHolder> getHeldObject() const;
-
-        /// Counts the simulation runs that stepped (as of the last sync with the main thread).
-        const std::atomic<unsigned>& getStepGeneration() const { return mStepGeneration; }
-        /// How far from the last step to the next the main thread is (as of the last sync), for showing
-        /// simulated objects between steps.
-        float getSyncInterpolation() const { return mSyncInterpolation; }
-
-        /// Change the velocity of dynamic objects as if struck at a world point (velocityChange is independent
-        /// of the object's mass). Ignores the held object.
-        struct Strike
-        {
-            std::shared_ptr<Object> mObject;
-            btVector3 mVelocityChange;
-            btVector3 mPoint;
-            btVector3 mSource; // where the blow came from
-        };
-        void strikeObjects(const std::vector<Strike>& strikes);
-
-        /// Water level for buoyancy, or none.
-        void setWaterHeight(std::optional<float> height);
-
-        /// Watch a thrown object for hitting an actor (other than the thrower) while it flies.
-        void addFlyingObject(const std::shared_ptr<Object>& object, const btCollisionObject* thrower);
-        struct FlyingObjectHit
-        {
-            std::weak_ptr<Object> mObject;
-            const btCollisionObject* mActor;
-            btScalar mSpeed;
-        };
-        /// Hits since the last call.
-        std::vector<FlyingObjectHit> takeFlyingObjectHits();
-
-        /// A new contact of a simulated body (item or ragdoll part) with something, hard enough to be heard.
-        struct Impact
-        {
-            std::weak_ptr<PtrHolder> mBody; // the simulated one
-            std::weak_ptr<PtrHolder> mOther; // empty for terrain
-            bool mOtherSimulated;
-            bool mOtherTerrain;
-            btVector3 mPoint;
-            btVector3 mNormal; // towards mBody
-            btScalar mSpeed; // the change of speed at the contact
-            btScalar mBodyMass;
-        };
-        /// Collect impacts with at least this speed change (0: don't).
-        void setImpactMinSpeed(float speed) { mImpactMinSpeed = speed; }
-        /// Impacts since the last call.
-        std::vector<Impact> takeImpacts();
         void removeCollisionObject(btCollisionObject* collisionObject);
         void updateSingleAabb(const std::shared_ptr<PtrHolder>& ptr, bool immediate = false);
         bool getLineOfSight(const std::shared_ptr<Actor>& actor1, const std::shared_ptr<Actor>& actor2);
@@ -176,19 +196,6 @@ namespace MWPhysics
         void afterPreStep();
         void afterPostStep();
         void afterPostSim();
-        void pushDynamicObjects();
-        void stepDynamics();
-        void releaseHeldObjectUnsafe(btRigidBody& body, const std::optional<btVector3>& velocity);
-        void applyWaterForces(float waterHeight);
-        void freeWedgedObjectUnsafe(const std::shared_ptr<Object>& object);
-        void setStuckUnsafe(Object& object, bool stuck);
-        void updateWedgedObjects(const std::vector<std::shared_ptr<Object>>& objects);
-        struct FlyingObject
-        {
-            std::weak_ptr<Object> mObject;
-            const btCollisionObject* mThrower;
-        };
-        void updateFlyingObjects(const std::vector<std::pair<std::shared_ptr<Object>, FlyingObject>>& objects);
         void syncWithMainThread();
         void waitForWorkers();
         void prepareWork(float& timeAccum, std::vector<Simulation>& simulations, osg::Timer_t frameStart,
@@ -197,38 +204,51 @@ namespace MWPhysics
         std::unique_ptr<WorldFrameData> mWorldFrameData;
         std::vector<Simulation>* mSimulations = nullptr;
         std::unordered_set<const btCollisionObject*> mCollisionObjects;
+        struct RagdollTransformHistory
+        {
+            btTransform previous, current;
+        };
+        // Both the step history and its render clock are protected by mCollisionWorldMutex.
+        std::unordered_map<const btRigidBody*, RagdollTransformHistory> mRagdollTransforms;
+        std::vector<btActionInterface*> mRagdollActions;
+        struct SuperKickProjectile
+        {
+            std::uint64_t kickId = 0;
+            std::vector<btRigidBody*> bodies;
+            std::vector<btTransform> before;
+            std::vector<btVector3> linear, angular;
+            std::unordered_set<const btCollisionObject*> hitActors;
+            std::unordered_set<ESM::RefNum> hitRefs;
+            const btCollisionObject* attacker = nullptr;
+            btVector3 direction{ 0, 0, 0 }, initialCenter{ 0, 0, 0 }, velocity{ 0, 0, 0 },
+                lastPoint{ 0, 0, 0 }, lastNormal{ 0, 0, 0 }, lastTransfer{ 0, 0, 0 };
+            btScalar age = 0, unsupported = 0, lastFraction = 0, lastContactSpeed = 0;
+            unsigned steps = 0, sweeps = 0, contacts = 0, blocked = 0, rejectedSpeed = 0, lastPart = 0;
+            int stopped = 0; // 0 active, 1 lifetime, 2 momentum, 3 landing, 4 invalid
+            bool airborne = false, lastOverlap = false;
+        };
+        std::unordered_map<std::uint64_t, SuperKickProjectile> mSuperKicks;
+        std::unordered_set<const btCollisionObject*> mSuperKickActors;
+        std::unordered_map<const btCollisionObject*, btVector3> mSuperKickActorVelocities;
+        std::unordered_map<const btCollisionObject*, ESM::RefNum> mSuperKickActorRefs;
+        std::vector<SuperKickContact> mSuperKickContacts;
+        void beforeSuperKickStep();
+        void afterSuperKickStep(btScalar duration);
+        void forgetSuperKickObject(const btCollisionObject* object);
+        int mRagdollBaselineSolverMode = 0;
+        float mRagdollInterpolation = 1.f;
+        std::vector<std::weak_ptr<Object>> mDynamicObjects;
+        // Separate registry: loose items must not alter ragdoll substep policy.
+        std::unordered_map<const btRigidBody*, DynamicTransformHistory> mDynamicTransforms;
+        void resetDynamicObjectHistory(const Object& object);
+        struct ReleasedGripPair { btCollisionObject* item; btCollisionObject* grip; };
+        std::vector<ReleasedGripPair> mReleasedGripPairs;
+        void clearReleasedGripPairs(btCollisionObject* removed);
+        void updateReleasedGripPairs();
         float mDefaultPhysicsDt;
         float mPhysicsDt;
         float mTimeAccum;
         btCollisionWorld* mCollisionWorld;
-        btDiscreteDynamicsWorld* mDynamicsWorld; // same object as mCollisionWorld
-        int mNumRigidBodies = 0;
-        std::atomic<bool> mHasWater{ false };
-        std::atomic<float> mWaterHeight{ 0.f };
-        std::atomic<unsigned> mStepGeneration{ 0 };
-        float mSyncInterpolation = 1.f;
-        std::weak_ptr<PtrHolder> mHeldObject;
-        bool mHoldSteerRotation = true;
-        btScalar mHeldRestoreMass = 0; // the mass to give back on release, if changed while held
-        // Objects lightened while something is held, and the masses to give back (see holdObject).
-        std::vector<std::pair<std::weak_ptr<PtrHolder>, btScalar>> mLightened;
-        void restoreLightenedUnsafe();
-        std::unique_ptr<btPoint2PointConstraint> mHoldPin; // see holdObject
-        void removeHoldPinUnsafe();
-        btVector3 mHoldTarget;
-        btQuaternion mHoldTargetRotation;
-        // Dynamic objects passing through statics they were wedged in (see freeWedgedObjectUnsafe).
-        std::vector<std::weak_ptr<Object>> mWedgedObjects;
-        std::mutex mWedgedObjectsMutex;
-        // Thrown objects still flying, and the actors they hit (see addFlyingObject).
-        std::vector<FlyingObject> mFlyingObjects;
-        std::vector<FlyingObjectHit> mFlyingObjectHits;
-        std::mutex mFlyingObjectsMutex;
-        std::atomic<float> mImpactMinSpeed{ 0.f };
-        std::vector<Impact> mImpacts;
-        std::mutex mImpactsMutex;
-        void collectImpactsUnsafe();
-        mutable std::mutex mHeldObjectMutex;
         MWRender::DebugDrawer* mDebugDrawer;
         std::vector<LOSRequest> mLOSCache;
         std::set<std::weak_ptr<PtrHolder>, std::owner_less<std::weak_ptr<PtrHolder>>> mUpdateAabb;
