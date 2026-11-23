@@ -257,7 +257,7 @@ namespace MWPhysics
     }
 
     Ragdoll::Ragdoll(const MWWorld::Ptr& actor, const BoneMatrices& bones, const osg::Vec3f& velocity,
-        const osg::Vec3f& kick, PhysicsTaskScheduler* scheduler)
+        const osg::Vec3f& kick, PhysicsTaskScheduler* scheduler, const BoneVelocities& motion)
         : mTaskScheduler(scheduler)
     {
         const auto position = [&](std::string_view bone) { return bones.find(bone)->second.getTrans(); };
@@ -297,6 +297,11 @@ namespace MWPhysics
             makeBody(*part, bodyWorld, def.mMass, def.mRadius);
 
             impact.apply(*part->mBody, pivot);
+            // Add a limited part of the last animated relative velocity without
+            // double-counting actor locomotion, which FatalImpact already handles.
+            if (const auto found = motion.find(part->mBone); found != motion.end())
+                part->mBody->setLinearVelocity(part->mBody->getLinearVelocity()
+                    + Misc::Convert::toBullet(found->second) * btScalar(0.35f));
 
             mParts.push_back(std::move(part));
         }
