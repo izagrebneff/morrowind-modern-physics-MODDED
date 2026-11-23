@@ -38,6 +38,9 @@ namespace MWPhysics
         ~Object() override;
 
         const Resource::BulletShapeInstance* getShapeInstance() const;
+        // Keep the OSG-owned shape alive while asynchronous navmesh jobs reference it.
+        std::shared_ptr<const Resource::BulletShapeInstance> getNavShapeInstance() const;
+        bool isDynamic() const { return mDynamicMass > 0.f; }
         void setScale(float scale);
         void setRotation(osg::Quat quat);
         void updatePosition();

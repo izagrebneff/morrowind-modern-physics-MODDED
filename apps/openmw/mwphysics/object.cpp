@@ -217,6 +217,14 @@ namespace MWPhysics
         return mShapeInstance.get();
     }
 
+    std::shared_ptr<const Resource::BulletShapeInstance> Object::getNavShapeInstance() const
+    {
+        // The Brutal port stores this as osg::ref_ptr, while DetourNavigator needs
+        // shared ownership. Capture an osg reference in the shared_ptr deleter.
+        return std::shared_ptr<const Resource::BulletShapeInstance>(mShapeInstance.get(),
+            [keepAlive = mShapeInstance](const Resource::BulletShapeInstance*) {});
+    }
+
     void Object::setScale(float scale)
     {
         std::unique_lock<std::mutex> lock(mPositionMutex);

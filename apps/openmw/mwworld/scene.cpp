@@ -197,13 +197,13 @@ namespace
 
                 navigator.addObject(DetourNavigator::ObjectId(object),
                     DetourNavigator::DoorShapes(
-                        object->getShapeInstance(), objectTransform, connectionStart, connectionEnd),
+                        object->getNavShapeInstance(), objectTransform, connectionStart, connectionEnd),
                     transform, navigatorUpdateGuard);
             }
             else if (object->getShapeInstance()->mVisualCollisionType == Resource::VisualCollisionType::None)
             {
                 navigator.addObject(DetourNavigator::ObjectId(object),
-                    DetourNavigator::ObjectShapes(object->getShapeInstance(), objectTransform), object->getTransform(),
+                    DetourNavigator::ObjectShapes(object->getNavShapeInstance(), objectTransform), object->getTransform(),
                     navigatorUpdateGuard);
             }
         }

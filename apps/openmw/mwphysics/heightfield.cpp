@@ -53,8 +53,8 @@ namespace
 namespace MWPhysics
 {
     HeightField::HeightField(const float* heights, int x, int y, int size, int verts, float minH, float maxH,
-        const osg::Object* holdObject, PhysicsTaskScheduler* scheduler)
-        : mHoldObject(holdObject)
+        std::shared_ptr<const ESMTerrain::LandObject> holdObject, PhysicsTaskScheduler* scheduler)
+        : mHoldObject(std::move(holdObject))
 #if BT_BULLET_VERSION < 310
         , mHeights(makeHeights(heights, verts))
 #endif
@@ -86,8 +86,11 @@ namespace MWPhysics
         mCollisionObject = std::make_unique<btCollisionObject>();
         mCollisionObject->setCollisionShape(mShape.get());
         mCollisionObject->setWorldTransform(transform);
-        mTaskScheduler->addCollisionObject(
-            mCollisionObject.get(), CollisionType_HeightMap, CollisionType_Actor | CollisionType_Projectile | CollisionType_Dynamic);
+        mCollisionObject->setCollisionFlags(btCollisionObject::CF_STATIC_OBJECT);
+        // Static, so never "awake": the dynamics step skips pairs where both objects sleep.
+        mCollisionObject->setActivationState(ISLAND_SLEEPING);
+        mTaskScheduler->addCollisionObject(mCollisionObject.get(), CollisionType_HeightMap,
+            CollisionType_Actor | CollisionType_Projectile | CollisionType_Dynamic);
     }
 
     HeightField::~HeightField()
