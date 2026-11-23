@@ -32,7 +32,6 @@
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
 
-#include "../mwrender/camera.hpp"
 #include "../mwrender/landmanager.hpp"
 #include "../mwrender/postprocessor.hpp"
 #include "../mwrender/renderingmanager.hpp"
@@ -109,7 +108,7 @@ namespace
     static osg::ref_ptr<SceneUtil::PositionAttitudeTransform> pagedNode = new SceneUtil::PositionAttitudeTransform;
 
     void addObject(const MWWorld::Ptr& ptr, const MWWorld::World& world, const std::vector<ESM::RefNum>& pagedRefs,
-        MWPhysics::PhysicsSystem& physics, MWRender::RenderingManager& rendering)
+        MWPhysics::PhysicsSystem& physics, MWRender::RenderingManager& rendering, bool notifyLua = true)
     {
         if (ptr.getRefData().getBaseNode() || physics.getActor(ptr))
         {
@@ -139,7 +138,8 @@ namespace
         if (!model.empty())
             ptr.getClass().insertObject(ptr, model, rotation, physics);
 
-        MWBase::Environment::get().getLuaManager()->objectAddedToScene(ptr);
+        if (notifyLua)
+            MWBase::Environment::get().getLuaManager()->objectAddedToScene(ptr);
     }
 
     void addObject(const MWWorld::Ptr& ptr, const MWWorld::World& world, const MWPhysics::PhysicsSystem& physics,
@@ -162,11 +162,7 @@ namespace
             const DetourNavigator::ObjectTransform objectTransform{ ptr.getRefData().getPosition(),
                 ptr.getCellRef().getScale() };
 
-            if (object->isDynamic())
-            {
-                // Moving clutter is not part of the navmesh.
-            }
-            else if (ptr.getClass().isDoor() && !ptr.getCellRef().getTeleport())
+            if (ptr.getClass().isDoor() && !ptr.getCellRef().getTeleport())
             {
                 btVector3 aabbMin;
                 btVector3 aabbMax;
@@ -374,27 +370,16 @@ namespace MWWorld
         ListAndResetObjectsVisitor visitor;
 
         cell->forEach(visitor, true); // Include objects being teleported by Lua
-        std::size_t simulated = 0;
-        std::size_t awake = 0;
-        std::size_t ragdolls = 0;
         for (const auto& ptr : visitor.mObjects)
         {
             if (const auto object = mPhysics->getObject(ptr))
             {
-                if (object->isDynamic())
-                {
-                    ++simulated;
-                    if (object->getCollisionObject()->isActive())
-                        ++awake;
-                }
                 if (object->getShapeInstance()->mVisualCollisionType == Resource::VisualCollisionType::None)
                     mNavigator.removeObject(DetourNavigator::ObjectId(object), navigatorUpdateGuard);
                 mPhysics->remove(ptr);
             }
             else if (mPhysics->getActor(ptr))
             {
-                if (!mPhysics->getRagdollBonePoses(ptr).empty())
-                    ++ragdolls;
                 mNavigator.removeAgent(mWorld.getPathfindingAgentBounds(ptr));
                 mRendering.removeActorPath(ptr);
                 mPhysics->remove(ptr);
@@ -403,10 +388,6 @@ namespace MWWorld
                 ptr.mRef->mData.mPhysicsPostponed = false;
             MWBase::Environment::get().getLuaManager()->objectRemovedFromScene(ptr);
         }
-        // How the cell's physics ended up; "awake" bodies were still moving (or jittering) on the way out.
-        // std::dec: an earlier log line can leave the shared stream in hex.
-        Log(Debug::Verbose) << "[physics] unloaded " << cell->getCell()->getDescription() << ": " << std::dec
-                            << simulated << " simulated, " << awake << " awake, " << ragdolls << " ragdolls";
 
         const auto cellX = cell->getCell()->getGridX();
         const auto cellY = cell->getCell()->getGridY();
@@ -461,7 +442,7 @@ namespace MWWorld
 
         if (cellVariant.isExterior())
         {
-            std::shared_ptr<const ESMTerrain::LandObject> land = mRendering.getLandManager()->getLand(cellIndex);
+            osg::ref_ptr<const ESMTerrain::LandObject> land = mRendering.getLandManager()->getLand(cellIndex);
             const ESM::LandData* data = land ? land->getData(ESM::Land::DATA_VHGT) : nullptr;
             const int verts = ESM::getLandSize(worldspace);
             const int worldsize = ESM::getCellSize(worldspace);
@@ -469,13 +450,13 @@ namespace MWWorld
             if (data)
             {
                 mPhysics->addHeightField(data->getHeights().data(), cellX, cellY, worldsize, verts,
-                    data->getMinHeight(), data->getMaxHeight(), std::move(land));
+                    data->getMinHeight(), data->getMaxHeight(), land.get());
             }
             else if (!ESM::isEsm4Ext(worldspace))
             {
                 static const std::vector<float> defaultHeight(verts * verts, ESM::Land::DEFAULT_HEIGHT);
                 mPhysics->addHeightField(defaultHeight.data(), cellX, cellY, worldsize, verts,
-                    ESM::Land::DEFAULT_HEIGHT, ESM::Land::DEFAULT_HEIGHT, std::move(land));
+                    ESM::Land::DEFAULT_HEIGHT, ESM::Land::DEFAULT_HEIGHT, land.get());
             }
             if (mPhysics->getHeightField(cellX, cellY))
             {
@@ -930,10 +911,10 @@ namespace MWWorld
 
     Scene::~Scene()
     {
-        for (const std::shared_ptr<SceneUtil::WorkItem>& v : mWorkItems)
+        for (const osg::ref_ptr<SceneUtil::WorkItem>& v : mWorkItems)
             v->abort();
 
-        for (const std::shared_ptr<SceneUtil::WorkItem>& v : mWorkItems)
+        for (const osg::ref_ptr<SceneUtil::WorkItem>& v : mWorkItems)
             v->waitTillDone();
     }
 
@@ -1058,12 +1039,12 @@ namespace MWWorld
         });
     }
 
-    void Scene::addObjectToScene(const Ptr& ptr)
+    void Scene::addObjectToScene(const Ptr& ptr, bool notifyLua)
     {
         const bool isInterior = mCurrentCell && !mCurrentCell->isExterior();
         try
         {
-            addObject(ptr, mWorld, mPagedRefs, *mPhysics, mRendering);
+            addObject(ptr, mWorld, mPagedRefs, *mPhysics, mRendering, notifyLua);
             addObject(ptr, mWorld, *mPhysics, mLowestPoint, isInterior, mNavigator);
             mWorld.scaleObject(ptr, ptr.getCellRef().getScale());
         }
@@ -1073,7 +1054,7 @@ namespace MWWorld
         }
     }
 
-    void Scene::removeObjectFromScene(const Ptr& ptr, bool keepActive)
+    void Scene::removeObjectFromScene(const Ptr& ptr, bool keepActive, bool notifyLua)
     {
         MWBase::Environment::get().getMechanicsManager()->remove(ptr, keepActive);
         // You'd expect the sounds attached to the object to be stopped here
@@ -1081,7 +1062,8 @@ namespace MWWorld
         // They're still stopped when the cell is unloaded
         // or if the player moves away far from the object's position.
         // Todd Howard, Who art in Bethesda, hallowed be Thy name.
-        MWBase::Environment::get().getLuaManager()->objectRemovedFromScene(ptr);
+        if (notifyLua)
+            MWBase::Environment::get().getLuaManager()->objectRemovedFromScene(ptr);
         if (const auto object = mPhysics->getObject(ptr))
         {
             if (object->getShapeInstance()->mVisualCollisionType == Resource::VisualCollisionType::None)
@@ -1145,9 +1127,10 @@ namespace MWWorld
         if (mRendering.getResourceSystem()->getSceneManager()->checkLoaded(meshPath, mRendering.getReferenceTime()))
             return;
 
-        auto item = std::make_shared<PreloadMeshItem>(meshPath, mRendering.getResourceSystem()->getSceneManager());
+        osg::ref_ptr<PreloadMeshItem> item(
+            new PreloadMeshItem(meshPath, mRendering.getResourceSystem()->getSceneManager()));
         mRendering.getWorkQueue()->addWorkItem(item);
-        const auto isDone = [](const std::shared_ptr<SceneUtil::WorkItem>& v) { return v->isDone(); };
+        const auto isDone = [](const osg::ref_ptr<SceneUtil::WorkItem>& v) { return v->isDone(); };
         mWorkItems.erase(std::remove_if(mWorkItems.begin(), mWorkItems.end(), isDone), mWorkItems.end());
         mWorkItems.emplace_back(std::move(item));
     }
@@ -1164,12 +1147,8 @@ namespace MWWorld
         osg::Vec3f predictedPos = playerPos + moved / dt * mPredictionTime;
 
         if (mCurrentCell->isExterior())
-        {
-            const MWRender::Camera& camera = *mRendering.getCamera();
-            exteriorPositions = terrainPreloadPositions(predictedPos, playerPos, camera.getPosition(),
-                camera.getMode() == MWRender::Camera::Mode::Static,
-                gridCenterToBounds(getNewGridCenter(predictedPos, nullptr)), mCurrentCell->getCell()->getWorldSpace());
-        }
+            exteriorPositions.push_back(PositionCellGrid{
+                predictedPos, gridCenterToBounds(getNewGridCenter(predictedPos, &mCurrentGridCenter)) });
 
         mLastPlayerPos = playerPos;
 
@@ -1211,9 +1190,15 @@ namespace MWWorld
 
             if (sqrDistToPlayer < mPreloadDistance * mPreloadDistance)
             {
-                CellStore* dest = mWorld.getWorldModel().findCell(door.getCellRef().getDestCell());
-                if (dest != nullptr)
-                    preloadCellWithSurroundings(*dest);
+                try
+                {
+                    preloadCellWithSurroundings(mWorld.getWorldModel().getCell(door.getCellRef().getDestCell()));
+                }
+                catch (const std::exception& e)
+                {
+                    Log(Debug::Warning) << "Failed to schedule preload for door " << door.toString() << ": "
+                                        << e.what();
+                }
             }
         }
     }
@@ -1303,11 +1288,9 @@ namespace MWWorld
             throw std::runtime_error("preloadTerrain can only work with the current exterior worldspace");
 
         ESM::ExteriorCellLocation cellPos = ESM::positionToExteriorCellLocation(pos.x(), pos.y(), worldspace);
-        // Teleports preload their destination alone.
-        const std::vector<PositionCellGrid> positions = terrainPreloadPositions(
-            pos, pos, osg::Vec3f(), false, gridCenterToBounds({ cellPos.mX, cellPos.mY }), worldspace);
-        mPreloader->abortTerrainPreloadExcept(&positions.front());
-        mPreloader->setTerrainPreloadPositions(positions);
+        const PositionCellGrid position{ pos, gridCenterToBounds({ cellPos.mX, cellPos.mY }) };
+        mPreloader->abortTerrainPreloadExcept(&position);
+        mPreloader->setTerrainPreloadPositions(std::span(&position, 1));
         if (!sync)
             return;
 

@@ -1,9 +1,6 @@
 #ifndef GAME_MWWORLD_WORLDIMP_H
 #define GAME_MWWORLD_WORLDIMP_H
-
-#include <memory>
-#include <set>
-#include <string>
+#include <map>
 
 #include <osg/Timer>
 #include <osg/ref_ptr>
@@ -15,7 +12,6 @@
 #include <components/vfs/pathutil.hpp>
 
 #include "../mwbase/world.hpp"
-#include "../mwphysics/raycasting.hpp"
 
 #include "contentloader.hpp"
 #include "esmstore.hpp"
@@ -29,6 +25,7 @@
 
 namespace osg
 {
+    class FrameStamp;
     class Group;
     class Stats;
 }
@@ -108,7 +105,6 @@ namespace MWWorld
         std::unique_ptr<DetourNavigator::Navigator> mNavigator;
         std::unique_ptr<MWRender::RenderingManager> mRendering;
         std::unique_ptr<MWWorld::Scene> mWorldScene;
-        std::unique_ptr<MWWorld::WeatherStore> mWeatherStore;
         std::unique_ptr<MWWorld::WeatherManager> mWeatherManager;
         std::unique_ptr<MWWorld::DateTimeManager> mTimeManager;
         std::unique_ptr<ProjectileManager> mProjectileManager;
@@ -117,8 +113,6 @@ namespace MWWorld
         bool mGodMode;
         bool mScriptsEnabled;
         bool mDiscardMovements;
-        bool mPlayerAttackSuppressed = false;
-        std::set<std::string> mFailedRagdollModels; // creatures whose ragdolls came apart (see doPhysics)
         std::vector<std::string> mContentFiles;
 
         std::filesystem::path mUserDataPath;
@@ -130,7 +124,6 @@ namespace MWWorld
         float mSwimHeightScale;
 
         float mDistanceToFocusObject;
-        MWPhysics::RayCastingResult mFocusRay;
 
         bool mTeleportEnabled;
         bool mLevitationEnabled;
@@ -142,6 +135,7 @@ namespace MWWorld
         float mSpellPreloadTimer;
 
         std::map<MWWorld::Ptr, MWWorld::DoorState> mDoorStates;
+        std::map<ESM::RefNum, std::vector<RagdollDroppedItem>> mRagdollDroppedItems;
         ///< only holds doors that are currently moving. 1 = opening, 2 = closing
 
         uint32_t mRandomSeed{};
@@ -153,7 +147,7 @@ namespace MWWorld
 
         void updateWeather(float duration, bool paused = false);
 
-        void initObjectInCell(const Ptr& ptr, CellStore& cell, bool adjustPos);
+        void initObjectInCell(const Ptr& ptr, CellStore& cell, bool adjustPos, bool notifyScripts = true);
         Ptr moveObjectToCell(const Ptr& ptr, CellStore* cell, ESM::Position pos, bool adjustPos);
         Ptr copyObjectToCell(const ConstPtr& ptr, CellStore* cell, ESM::Position pos, int count, bool adjustPos);
 
@@ -211,7 +205,7 @@ namespace MWWorld
 
         // Must be called after `loadData`.
         void init(Debug::Level maxRecastLogLevel, osgViewer::Viewer* viewer, osg::ref_ptr<osg::Group> rootNode,
-            const std::shared_ptr<SceneUtil::WorkQueue>& workQueue, SceneUtil::UnrefQueue& unrefQueue);
+            SceneUtil::WorkQueue* workQueue, SceneUtil::UnrefQueue& unrefQueue);
 
         virtual ~World();
 
@@ -257,8 +251,6 @@ namespace MWWorld
         bool isCellExterior() const override;
 
         bool isCellQuasiExterior() const override;
-
-        const std::set<CellStore*, std::less<>>& getActiveCells() const override;
 
         ESM::RefId getCurrentWorldspace() const;
 
@@ -322,12 +314,16 @@ namespace MWWorld
         bool toggleSky() override;
         ///< \return Resulting mode
 
-        void changeWeather(ESM::RefId region, ESM::RefId id) override;
+        void changeWeather(const ESM::RefId& region, const unsigned int id) override;
 
-        const MWWorld::WeatherStore& getAllWeather() const override;
+        void changeWeather(const ESM::RefId& region, const ESM::RefId& id) override;
+
+        const std::vector<MWWorld::Weather>& getAllWeather() const override;
 
         int getCurrentWeatherScriptId() const override;
         const MWWorld::Weather& getCurrentWeather() const override;
+        const MWWorld::Weather* getWeather(size_t index) const override;
+        const MWWorld::Weather* getWeather(const ESM::RefId& id) const override;
         int getNextWeatherScriptId() const override;
         const MWWorld::Weather* getNextWeather() const override;
 
@@ -339,12 +335,9 @@ namespace MWWorld
 
         int getSecundaPhase() const override;
 
-        std::vector<MWWorld::Moon> getCurrentMoons() const override;
-
         void setMoonColour(bool red) override;
 
-        void modRegion(ESM::RefId regionid, const std::map<ESM::RefId, uint8_t>& chances) override;
-        const std::map<ESM::RefId, uint8_t>& getRegionWeatherChances(ESM::RefId regionid) const override;
+        void modRegion(const ESM::RefId& regionid, const std::vector<uint8_t>& chances) override;
 
         void changeToInteriorCell(const std::string_view cellName, const ESM::Position& position, bool adjustPlayerPos,
             bool changeEvent = true) override;
@@ -359,8 +352,6 @@ namespace MWWorld
         ///< Return pointer to the object the player is looking at, if it is within activation range
 
         float getDistanceToFocusObject() override;
-
-        const MWPhysics::RayCastingResult& getFocusRay() const override { return mFocusRay; }
 
         /// @note No-op for items in containers. Use ContainerStore::removeItem instead.
         void deleteObject(const Ptr& ptr) override;
@@ -387,33 +378,6 @@ namespace MWWorld
         void rotateObject(const Ptr& ptr, const osg::Vec3f& rot,
             MWBase::RotationFlags flags = MWBase::RotationFlag_inverseOrder) override;
 
-        bool canGrabObject(const MWWorld::ConstPtr& ptr) const override;
-        void wakeLuaCorpseDrop(const MWWorld::Ptr& ptr) override;
-        bool launchLuaCorpseDrop(const MWWorld::Ptr& ptr, const osg::Vec3f& impulse) override;
-        /// A dead actor whose body can be made a ragdoll (see grabObject).
-        bool canRagdollCorpse(const MWWorld::ConstPtr& ptr) const;
-        bool makeRagdollBody(const MWWorld::Ptr& actor, const osg::Vec3f& kick, bool allowOnePiece);
-        bool grabObject(const MWWorld::Ptr& ptr) override;
-        void releaseGrabbedObject(bool throwObject) override;
-        bool isGrabbingObject() const override;
-        void rotateGrabbedObject(float yaw, float pitch) override;
-        void setPlayerAttackSuppressed(bool suppressed) override { mPlayerAttackSuppressed = suppressed; }
-        void pushObjectsFromExplosion(const osg::Vec3f& center, float radius) override;
-        void objectEnteredWater(const MWWorld::Ptr& object, const osg::Vec3f& position, float speed) override;
-        void bodyEnteredWater(const MWWorld::Ptr& body, const osg::Vec3f& position, float speed, float size) override;
-        std::vector<std::pair<std::string, osg::Matrixf>> getRagdollBonePoses(
-            const MWWorld::ConstPtr& actor) const override;
-        bool makeRagdoll(
-            const MWWorld::Ptr& actor, const osg::Vec3f& kick, bool allowOnePiece, bool atRest) override;
-        void removeRagdoll(const MWWorld::ConstPtr& actor) override;
-        void knockObjectsWithMeleeAttack(const MWWorld::Ptr& attacker, const MWWorld::Ptr& weapon, int attackType,
-            float attackStrength) override;
-        /// A melee swing that hit no one and nothing loose: the sound of it meeting the world, if it does (from
-        /// eye, along direction, within reach).
-        void meleeHitWorld(const MWWorld::Ptr& attacker, const MWWorld::Ptr& weapon, osg::Vec3f direction,
-            const osg::Vec3f& eye, float reach, float attackStrength);
-        bool isPlayerAttackSuppressed() const override { return mPlayerAttackSuppressed; }
-
         MWWorld::Ptr placeObject(
             const MWWorld::ConstPtr& ptr, MWWorld::CellStore* cell, const ESM::Position& pos) override;
         ///< Place an object. Makes a copy of the Ptr.
@@ -427,7 +391,37 @@ namespace MWWorld
 
         float getMaxActivationDistance() const override;
 
+        bool canStartNpcRagdoll(const Ptr& ptr) override;
+        bool startNpcRagdoll(const Ptr& ptr, const osg::Vec3f& kick) override;
+        bool startNpcDecapitation(const Ptr& ptr, const osg::Vec3f& kick, const osg::Vec3f& cutDirection) override;
+        bool startNpcBisection(const Ptr& ptr, const osg::Vec3f& kick, const osg::Vec3f& cutDirection,
+            const std::string& savedPose = {}) override;
+        std::string getNpcBisectionPoseData(const Ptr& ptr) const override;
+        bool startNpcLimbSevering(const Ptr& ptr, unsigned mask, const osg::Vec3f& kick,
+            const osg::Vec3f& cutDirection, const std::string& savedPose = {}) override;
+        std::string getNpcLimbSeveringPoseData(const Ptr& ptr) const override;
+        unsigned getNpcSeveredLimbsMask(const Ptr& ptr) const override;
+        bool applyNpcKick(const MWWorld::Ptr& ptr, const osg::Vec3f& kick, const MWWorld::Ptr& attacker,
+            bool knockDown = false, bool slideTrip = false) override;
+        bool applyNpcSuperKick(const Ptr& ptr, const osg::Vec3f& kick, const Ptr& attacker,
+            std::uint64_t kickId) override;
+        std::map<std::string, double> getNpcSuperKickState(const Ptr& ptr) const override;
+        std::vector<osg::Vec3f> getNpcRagdollDynamics(const MWWorld::Ptr& ptr) const override;
+        std::vector<osg::Vec3f> getNpcRagdollState(const Ptr& ptr) const override;
+        std::map<std::string, double> getNpcRagdollEnhancementState(const Ptr& ptr) const override;
+        void releaseNpcRagdollEquipment(const Ptr& ptr) override;
+        std::vector<RagdollDroppedItem> getNpcRagdollDroppedItems(const Ptr& ptr) const override;
+        std::vector<osg::Vec3f> getReleasedEquipmentState(const Ptr& ptr) const override;
+        bool applyNpcRagdollImpact(const Ptr& ptr, std::size_t part, const osg::Vec3f& point,
+            const osg::Vec3f& impulse, std::uint64_t id) override;
+        Ptr kickNpcRagdoll(const osg::Vec3f& origin, const osg::Vec3f& forward, float reach, float minimumDot,
+            const osg::Vec3f& velocity, bool& headHit, osg::Vec3f& hitPoint, std::size_t& hitPart) override;
+        void applyObjectImpulse(const Ptr& ptr, const osg::Vec3f& impulse, float mass) override;
+        void syncDynamicObject(const Ptr& ptr, const osg::Vec3f& position, const osg::Quat& rotation,
+            const osg::Vec3f& renderedPosition, const osg::Quat& renderedRotation, bool authoritativeChanged) override;
         void queueMovement(const Ptr& ptr, const osg::Vec3f& velocity) override;
+        void addActorExternalVelocity(const Ptr& ptr, const osg::Vec3f& delta) override;
+        void clearActorExternalVelocity(const Ptr& ptr) override;
         ///< Queues movement for \a ptr (in local space), to be applied in the next call to
         /// doPhysics.
 
@@ -436,8 +430,11 @@ namespace MWWorld
         const MWPhysics::RayCastingInterface* getRayCasting() const override;
 
         bool castRenderingRay(MWPhysics::RayCastingResult& res, const osg::Vec3f& from, const osg::Vec3f& to,
-            bool ignorePlayer, bool ignoreActors, bool ignoreTerrain,
-            std::span<const MWWorld::Ptr> ignoreList) override;
+            bool ignorePlayer, bool ignoreActors, std::span<const MWWorld::Ptr> ignoreList, bool melee = false) override;
+
+        std::vector<float> findRenderingSegmentCandidates(
+            std::span<const std::pair<osg::Vec3f, osg::Vec3f>> segments,
+            std::span<const unsigned> buckets) override;
 
         void setActorCollisionMode(const Ptr& ptr, bool internal, bool external) override;
         bool isActorCollisionEnabled(const Ptr& ptr) override;
@@ -452,6 +449,8 @@ namespace MWWorld
         ///< \return Resulting mode
 
         void update(float duration, bool paused);
+        void sampleNpcRagdollAnimation(float duration);
+        void samplePlayerSwordWallContact(float duration, const osg::FrameStamp& frameStamp);
         void updatePhysics(
             float duration, bool paused, osg::Timer_t frameStart, unsigned int frameNumber, osg::Stats& stats);
 
@@ -605,7 +604,7 @@ namespace MWWorld
         void launchMagicBolt(const ESM::RefId& spellId, const MWWorld::Ptr& caster, const osg::Vec3f& fallbackDirection,
             ESM::RefNum item) override;
         void launchProjectile(MWWorld::Ptr& actor, MWWorld::Ptr& projectile, const osg::Vec3f& worldPos,
-            const osg::Quat& orient, MWWorld::Ptr& bow, float speed, float attackStrength, float attackWindUp) override;
+            const osg::Quat& orient, MWWorld::Ptr& bow, float speed, float attackStrength) override;
         void updateProjectilesCasters() override;
 
         void applyLoopingParticles(const MWWorld::Ptr& ptr) const override;
@@ -651,6 +650,10 @@ namespace MWWorld
             std::string_view effectId = {}, bool loop = false) override;
 
         void removeEffect(std::string_view effectId) override;
+        void spawnBrutalImpact(std::string_view kind, const osg::Vec3f& position,
+            const osg::Vec3f& direction, float intensity, bool power) override;
+        std::map<std::string, double> getBrutalImpactStats() const override;
+
 
         /// @see MWWorld::WeatherManager::isInStorm
         bool isInStorm() const override;
