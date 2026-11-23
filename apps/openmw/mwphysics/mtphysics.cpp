@@ -437,6 +437,9 @@ namespace
                     actor->setOnSlope(frameData.mIsOnSlope);
                     actor->setWalkingOnWater(frameData.mWalkingOnWater);
                     actor->setInertialForce(frameData.mInertia);
+                    // Publish only after a completed step; preserve frame-to-frame
+                    // Brutal momentum without touching the existing gravity state.
+                    actor->setBrutalLocomotionVelocity(frameData.mBrutalLocomotionVelocity);
                 }
             }
             void operator()(MWPhysics::ProjectileSimulation& sim) const

@@ -123,6 +123,9 @@ namespace MWPhysics
         ActorFrameData(Actor& actor, bool inert, bool waterCollision, float slowFall, float waterlevel, bool isPlayer);
         osg::Vec3f mPosition;
         osg::Vec3f mInertia;
+        // Actor-local Brutal movement state, carried through the threaded simulation.
+        osg::Vec3f mBrutalLocomotionVelocity;
+        const bool mUseBrutalKinetics;
         const btCollisionObject* mStandingOn;
         bool mIsOnGround;
         bool mIsOnSlope;

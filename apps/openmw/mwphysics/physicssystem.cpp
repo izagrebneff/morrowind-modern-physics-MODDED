@@ -1823,6 +1823,8 @@ namespace MWPhysics
     ActorFrameData::ActorFrameData(
         Actor& actor, bool inert, bool waterCollision, float slowFall, float waterlevel, bool isPlayer)
         : mPosition()
+        , mBrutalLocomotionVelocity(actor.getBrutalLocomotionVelocity())
+        , mUseBrutalKinetics(isPlayer)
         , mStandingOn(nullptr)
         , mIsOnGround(actor.getOnGround())
         , mIsOnSlope(actor.getOnSlope())
