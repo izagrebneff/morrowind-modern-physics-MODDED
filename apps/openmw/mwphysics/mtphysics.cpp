@@ -920,6 +920,32 @@ namespace MWPhysics
         body->applyImpulse(impulse, point - body->getCenterOfMassPosition());
     }
 
+    void PhysicsTaskScheduler::applyRagdollImpulse(
+        btRigidBody* body, const btVector3& impulse, const btVector3& point)
+    {
+        MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
+        if (!body || body->getInvMass() <= btScalar(0))
+            return; // Do not wake a frozen corpse or static fallback shape.
+
+        // Borrow Brutal's bounded-momentum approach without replacing the
+        // fork's scheduler, corpse-freeze logic or articulated rig lifecycle.
+        constexpr btScalar maxImpulse = 30000.f;
+        constexpr btScalar maxLinearSpeed = 2000.f;
+        constexpr btScalar maxAngularSpeed = 40.f;
+        btVector3 bounded = impulse;
+        if (bounded.length2() > maxImpulse * maxImpulse)
+            bounded *= maxImpulse / bounded.length();
+        body->activate(true);
+        body->applyImpulse(bounded, point - body->getCenterOfMassPosition());
+
+        const btVector3 linear = body->getLinearVelocity();
+        if (linear.length2() > maxLinearSpeed * maxLinearSpeed)
+            body->setLinearVelocity(linear * (maxLinearSpeed / linear.length()));
+        const btVector3 angular = body->getAngularVelocity();
+        if (angular.length2() > maxAngularSpeed * maxAngularSpeed)
+            body->setAngularVelocity(angular * (maxAngularSpeed / angular.length()));
+    }
+
     bool PhysicsTaskScheduler::applyBrutalObjectImpulse(
         const std::shared_ptr<Object>& object, const btVector3& impulse)
     {

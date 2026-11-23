@@ -91,6 +91,9 @@ namespace MWPhysics
         void placeBody(btRigidBody* body, const btTransform& transform);
         /// Wake the body and push it: impulse applied at point (world space).
         void applyImpulse(btRigidBody* body, const btVector3& impulse, const btVector3& point);
+        /// Apply a corpse hit at its world-space contact and bound pathological speeds.
+        /// Keeps the physics-world lock around both the impulse and the velocity guard.
+        void applyRagdollImpulse(btRigidBody* body, const btVector3& impulse, const btVector3& point);
 
         // Brutal Morrowind: apply additive, speed-limited central impulse to a
         // dynamic prop. Do not disturb held or embedded objects.

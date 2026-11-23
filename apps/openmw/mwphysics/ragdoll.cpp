@@ -950,7 +950,7 @@ namespace MWPhysics
             }
         }
         if (nearest != nullptr)
-            mTaskScheduler->applyImpulse(
+            mTaskScheduler->applyRagdollImpulse(
                 nearest->mBody, Misc::Convert::toBullet(impulse), Misc::Convert::toBullet(point));
     }
 
