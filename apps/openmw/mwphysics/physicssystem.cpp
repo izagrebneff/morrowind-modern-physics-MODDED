@@ -1141,6 +1141,31 @@ namespace MWPhysics
         }
         if (!strikes.empty())
             mTaskScheduler->strikeObjects(strikes);
+
+        // The Dark Messiah-style explosion previously affected loose props only.
+        // Transfer a single, attenuated impulse to each nearby corpse, selecting
+        // its actual physics body surface inside Ragdoll::strike.  The scheduler
+        // refuses impulses to frozen/static bodies and bounds excessive speeds.
+        for (const auto& [_, ragdoll] : mRagdolls)
+        {
+            const auto target = ragdoll->getImpactCenter();
+            if (!target)
+                continue;
+            osg::Vec3f away = *target - center;
+            const float distance = away.normalize();
+            if (!(distance < radius))
+                continue;
+            // Bodies centered on an explosion still need a well-defined push.
+            if (distance < 1e-3f)
+                away.set(0.f, 0.f, 1.f);
+            away.z() += 0.5f;
+            away.normalize();
+            const float falloff = 1.f - distance / radius;
+            constexpr float ragdollImpulseScale = 0.15f;
+            const float impulse = speed * ragdoll->getMass() * falloff * ragdollImpulseScale;
+            if (std::isfinite(impulse) && impulse > 0.f)
+                ragdoll->strike(*target, away * impulse);
+        }
     }
 
     void PhysicsSystem::placeOnSurface(Object& object)
