@@ -1,18 +1,14 @@
 #ifndef GAME_MWBASE_WORLD_H
 #define GAME_MWBASE_WORLD_H
+#include <map>
 
 #include "rotationflags.hpp"
 
 #include <deque>
-#include <map>
 #include <set>
 #include <span>
-#include <string>
 #include <string_view>
-#include <utility>
 #include <vector>
-
-#include <osg/Matrixf>
 
 #include <components/misc/rng.hpp>
 #include <components/vfs/pathutil.hpp>
@@ -20,6 +16,7 @@
 #include "../mwworld/doorstate.hpp"
 #include "../mwworld/globalvariablename.hpp"
 #include "../mwworld/ptr.hpp"
+#include "../mwworld/ragdolldroppeditem.hpp"
 #include "../mwworld/spellcaststate.hpp"
 
 #include "../mwrender/rendermode.hpp"
@@ -100,8 +97,6 @@ namespace MWWorld
     class Cell;
     class DateTimeManager;
     class Weather;
-    class WeatherStore;
-    struct Moon;
 
     typedef std::vector<std::pair<MWWorld::Ptr, MWMechanics::Movement>> PtrMovementList;
 }
@@ -167,8 +162,6 @@ namespace MWBase
 
         virtual bool isCellQuasiExterior() const = 0;
 
-        virtual const std::set<MWWorld::CellStore*, std::less<>>& getActiveCells() const = 0;
-
         virtual void getDoorMarkers(MWWorld::CellStore& cell, std::vector<DoorMarker>& out) = 0;
         ///< get a list of teleport door markers for a given cell, to be displayed on the local map
 
@@ -222,13 +215,19 @@ namespace MWBase
         virtual bool toggleSky() = 0;
         ///< \return Resulting mode
 
-        virtual void changeWeather(ESM::RefId region, ESM::RefId id) = 0;
+        virtual void changeWeather(const ESM::RefId& region, const unsigned int id) = 0;
 
-        virtual const MWWorld::WeatherStore& getAllWeather() const = 0;
+        virtual void changeWeather(const ESM::RefId& region, const ESM::RefId& id) = 0;
+
+        virtual const std::vector<MWWorld::Weather>& getAllWeather() const = 0;
 
         virtual int getCurrentWeatherScriptId() const = 0;
 
         virtual const MWWorld::Weather& getCurrentWeather() const = 0;
+
+        virtual const MWWorld::Weather* getWeather(size_t index) const = 0;
+
+        virtual const MWWorld::Weather* getWeather(const ESM::RefId& id) const = 0;
 
         virtual int getNextWeatherScriptId() const = 0;
 
@@ -242,12 +241,9 @@ namespace MWBase
 
         virtual int getSecundaPhase() const = 0;
 
-        virtual std::vector<MWWorld::Moon> getCurrentMoons() const = 0;
-
         virtual void setMoonColour(bool red) = 0;
 
-        virtual void modRegion(ESM::RefId regionid, const std::map<ESM::RefId, uint8_t>& chances) = 0;
-        virtual const std::map<ESM::RefId, uint8_t>& getRegionWeatherChances(ESM::RefId regionid) const = 0;
+        virtual void modRegion(const ESM::RefId& regionid, const std::vector<uint8_t>& chances) = 0;
 
         virtual void changeToInteriorCell(
             std::string_view cellName, const ESM::Position& position, bool adjustPlayerPos, bool changeEvent = true)
@@ -264,9 +260,6 @@ namespace MWBase
         ///< Return pointer to the object the player is looking at, if it is within activation range
 
         virtual float getDistanceToFocusObject() = 0;
-
-        virtual const MWPhysics::RayCastingResult& getFocusRay() const = 0;
-        ///< Result of the last focus object lookup
 
         virtual float getMaxActivationDistance() const = 0;
 
@@ -296,48 +289,6 @@ namespace MWBase
 
         virtual void scaleObject(const MWWorld::Ptr& ptr, float scale, bool force = false) = 0;
 
-        // Player carrying a simulated object in front of the camera.
-        virtual bool canGrabObject(const MWWorld::ConstPtr& ptr) const = 0;
-        // A Lua teleport out of a corpse's inventory creates a new loose item, not a loaded sleeping reference.
-        virtual void wakeLuaCorpseDrop(const MWWorld::Ptr&) {}
-        // Combat Juice sends LuaPhysics_ApplyImpulse immediately after that teleport.
-        // Return false when there is no native body, allowing the original Lua event to be delivered.
-        virtual bool launchLuaCorpseDrop(const MWWorld::Ptr&, const osg::Vec3f&) { return false; }
-        virtual bool grabObject(const MWWorld::Ptr& ptr) = 0;
-        /// Drop the carried object, or throw it where the camera is looking.
-        virtual void releaseGrabbedObject(bool throwObject) = 0;
-        virtual bool isGrabbingObject() const = 0;
-        /// Turn the carried object: yaw spins it around the vertical, pitch tilts it towards/away from the camera.
-        virtual void rotateGrabbedObject(float yaw, float pitch) = 0;
-        /// Stops the player's weapon/spell use (e.g. so clicking to throw doesn't also attack).
-        virtual void setPlayerAttackSuppressed(bool suppressed) = 0;
-
-        /// Ragdolls for dead actors. The ragdoll's bones (world matrices, parents first); empty if it has none.
-        virtual std::vector<std::pair<std::string, osg::Matrixf>> getRagdollBonePoses(
-            const MWWorld::ConstPtr& actor) const
-            = 0;
-        /// Make a dead actor's body a ragdoll: limp if it has a skeleton, else (if allowOnePiece) in one piece, its
-        /// model following. kick is how the killing blow throws it; atRest makes it start out still (as it was left
-        /// lying). @return false if it can't be made.
-        virtual bool makeRagdoll(
-            const MWWorld::Ptr& actor, const osg::Vec3f& kick, bool allowOnePiece, bool atRest)
-            = 0;
-        virtual void removeRagdoll(const MWWorld::ConstPtr& actor) = 0;
-
-        /// A simulated object fell into water here, going down at speed: ripples, and a splash if fast.
-        virtual void objectEnteredWater(const MWWorld::Ptr& object, const osg::Vec3f& position, float speed) = 0;
-        /// A dead body (its ragdoll) fell into water at position (on the surface); size: about its length.
-        virtual void bodyEnteredWater(const MWWorld::Ptr& body, const osg::Vec3f& position, float speed, float size) = 0;
-
-        /// Blow simulated objects away from an area effect at center.
-        virtual void pushObjectsFromExplosion(const osg::Vec3f& center, float radius) = 0;
-        /// A melee attack that didn't hit anyone, at the moment it lands: knock simulated objects in its reach and
-        /// arc, in the direction of the attack type (an ESM::Weapon::AttackType).
-        virtual void knockObjectsWithMeleeAttack(
-            const MWWorld::Ptr& attacker, const MWWorld::Ptr& weapon, int attackType, float attackStrength)
-            = 0;
-        virtual bool isPlayerAttackSuppressed() const = 0;
-
         virtual void rotateObject(
             const MWWorld::Ptr& ptr, const osg::Vec3f& rot, RotationFlags flags = RotationFlag_inverseOrder)
             = 0;
@@ -355,7 +306,42 @@ namespace MWBase
         /// relative to \a referenceObject (but the object may be placed somewhere else if the wanted location is
         /// obstructed).
 
+        virtual bool canStartNpcRagdoll(const MWWorld::Ptr& ptr) = 0;
+        virtual bool startNpcRagdoll(const MWWorld::Ptr& ptr, const osg::Vec3f& kick) = 0;
+        virtual bool startNpcDecapitation(const MWWorld::Ptr& ptr, const osg::Vec3f& kick,
+            const osg::Vec3f& cutDirection) = 0;
+        virtual bool startNpcBisection(const MWWorld::Ptr& ptr, const osg::Vec3f& kick,
+            const osg::Vec3f& cutDirection, const std::string& savedPose = {}) = 0;
+        virtual std::string getNpcBisectionPoseData(const MWWorld::Ptr& ptr) const = 0;
+        virtual bool startNpcLimbSevering(const MWWorld::Ptr& ptr, unsigned mask, const osg::Vec3f& kick,
+            const osg::Vec3f& cutDirection, const std::string& savedPose = {}) = 0;
+        virtual std::string getNpcLimbSeveringPoseData(const MWWorld::Ptr& ptr) const = 0;
+        virtual unsigned getNpcSeveredLimbsMask(const MWWorld::Ptr& ptr) const = 0;
+        // knockDown: a living ragdoll fall on open ground (Dark Messiah's chancetofall).
+        // slideTrip: the sliding boot enters at the shins; other knockdowns use the chest.
+        virtual bool applyNpcKick(
+            const MWWorld::Ptr& ptr, const osg::Vec3f& kick, const MWWorld::Ptr& attacker,
+            bool knockDown = false, bool slideTrip = false)
+            = 0;
+        virtual bool applyNpcSuperKick(const MWWorld::Ptr& ptr, const osg::Vec3f& kick,
+            const MWWorld::Ptr& attacker, std::uint64_t kickId) = 0;
+        virtual std::map<std::string, double> getNpcSuperKickState(const MWWorld::Ptr& ptr) const = 0;
+        virtual std::vector<osg::Vec3f> getNpcRagdollDynamics(const MWWorld::Ptr& ptr) const = 0;
+        virtual std::vector<osg::Vec3f> getNpcRagdollState(const MWWorld::Ptr& ptr) const = 0;
+        virtual std::map<std::string, double> getNpcRagdollEnhancementState(const MWWorld::Ptr& ptr) const = 0;
+        virtual void releaseNpcRagdollEquipment(const MWWorld::Ptr& ptr) = 0;
+        virtual std::vector<MWWorld::RagdollDroppedItem> getNpcRagdollDroppedItems(const MWWorld::Ptr& ptr) const = 0;
+        virtual std::vector<osg::Vec3f> getReleasedEquipmentState(const MWWorld::Ptr& ptr) const = 0;
+        virtual bool applyNpcRagdollImpact(const MWWorld::Ptr& ptr, std::size_t part, const osg::Vec3f& point,
+            const osg::Vec3f& impulse, std::uint64_t id) = 0;
+        virtual MWWorld::Ptr kickNpcRagdoll(const osg::Vec3f& origin, const osg::Vec3f& forward, float reach,
+            float minimumDot, const osg::Vec3f& velocity, bool& headHit, osg::Vec3f& hitPoint, std::size_t& hitPart) = 0;
+        virtual void applyObjectImpulse(const MWWorld::Ptr& ptr, const osg::Vec3f& impulse, float mass) = 0;
+        virtual void syncDynamicObject(const MWWorld::Ptr& ptr, const osg::Vec3f& position, const osg::Quat& rotation,
+            const osg::Vec3f& renderedPosition, const osg::Quat& renderedRotation, bool authoritativeChanged) = 0;
         virtual void queueMovement(const MWWorld::Ptr& ptr, const osg::Vec3f& velocity) = 0;
+        virtual void addActorExternalVelocity(const MWWorld::Ptr& ptr, const osg::Vec3f& delta) = 0;
+        virtual void clearActorExternalVelocity(const MWWorld::Ptr& ptr) = 0;
         ///< Queues movement for \a ptr (in local space), to be applied in the next call to
         /// doPhysics.
 
@@ -364,8 +350,12 @@ namespace MWBase
         virtual const MWPhysics::RayCastingInterface* getRayCasting() const = 0;
 
         virtual bool castRenderingRay(MWPhysics::RayCastingResult& res, const osg::Vec3f& from, const osg::Vec3f& to,
-            bool ignorePlayer, bool ignoreActors, bool ignoreTerrain, std::span<const MWWorld::Ptr> ignoreList = {})
+            bool ignorePlayer, bool ignoreActors, std::span<const MWWorld::Ptr> ignoreList = {}, bool melee = false)
             = 0;
+
+        virtual std::vector<float> findRenderingSegmentCandidates(
+            std::span<const std::pair<osg::Vec3f, osg::Vec3f>> segments,
+            std::span<const unsigned> buckets) = 0;
 
         virtual void setActorCollisionMode(const MWWorld::Ptr& ptr, bool internal, bool external) = 0;
         virtual bool isActorCollisionEnabled(const MWWorld::Ptr& ptr) = 0;
@@ -582,6 +572,10 @@ namespace MWBase
             = 0;
 
         virtual void removeEffect(std::string_view effectId) = 0;
+        virtual void spawnBrutalImpact(std::string_view kind, const osg::Vec3f& position,
+            const osg::Vec3f& direction, float intensity, bool power) = 0;
+        virtual std::map<std::string, double> getBrutalImpactStats() const = 0;
+
 
         /// @see MWWorld::WeatherManager::isInStorm
         virtual bool isInStorm() const = 0;

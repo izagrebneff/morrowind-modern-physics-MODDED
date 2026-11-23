@@ -1,15 +1,9 @@
 #include "class.hpp"
 
-#include <algorithm>
 #include <stdexcept>
 
 #include <components/esm/defs.hpp>
-#include <components/esm3/loadarmo.hpp>
 #include <components/esm3/loadench.hpp>
-#include <components/esm3/loadlock.hpp>
-#include <components/esm3/loadprob.hpp>
-#include <components/esm3/loadrepa.hpp>
-#include <components/esm3/loadweap.hpp>
 #include <components/esm3/loadmgef.hpp>
 #include <components/esm3/loadsoun.hpp>
 #include <components/misc/resourcehelpers.hpp>
@@ -30,7 +24,6 @@
 #include "../mwgui/tooltips.hpp"
 
 #include "../mwmechanics/npcstats.hpp"
-
 #include "../mwphysics/physicssystem.hpp"
 
 namespace MWWorld
@@ -49,44 +42,15 @@ namespace MWWorld
     void Class::insertObject(
         const Ptr& ptr, const std::string& mesh, const osg::Quat& rotation, MWPhysics::PhysicsSystem& physics) const
     {
-        insertObjectPhysics(ptr, mesh, rotation, physics);
+        if (ptr.getRefData().getReleasedEquipment())
+            physics.addReleasedEquipment(ptr);
     }
 
     void Class::insertObjectPhysics(
         const Ptr& ptr, const std::string& mesh, const osg::Quat& rotation, MWPhysics::PhysicsSystem& physics) const
     {
-        if (mesh.empty() || !isItem(ptr))
-            return;
-
-        // Items placed by Morrowind/ESP/ESM authors are part of the fixed scene.
-        // They must not fall, roll or get pushed by actors, explosions or ragdolls.
-        // Keep their normal collision and allow them to be picked up.
-        // Runtime-generated references (including items dropped from inventory)
-        // remain simulated rigid bodies.
-        if (ptr.getCellRef().hasContentFile())
-        {
-            physics.addObject(ptr, VFS::Path::toNormalized(mesh), rotation, MWPhysics::CollisionType_World);
-            return;
-        }
-
-        const float mass = std::clamp(getWeight(ptr), 0.2f, 50.f);
-        // Metal goods sink no matter how light they are for their size.
-        const unsigned type = ptr.getType();
-        const bool metal = type == ESM::Weapon::sRecordId || type == ESM::Armor::sRecordId
-            || type == ESM::Lockpick::sRecordId || type == ESM::Probe::sRecordId || type == ESM::Repair::sRecordId
-            || ptr.getClass().isGold(ptr);
-        // Ammunition and thrown weapons can be stuck in things.
-        bool projectile = false;
-        if (type == ESM::Weapon::sRecordId)
-        {
-            const ESM::RefId& weaponType = ptr.get<ESM::Weapon>()->mBase->mData.mType;
-            projectile = weaponType == ESM::WeaponType::Arrow || weaponType == ESM::WeaponType::Bolt
-                || weaponType == ESM::WeaponType::MarksmanThrown;
-        }
-        // Script-placed objects normally get collision only after the next cell change. Simulated objects
-        // need it right away, or they would just hang in the air.
-        ptr.mRef->mData.mPhysicsPostponed = false;
-        physics.addDynamicObject(ptr, VFS::Path::toNormalized(mesh), rotation, mass, metal, projectile);
+        if (ptr.getRefData().getReleasedEquipment())
+            physics.addReleasedEquipment(ptr);
     }
 
     bool Class::consume(const MWWorld::Ptr& consumable, const MWWorld::Ptr& actor) const
@@ -149,13 +113,13 @@ namespace MWWorld
         throw std::runtime_error("class does not have item health");
     }
 
-    bool Class::evaluateHit(const Ptr& ptr, Ptr& victim, osg::Vec3f& hitPosition) const
+    bool Class::evaluateHit(const Ptr& ptr, Ptr& victim, osg::Vec3f& hitPosition, int* contactPart, std::string_view swing) const
     {
         throw std::runtime_error("class cannot hit");
     }
 
-    void Class::hit(const Ptr& ptr, float attackStrength, float attackWindUp, int type, const Ptr& victim,
-        const osg::Vec3f& hitPosition, bool success) const
+    void Class::hit(const Ptr& ptr, float attackStrength, int type, const Ptr& victim, const osg::Vec3f& hitPosition,
+        bool success, int contactPart) const
     {
         throw std::runtime_error("class cannot hit");
     }
@@ -317,7 +281,7 @@ namespace MWWorld
         throw std::runtime_error("class does not support soundgen look up");
     }
 
-    VFS::Path::NormalizedView Class::getInventoryIcon(const MWWorld::ConstPtr& ptr) const
+    const std::string& Class::getInventoryIcon(const MWWorld::ConstPtr& ptr) const
     {
         throw std::runtime_error("class does not have any inventory icon");
     }
@@ -347,16 +311,16 @@ namespace MWWorld
 
     void Class::adjustScale(const MWWorld::ConstPtr& ptr, osg::Vec3f& scale, bool rendering) const {}
 
-    VFS::Path::NormalizedView Class::getModel(const MWWorld::ConstPtr& ptr) const
+    std::string_view Class::getModel(const MWWorld::ConstPtr& ptr) const
     {
         return {};
     }
 
     VFS::Path::Normalized Class::getCorrectedModel(const MWWorld::ConstPtr& ptr) const
     {
-        const VFS::Path::NormalizedView model = getModel(ptr);
+        std::string_view model = getModel(ptr);
         if (!model.empty())
-            return Misc::ResourceHelpers::correctMeshPath(model);
+            return Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(model));
         return {};
     }
 
@@ -365,9 +329,9 @@ namespace MWWorld
         return false;
     }
 
-    void Class::getModelsToPreload(const ConstPtr& ptr, std::vector<VFS::Path::NormalizedView>& models) const
+    void Class::getModelsToPreload(const ConstPtr& ptr, std::vector<std::string_view>& models) const
     {
-        const VFS::Path::NormalizedView model = getModel(ptr);
+        std::string_view model = getModel(ptr);
         if (!model.empty())
             models.push_back(model);
     }
@@ -390,34 +354,23 @@ namespace MWWorld
         if (!MWBase::Environment::get().getWindowManager()->isAllowed(MWGui::GW_Inventory))
             return std::make_unique<NullAction>();
 
-        std::unique_ptr<Action> werewolfAction = getWerewolfRefusalAction(actor);
-        if (werewolfAction)
-            return werewolfAction;
-
-        std::unique_ptr<Action> action = std::make_unique<ActionTake>(ptr);
-        action->setSound(getUpSoundId(ptr));
-
-        return action;
-    }
-
-    std::unique_ptr<Action> Class::getWerewolfRefusalAction(const Ptr& actor) const
-    {
-        std::string_view soundId = getWerewolfRefusalSoundId();
-
-        if (!soundId.empty() && actor.getClass().isNpc() && actor.getClass().getNpcStats(actor).isWerewolf())
+        if (actor.getClass().isNpc() && actor.getClass().getNpcStats(actor).isWerewolf())
         {
-            const ESMStore& store = *MWBase::Environment::get().getESMStore();
+            const MWWorld::ESMStore& store = *MWBase::Environment::get().getESMStore();
             auto& prng = MWBase::Environment::get().getWorld()->getPrng();
-            const ESM::Sound* sound = store.get<ESM::Sound>().searchRandom(soundId, prng);
+            const ESM::Sound* sound = store.get<ESM::Sound>().searchRandom("WolfItem", prng);
 
-            std::unique_ptr<Action> action = std::make_unique<FailedAction>("#{sWerewolfRefusal}");
+            std::unique_ptr<MWWorld::Action> action = std::make_unique<MWWorld::FailedAction>("#{sWerewolfRefusal}");
             if (sound)
                 action->setSound(sound->mId);
 
             return action;
         }
 
-        return {};
+        std::unique_ptr<MWWorld::Action> action = std::make_unique<ActionTake>(ptr);
+        action->setSound(getUpSoundId(ptr));
+
+        return action;
     }
 
     MWWorld::Ptr Class::copyToCellImpl(const ConstPtr& ptr, CellStore& cell) const

@@ -1,13 +1,31 @@
+#include <components/misc/brutalconstants.hpp>
+// Derived from sunspotdark/morrowind-modern-physics
+// (https://github.com/sunspotdark/morrowind-modern-physics, commit eb50a40,
+// apps/openmw/mwphysics/ragdoll.cpp), GPLv3; see LICENSE.
+// Adapted for OpenMW 0.51: standard dead NPCs only, atomic lifecycle and pose snapshots.
 #include "ragdoll.hpp"
+#include "creaturerig.hpp"
+#include <components/esm3/loadcrea.hpp>
+#include "../mwworld/livecellref.hpp"
+#include "ragdollcontrol.hpp"
+#include "ragdollneutral.hpp"
+#include "ragdollmotion.hpp"
+#include "limbsevering.hpp"
+#include <components/settings/values.hpp>
+#include <components/sceneutil/positionattitudetransform.hpp>
 
 #include <algorithm>
+#include <atomic>
+#include <bit>
 #include <cmath>
+#include <cstdint>
 #include <limits>
-#include <mutex>
+#include <stdexcept>
 #include <string_view>
 
 #include <BulletCollision/CollisionShapes/btBoxShape.h>
 #include <BulletCollision/CollisionShapes/btCapsuleShape.h>
+#include <BulletCollision/CollisionShapes/btConvexHullShape.h>
 #include <BulletCollision/CollisionShapes/btSphereShape.h>
 #include <BulletDynamics/ConstraintSolver/btConeTwistConstraint.h>
 #include <BulletDynamics/Dynamics/btActionInterface.h>
@@ -17,114 +35,12 @@
 #include <osg/Quat>
 
 #include <components/misc/convert.hpp>
-#include <components/misc/constants.hpp>
-
-#include "../mwmechanics/creaturestats.hpp"
-#include "../mwworld/class.hpp"
 
 #include "collisiontype.hpp"
 #include "mtphysics.hpp"
 
 namespace MWPhysics
 {
-    // Receives body transforms from Bullet on the physics thread; the main thread reads them for the bones.
-    class RagdollMotionState final : public btMotionState
-    {
-    public:
-        explicit RagdollMotionState(const btTransform& transform)
-            : mTransform(transform)
-            , mPreviousTransform(transform)
-        {
-        }
-
-        void getWorldTransform(btTransform& transform) const override
-        {
-            std::lock_guard lock(mMutex);
-            transform = mTransform;
-        }
-
-        void setWorldTransform(const btTransform& transform) override
-        {
-            std::lock_guard lock(mMutex);
-            mPreviousTransform = mTransform;
-            mTransform = transform;
-        }
-
-        /// Between the last two physics steps: 0 is the one before, 1 the latest.
-        btTransform getInterpolatedTransform(btScalar factor) const
-        {
-            std::lock_guard lock(mMutex);
-            return btTransform(mPreviousTransform.getRotation().slerp(mTransform.getRotation(), factor),
-                mPreviousTransform.getOrigin().lerp(mTransform.getOrigin(), factor));
-        }
-
-    private:
-        mutable std::mutex mMutex;
-        btTransform mTransform;
-        btTransform mPreviousTransform;
-    };
-
-    // Friction in the joints: each step, some of the way jointed parts turn relative to each other is taken out.
-    // Without it a body collapses like a sack of liquid; with it, limbs still flop but settle instead of sloshing.
-    class JointFriction final : public btActionInterface
-    {
-    public:
-        std::vector<std::pair<btRigidBody*, btRigidBody*>> mPairs;
-
-        void updateAction(btCollisionWorld*, btScalar timeStep) override
-        {
-            constexpr btScalar rate = 14; // per second: about a fifth of the turning gone each step at 60 Hz
-            const btScalar fraction = 1 - std::exp(-rate * timeStep);
-            for (const auto& [a, b] : mPairs)
-            {
-                if (!a->isActive() && !b->isActive())
-                    continue;
-                const btVector3 relative = b->getAngularVelocity() - a->getAngularVelocity();
-                if (relative.length2() < 1e-4f)
-                    continue;
-                // The lighter part gives more.
-                const btScalar massA = a->getInvMass() > 0 ? 1 / a->getInvMass() : 0;
-                const btScalar massB = b->getInvMass() > 0 ? 1 / b->getInvMass() : 0;
-                if (massA + massB <= 0)
-                    continue;
-                const btVector3 change = relative * fraction;
-                a->setAngularVelocity(a->getAngularVelocity() + change * (massB / (massA + massB)));
-                b->setAngularVelocity(b->getAngularVelocity() - change * (massA / (massA + massB)));
-            }
-        }
-
-        void debugDraw(btIDebugDraw*) override {}
-    };
-
-    // Restrict the descent of dead flyers, never living creatures. In the
-    // previous working build this was the profile used for netches/cliff racers.
-    class FlyingCorpseFall final : public btActionInterface
-    {
-    public:
-        std::vector<btRigidBody*> mBodies;
-
-        void updateAction(btCollisionWorld*, btScalar timeStep) override
-        {
-            const btScalar fraction = 1 - std::exp(-3.0f * timeStep);
-            constexpr btScalar maxFallSpeed = 950.f;
-            for (btRigidBody* body : mBodies)
-            {
-                // The adaptive freeze makes limbs static; never add velocity to
-                // an anchored body after it has settled.
-                if (body->isStaticOrKinematicObject())
-                    continue;
-                btVector3 velocity = body->getLinearVelocity();
-                if (velocity.z() < -maxFallSpeed)
-                {
-                    velocity.setZ(-maxFallSpeed + (velocity.z() + maxFallSpeed) * (1 - fraction));
-                    body->setLinearVelocity(velocity);
-                }
-            }
-        }
-
-        void debugDraw(btIDebugDraw*) override {}
-    };
-
     struct Ragdoll::Part final : public PtrHolder
     {
         explicit Part(const MWWorld::Ptr& ptr)
@@ -134,25 +50,87 @@ namespace MWPhysics
 
         std::string mBone;
         std::unique_ptr<btCollisionShape> mShape;
-        std::unique_ptr<RagdollMotionState> mMotionState;
+        std::unique_ptr<btCollisionShape> mEnhancedShape;
+        std::vector<btVector3> mExtremityVertices;
         btRigidBody* mBody = nullptr; // owned by mCollisionObject
-        btScalar mOriginalMass = 0; // restored after dragging a frozen corpse
 
         void setBody(std::unique_ptr<btRigidBody> body)
         {
             mBody = body.get();
             mCollisionObject = std::move(body);
         }
-        btTransform mBoneFromBody; // the bone's transform in the body's frame (without scale)
-        osg::Vec3f mBoneScale;
+        osg::Matrixf mRenderFromBody; // full affine bone offset, including stretch/shear
         osg::Vec3f mBoxHalfExtents; // for a single box body
         float mRelativeDensity = 1.05f; // to water: a creature's body sinks slowly (people's: see sPartDefs)
 
-        float getRelativeDensity() const override { return mRelativeDensity; }
+        ~Part() override { mCollisionObject.reset(); }
     };
 
     namespace
     {
+        // Compact fragment persistence deliberately excludes scale, shear, and
+        // individual limb poses. The actor's rigid reference survives reload;
+        // its pelvis pose does not, so pelvis-relative offsets would turn a
+        // horizontal gap into a vertical one when the lower half is rebuilt.
+        constexpr std::size_t BisectionPoseBytes = 4 + 14 * sizeof(float);
+        constexpr btScalar BisectionPoseMaximumOffset = 131072;
+
+        std::optional<btTransform> bisectionActorFrame(const MWWorld::Ptr& ptr)
+        {
+            const auto* root = ptr.getRefData().getBaseNode();
+            if (!root) return {};
+            const auto& p = root->getPosition();
+            auto q = Misc::Convert::toBullet(root->getAttitude());
+            if (!std::isfinite(p.x()) || !std::isfinite(p.y()) || !std::isfinite(p.z())
+                || !std::isfinite(q.x()) || !std::isfinite(q.y()) || !std::isfinite(q.z())
+                || !std::isfinite(q.w()) || !std::isfinite(q.length2()) || q.length2() < btScalar(1e-12))
+                return {};
+            q.normalize();
+            return btTransform(q, Misc::Convert::toBullet(p));
+        }
+
+        bool validBisectionAnchor(const btVector3& p, const btQuaternion& q)
+        {
+            return std::isfinite(p.x()) && std::isfinite(p.y()) && std::isfinite(p.z())
+                && btFabs(p.x()) <= BisectionPoseMaximumOffset && btFabs(p.y()) <= BisectionPoseMaximumOffset
+                && btFabs(p.z()) <= BisectionPoseMaximumOffset && std::isfinite(q.x()) && std::isfinite(q.y())
+                && std::isfinite(q.z()) && std::isfinite(q.w()) && std::isfinite(q.length2())
+                && btFabs(q.length2() - 1) <= btScalar(.001);
+        }
+
+        void appendBisectionFloat(std::string& out, float value)
+        {
+            const auto bits = std::bit_cast<std::uint32_t>(value);
+            for (unsigned shift = 0; shift < 32; shift += 8)
+                out.push_back(static_cast<char>((bits >> shift) & 0xff));
+        }
+
+        std::optional<std::array<btTransform, 2>> readBisectionPose(
+            std::string_view bytes, const btTransform& actorFrame)
+        {
+            if (bytes.size() != BisectionPoseBytes || bytes.substr(0, 4) != "BSP1") return {};
+            std::size_t cursor = 4;
+            const auto read = [&]() {
+                std::uint32_t bits = 0;
+                for (unsigned shift = 0; shift < 32; shift += 8)
+                    bits |= std::uint32_t(static_cast<unsigned char>(bytes[cursor++])) << shift;
+                return std::bit_cast<float>(bits);
+            };
+            std::array<btTransform, 2> world;
+            for (auto& anchor : world)
+            {
+                // Explicit ordering: argument evaluation order is unspecified.
+                const float x = read(), y = read(), z = read();
+                const float qx = read(), qy = read(), qz = read(), qw = read();
+                const btVector3 position(x, y, z);
+                btQuaternion rotation(qx, qy, qz, qw);
+                if (!validBisectionAnchor(position, rotation)) return {};
+                rotation.normalize();
+                anchor = actorFrame * btTransform(rotation, position);
+            }
+            return world;
+        }
+
         struct PartDef
         {
             std::string_view mBone;
@@ -185,66 +163,63 @@ namespace MWPhysics
             { "Bip01 R Calf", "Bip01 R Foot", 5.f, 4.f, 9, 70, 10, 10, 0.98f },
         };
 
-        // A coherent initial rigid-body velocity field: the torso pitches away from the
-        // blow, the feet lag, and the entire body turns slightly. Unlike independent limb
-        // kicks this keeps the starting joint velocities approximately compatible.
-        struct FatalImpact
+        constexpr std::size_t sHeadPart = 2;
+        // How strongly a chest kick reaches each part along the joint chain (sPartDefs order):
+        // the chest leads, its neighbours follow, the ends of the limbs lag the most.
+        constexpr float sChestKickShare[] = { .75f, 1.f, .75f, .75f, .55f, .75f, .55f, .55f, .45f, .55f, .45f };
+        static_assert(std::size(sChestKickShare) == std::size(sPartDefs));
+        static_assert(sPartDefs[sHeadPart].mBone == "Bip01 Head");
+
+        std::unique_ptr<btConvexHullShape> makeExtremityShape(const btCapsuleShape& capsule,
+            const btTransform& bodyWorld, const std::vector<osg::Vec3f>& worldVertices,
+            std::vector<btVector3>& surfaceVertices)
         {
-            btVector3 linear;
-            btVector3 angular{ 0, 0, 0 };
-            bool active = false;
-
-            FatalImpact(const MWWorld::Ptr& actor, const osg::Vec3f& velocity, const osg::Vec3f& kick,
-                bool humanoid)
-                : linear(Misc::Convert::toBullet(velocity))
+            if (worldVertices.empty())
+                return {};
+            std::vector<btVector3> local;
+            local.reserve(worldVertices.size());
+            const btTransform worldToBody = bodyWorld.inverse();
+            for (const auto& world : worldVertices)
             {
-                btVector3 direction(kick.x(), kick.y(), 0);
-                const btScalar strength = direction.length();
-                if (strength < 1.f)
-                    return;
-                active = true;
-                direction /= strength;
-                const bool magic = actor.getClass().getCreatureStats(actor).hasMagicDeathKick();
-                // Retain a little horizontal locomotion for a physical hit, but never inherit
-                // upward movement from jumping. Magic translates the whole body much faster.
-                linear = direction * (magic ? strength : strength * 0.62f)
-                    + btVector3(velocity.x(), velocity.y(), 0) * (magic ? 0.f : 0.18f);
-                linear.setZ(std::min(velocity.z(), 0.f) - 15.f);
-                const btScalar pitch = magic ? (humanoid ? 2.35f : 1.65f)
-                    : (humanoid ? 2.45f : 1.6f) + std::min<btScalar>(strength / btScalar(280), btScalar(1)) * 0.7f;
-                const float yaw = actor.getRefData().getPosition().rot[2];
-                const btVector3 forward(std::sin(yaw), std::cos(yaw), 0);
-                const float side = static_cast<float>(forward.cross(direction).z());
-                const float turn = (side < -0.05f ? -1.f : 1.f) * (0.4f + 0.35f * std::abs(side));
-                angular = btVector3(0, 0, 1).cross(direction) * pitch + btVector3(0, 0, turn);
+                const btVector3 vertex = worldToBody * Misc::Convert::toBullet(world);
+                if (!std::isfinite(vertex.x()) || !std::isfinite(vertex.y()) || !std::isfinite(vertex.z()))
+                    return {};
+                local.push_back(vertex);
             }
-
-            void apply(btRigidBody& body, const btVector3& pivot, const btVector3& extra = btVector3(0, 0, 0)) const
-            {
-                btVector3 v = linear + extra;
-                if (active)
+            auto hull = std::make_unique<btConvexHullShape>();
+            hull->setMargin(btScalar(.15)); // Native game units, outside the sampled hand surface.
+            constexpr int longitudes = 16, latitudes = 8;
+            // A nearest grid vertex has directional support at least
+            // cos(pi/longitudes)*cos(pi/(2*latitudes)). Inflating by its inverse
+            // makes the polytope contain the sphere, rather than cut into it.
+            // Translating its copies to both cap centres also contains the full
+            // original capsule. At radii 4/5 the excess is at most .159/.198 units.
+            const btScalar radius = capsule.getRadius()
+                / (btCos(SIMD_PI / longitudes) * btCos(SIMD_PI / (2 * latitudes)));
+            for (int endpoint : { -1, 1 })
+                for (int latitude = 0; latitude <= latitudes; ++latitude)
                 {
-                    btVector3 rotational = angular.cross(body.getWorldTransform().getOrigin() - pivot);
-                    constexpr btScalar maxDifferential = 180.f;
-                    if (rotational.length2() > maxDifferential * maxDifferential)
-                        rotational *= maxDifferential / rotational.length();
-                    v += rotational;
-                    // No initially upward-moving limb; gravity and ordinary contacts remain active.
-                    v.setZ(std::min(v.z(), btScalar(0)));
-                    body.setAngularVelocity(angular);
+                    const btScalar angle = SIMD_PI * latitude / latitudes;
+                    const btScalar y = latitude == 0 ? btScalar(1)
+                        : latitude == latitudes ? btScalar(-1) : btCos(angle);
+                    const btScalar ring = latitude == 0 || latitude == latitudes ? btScalar(0) : btSin(angle);
+                    const int count = ring == 0 ? 1 : longitudes;
+                    for (int longitude = 0; longitude < count; ++longitude)
+                    {
+                        const btScalar around = SIMD_2_PI * longitude / longitudes;
+                        hull->addPoint(btVector3(radius * ring * btCos(around),
+                            endpoint * capsule.getHalfHeight() + radius * y,
+                            radius * ring * btSin(around)), false);
+                    }
                 }
-                body.setLinearVelocity(v);
-            }
-        };
-
-        btTransform withoutScale(const osg::Matrixf& matrix, osg::Vec3f& scale)
-        {
-            osg::Vec3f translation;
-            osg::Quat rotation;
-            osg::Quat scaleOrientation;
-            matrix.decompose(translation, rotation, scale, scaleOrientation);
-            return btTransform(Misc::Convert::toBullet(rotation), Misc::Convert::toBullet(translation));
+            for (const auto& vertex : local)
+                hull->addPoint(vertex, false);
+            hull->optimizeConvexHull();
+            hull->recalcLocalAabb();
+            surfaceVertices = std::move(local);
+            return hull;
         }
+
     }
 
     const std::vector<std::string>& Ragdoll::getRequiredBones()
@@ -256,17 +231,54 @@ namespace MWPhysics
         return bones;
     }
 
-    Ragdoll::Ragdoll(const MWWorld::Ptr& actor, const BoneMatrices& bones, const osg::Vec3f& velocity,
-        const osg::Vec3f& kick, PhysicsTaskScheduler* scheduler)
-        : mTaskScheduler(scheduler)
+    Ragdoll::BoneMotion Ragdoll::sampleAnimationMotion(const BoneMatrices& previous, const BoneMatrices& current,
+        const osg::Vec3f& actorTranslation, float duration)
     {
+        const auto center = [](const BoneMatrices& bones, const PartDef& def) {
+            const osg::Vec3f start = bones.at(std::string(def.mBone)).getTrans();
+            if (!def.mEnd.empty()) return (start + bones.at(std::string(def.mEnd)).getTrans()) * .5f;
+            auto up = start - bones.at("Bip01 Neck").getTrans();
+            if (up.normalize() < 1e-3f) up = osg::Vec3f(0, 0, 1);
+            return start + up * 7.f;
+        };
+        BoneMotion result;
+        for (const auto& def : sPartDefs)
+        {
+            osg::Vec3f p, scale; osg::Quat oldRotation, rotation, stretch;
+            previous.at(std::string(def.mBone)).decompose(p, oldRotation, scale, stretch);
+            current.at(std::string(def.mBone)).decompose(p, rotation, scale, stretch);
+            const auto motion = RagdollEnhancement::animationMotion(Misc::Convert::toBullet(center(previous, def)),
+                Misc::Convert::toBullet(center(current, def)), Misc::Convert::toBullet(oldRotation),
+                Misc::Convert::toBullet(rotation), Misc::Convert::toBullet(actorTranslation), duration);
+            result.emplace(def.mBone, std::pair(Misc::Convert::toOsg(motion.linear), Misc::Convert::toOsg(motion.angular)));
+        }
+        return result;
+    }
+
+    Ragdoll::Ragdoll(const MWWorld::Ptr& actor, const BoneMatrices& bones, const osg::Vec3f& velocity,
+        const osg::Vec3f& kick, PhysicsTaskScheduler* scheduler, const std::optional<osg::Vec3f>& contact,
+        const BoneMotion& motion, const ExtremityVertices& surfaceVertices,
+        const UnsupportedExtremityBones& unsupportedBones, KickProfile kickProfile)
+        : mTaskScheduler(scheduler), mInitialRootVelocity(velocity), mInheritedVelocity(velocity),
+          mUnsupportedExtremityBones(unsupportedBones)
+    {
+        for (const auto& name : getRequiredBones())
+        {
+            const auto found = bones.find(name);
+            if (found == bones.end())
+                throw std::runtime_error("Ragdoll requires standard NPC bone: " + name);
+            for (int i = 0; i < 16; ++i)
+                if (!std::isfinite(found->second.ptr()[i]))
+                    throw std::runtime_error("Ragdoll bone matrix is not finite");
+        }
+        mActorOffset = actor.getRefData().getPosition().asVec3() - bones.at("Bip01 Pelvis").getTrans();
         const auto position = [&](std::string_view bone) { return bones.find(bone)->second.getTrans(); };
-        const FatalImpact impact(actor, velocity, kick, true);
-        const btVector3 pivot = Misc::Convert::toBullet(position("Bip01 Pelvis"));
+        osg::Vec3f animatedMomentum;
+        float totalAnimatedMass = 0.f;
 
         for (const PartDef& def : sPartDefs)
         {
-            auto part = std::make_shared<Part>(actor);
+            auto part = std::make_unique<Part>(actor);
             part->mBone = def.mBone;
 
             const osg::Vec3f start = position(def.mBone);
@@ -290,18 +302,137 @@ namespace MWPhysics
                 shortestArcQuat(btVector3(0, 1, 0), axis), Misc::Convert::toBullet((start + end) * 0.5f));
             part->mShape = std::make_unique<btCapsuleShape>(
                 def.mRadius, std::max(length - 2 * def.mRadius, btScalar(0.1)));
-            part->mBoneFromBody
-                = bodyWorld.inverse() * withoutScale(bones.find(def.mBone)->second, part->mBoneScale);
+            if (def.mBone == "Bip01 L Forearm" || def.mBone == "Bip01 R Forearm"
+                || def.mBone == "Bip01 L Calf" || def.mBone == "Bip01 R Calf")
+                if (const auto found = surfaceVertices.find(def.mEnd); found != surfaceVertices.end())
+                    part->mEnhancedShape = makeExtremityShape(*static_cast<btCapsuleShape*>(part->mShape.get()),
+                        bodyWorld, found->second, part->mExtremityVertices);
+            const osg::Matrixf bodyMatrix=osg::Matrixf::rotate(Misc::Convert::toOsg(bodyWorld.getRotation()))
+                *osg::Matrixf::translate(Misc::Convert::toOsg(bodyWorld.getOrigin()));
+            part->mRenderFromBody=bones.find(def.mBone)->second*osg::Matrixf::inverse(bodyMatrix);
 
             part->mRelativeDensity = def.mDensity;
             makeBody(*part, bodyWorld, def.mMass, def.mRadius);
 
-            impact.apply(*part->mBody, pivot);
+            // Falling as it was moving, the upper body thrown back by the killing blow.
+            btVector3 partVelocity = Misc::Convert::toBullet(velocity);
+            if (const auto it = motion.find(part->mBone); it != motion.end())
+            {
+                partVelocity += Misc::Convert::toBullet(it->second.first);
+                part->mBody->setAngularVelocity(Misc::Convert::toBullet(it->second.second));
+                animatedMomentum += it->second.first * def.mMass;
+            }
+            totalAnimatedMass += def.mMass;
+            if (!contact && (def.mBone == "Bip01 Spine1" || def.mBone == "Bip01 Head"))
+                partVelocity += Misc::Convert::toBullet(kick);
+            else if (!contact && def.mBone == "Bip01 Pelvis")
+                partVelocity += Misc::Convert::toBullet(kick) * 0.6f;
+            part->mBody->setLinearVelocity(partVelocity);
 
             mParts.push_back(std::move(part));
         }
-        addToWorld();
+        mInheritedVelocity += animatedMomentum / totalAnimatedMass;
+        if (contact)
+        {
+            // Apply one physical kick at contact without changing the initial
+            // pose or actor reference. Its total linear impulse is mass * kick.
+            float totalMass = 0.f;
+            for (const auto& part : mParts) totalMass += 1.f / part->mBody->getInvMass();
+            mImpulse = kick * totalMass;
+            mContact = *contact;
+            // The whole impulse on the light chest alone (about 5x the kick and 60 rad/s in one
+            // step) separated the neck and elbows by up to 11 units before the joints caught
+            // up. Share it down the chain instead: the chest leads, neighbours follow with less,
+            // so adjacent parts never differ enough to tear a joint. Momentum is unchanged.
+            // A low trip instead shares translation uniformly. The low contact's
+            // bounded angular field makes the legs lead and the torso lag while
+            // every joint starts with compatible rigid-body motion.
+            const auto kickShare = [&](std::size_t i) {
+                return kickProfile == KickProfile::LowTrip ? 1.f : sChestKickShare[i];
+            };
+            btScalar weighted = 0;
+            for (std::size_t i = 0; i < mParts.size(); ++i)
+                weighted += kickShare(i) / mParts[i]->mBody->getInvMass();
+            const btVector3 lead = Misc::Convert::toBullet(mImpulse) / weighted;
+            // The off-centre contact tips the body over as a whole, at a tumble's pace.
+            btVector3 com(0, 0, 0);
+            for (const auto& part : mParts)
+                com += part->mBody->getCenterOfMassPosition() / part->mBody->getInvMass();
+            com /= totalMass;
+            btMatrix3x3 inertia(0, 0, 0, 0, 0, 0, 0, 0, 0);
+            for (const auto& part : mParts)
+            {
+                const btRigidBody* body = part->mBody;
+                const btVector3 local = body->getInvInertiaDiagLocal();
+                const btMatrix3x3 diag(1 / local.x(), 0, 0, 0, 1 / local.y(), 0, 0, 0, 1 / local.z());
+                const btMatrix3x3& basis = body->getWorldTransform().getBasis();
+                const btVector3 d = body->getCenterOfMassPosition() - com;
+                const btScalar m = 1 / body->getInvMass(), dd = d.dot(d);
+                inertia = inertia + basis * diag * basis.transpose()
+                    + btMatrix3x3(dd - d.x() * d.x(), -d.x() * d.y(), -d.x() * d.z(), -d.y() * d.x(),
+                          dd - d.y() * d.y(), -d.y() * d.z(), -d.z() * d.x(), -d.z() * d.y(), dd - d.z() * d.z())
+                        * m;
+            }
+            btVector3 spin = inertia.inverse() * (Misc::Convert::toBullet(*contact) - com).cross(Misc::Convert::toBullet(mImpulse));
+            btVector3 trip = lead;
+            if (kickProfile == KickProfile::LowTrip)
+            {
+                // A sliding kick at the shins: the whole body is thrown forward,
+                // faster than the decelerating slide, so it stays ahead of the low
+                // camera and lands in front of the player. The feet are swept a
+                // little faster than the torso, tipping the airborne body onto its
+                // back; a small side roll varies the landing.
+                constexpr btScalar comGain = 1.3f, sweep = .35f, maxTripSpin = 3.5f; // rad/s
+                const btVector3 kickVelocity = Misc::Convert::toBullet(kick);
+                btVector3 along(kickVelocity.x(), kickVelocity.y(), 0);
+                const btScalar speed = along.length();
+                spin.setZero();
+                if (speed > 1.f)
+                {
+                    along /= speed;
+                    const btVector3 axis = (Misc::Convert::toBullet(*contact) - com).cross(along);
+                    const btScalar arm = axis.length(); // contact height below the centre of mass
+                    if (arm > 5.f)
+                    {
+                        const btScalar pitch = std::min(maxTripSpin, speed * sweep / arm);
+                        const btVector3 side = btVector3(0, 0, 1).cross(along);
+                        btScalar offset = (Misc::Convert::toBullet(*contact) - com).dot(side);
+                        static std::atomic<unsigned> alternate{ 0 };
+                        if (std::abs(offset) < 1.f)
+                            offset = (alternate++ & 1) ? 1.f : -1.f;
+                        spin = axis / arm * pitch + along * (offset > 0 ? .4f : -.4f) * pitch;
+                    }
+                    trip = along * (speed * comGain) + btVector3(0, 0, kickVelocity.z());
+                }
+                mImpulse = Misc::Convert::toOsg(trip) * totalMass;
+            }
+            const btScalar maxSpin = kickProfile == KickProfile::LowTrip ? 4.f : 4.f; // rad/s
+            if (spin.length() > maxSpin)
+                spin *= maxSpin / spin.length();
+            for (std::size_t i = 0; i < mParts.size(); ++i)
+            {
+                btRigidBody* body = mParts[i]->mBody;
+                body->setLinearVelocity(body->getLinearVelocity() + trip * kickShare(i)
+                    + spin.cross(body->getCenterOfMassPosition() - com));
+                body->setAngularVelocity(body->getAngularVelocity() + spin);
+            }
 
+        }
+        // The profile is anatomical; retain each visual bone's fixed local offset
+        // from its physical capsule so an arbitrary death pose is not the target.
+        for (std::size_t i = 0; i < mParts.size(); ++i)
+        {
+            osg::Vec3f bonePosition, scale; osg::Quat rotation, stretch;
+            bones.at(mParts[i]->mBone).decompose(bonePosition, rotation, scale, stretch);
+            mBoneInBody[i] = mParts[i]->mBody->getWorldTransform().getRotation().inverse()
+                * Misc::Convert::toBullet(rotation);
+            mBoneInBody[i].normalize();
+            if (!RagdollEnhancement::validRotation(mBoneInBody[i]))
+                throw std::runtime_error("Invalid ragdoll anatomical bone frame");
+        }
+        mJointFriction = std::make_unique<JointFriction>();
+        static std::atomic<std::uint64_t> generation{ 0 };
+        static_cast<JointFriction*>(mJointFriction.get())->mGeneration = ++generation;
         // Joints where each part meets its parent, twisting around the part's own bone.
         for (size_t i = 0; i < mParts.size(); ++i)
         {
@@ -310,265 +441,198 @@ namespace MWPhysics
                 addJoint(def.mParent, i, position(def.mBone), def.mSwing1, def.mSwing2, def.mTwist);
         }
         addJointFriction();
-    }
-
-    Ragdoll::Ragdoll(const MWWorld::Ptr& actor, const btTransform& bodyWorld, const osg::Vec3f& halfExtents,
-        float mass, const osg::Matrixf& baseWorld, PhysicsTaskScheduler* scheduler, const osg::Vec3f& velocity)
-        : mTaskScheduler(scheduler)
-    {
-        auto part = std::make_shared<Part>(actor);
-        part->mBoxHalfExtents = halfExtents;
-        part->mShape = std::make_unique<btBoxShape>(Misc::Convert::toBullet(halfExtents));
-        part->mBoneFromBody = bodyWorld.inverse() * withoutScale(baseWorld, part->mBoneScale);
-        makeBody(*part, bodyWorld, mass, 0);
-        const auto& kick = actor.getClass().getCreatureStats(actor).getDeathKick();
-        const FatalImpact impact(actor, kick.length2() > 1.f ? osg::Vec3f() : velocity, kick, false);
-        impact.apply(*part->mBody, bodyWorld.getOrigin());
-        mParts.push_back(std::move(part));
         addToWorld();
+        try { configureEnhancement(); }
+        catch (...) { mTaskScheduler->removeRagdollBodies(mBodies, mConstraints, mJointFriction.get()); mRegistered = false; throw; }
+        if (Settings::game().mRagdollEnhancement && kick.length2() > 0)
+        {
+            // Compatibility start/ledge paths already own their velocity change.
+            // Inform the controller once, adding only its bounded limb response.
+            const osg::Vec3f point = contact.value_or(Misc::Convert::toOsg(mParts[1]->mBody->getCenterOfMassPosition()));
+            const std::size_t part = kickProfile == KickProfile::LowTrip
+                ? std::numeric_limits<std::size_t>::max() : 1;
+            applyImpact(part, point, contact ? mImpulse : kick * 27.2f, 0, true);
+        }
+        recordInitialPose(bones);
     }
 
-    std::unique_ptr<Ragdoll> Ragdoll::fromSkeleton(const MWWorld::Ptr& actor, const std::vector<SkinnedBone>& bones,
-        const osg::Vec3f& velocity, const osg::Vec3f& kick, PhysicsTaskScheduler* scheduler)
+    void Ragdoll::recordInitialPose(const BoneMatrices& bones)
     {
-        // A part for each bone that moves a fair share of the mesh (legs, body, head, tail...), at most a body's
-        // worth; smaller ones (toes, jaws, tail tips) just go along with the part above them.
-        float largest = 0;
-        for (const SkinnedBone& bone : bones)
-            largest = std::max(largest, bone.mRadius);
-        std::vector<size_t> chosen;
-        for (size_t i = 0; i < bones.size(); ++i)
-            if (bones[i].mRadius >= largest * 0.2f && bones[i].mRadius > 1.f)
-                chosen.push_back(i);
-        constexpr size_t maxParts = 12;
-        if (chosen.size() > maxParts)
+        getBonePoses(1.f);
+        mInitialCOMVelocity=getDynamics()[1]; // measured from all Bullet masses, before their first step
+        mInitialMaxAngularSpeed = mMaxAngularSpeed;
+        for (const auto& [bone, pose] : mLastPoses)
         {
-            std::vector<size_t> bySize = chosen;
-            std::nth_element(bySize.begin(), bySize.begin() + maxParts - 1, bySize.end(),
-                [&](size_t a, size_t b) { return bones[a].mRadius > bones[b].mRadius; });
-            const float cutoff = bones[bySize[maxParts - 1]].mRadius;
-            std::erase_if(chosen, [&](size_t i) { return bones[i].mRadius < cutoff; });
-            chosen.resize(std::min(chosen.size(), maxParts));
+            const auto& source=bones.at(bone);
+            mInitialPoseError = std::max(mInitialPoseError, float((pose.getTrans()-source.getTrans()).length()));
+            osg::Vec3f pa,pb,sa,sb;osg::Quat a,b,soa,sob;
+            pose.decompose(pa,a,sa,soa);source.decompose(pb,b,sb,sob);
+            for (int i=0;i<16;++i) mInitialMatrixError=std::max(mInitialMatrixError,std::abs(pose.ptr()[i]-source.ptr()[i]));
+            const double dot=std::abs(a.x()*b.x()+a.y()*b.y()+a.z()*b.z()+a.w()*b.w())/(a.length()*b.length());
+            mInitialRotationError=std::max(mInitialRotationError,float(2.*std::acos(std::clamp(dot,0.,1.))*57.295779513));
         }
-        if (chosen.size() < 2)
-            return nullptr;
+    }
 
-        std::unique_ptr<Ragdoll> ragdoll(new Ragdoll(scheduler));
-        // Procedural creature limb capsules frequently overlap at rest. Disable
-        // all internal contacts, not only directly jointed contacts: otherwise
-        // Bullet pushes the rig against itself and it spins uncontrollably.
-        ragdoll->mDisableInternalCollision = true;
-        std::vector<int> partOfBone(bones.size(), -1);
-        for (size_t i : chosen)
+    Ragdoll::Ragdoll(const MWWorld::Ptr& actor, const CreatureRig& rig, const BoneMatrices& bones,
+        const osg::Vec3f& velocity, const osg::Vec3f& kick, PhysicsTaskScheduler* scheduler,
+        const std::optional<osg::Vec3f>& contact, KickProfile kickProfile)
+        : mTaskScheduler(scheduler), mInitialRootVelocity(velocity), mInheritedVelocity(velocity), mCreature(true)
+    {
+        for (const auto& def : rig.mParts)
         {
-            const SkinnedBone& bone = bones[i];
-            auto part = std::make_shared<Part>(actor);
-            part->mBone = bone.mName;
-            const btTransform boneWorld = withoutScale(bone.mWorld, part->mBoneScale);
-            const float scale = part->mBoneScale.x();
-
-            // The bone's share of the mesh lies around the center of its bounds. Away from the bone it is a
-            // limb, as long as twice that and as thick as the bounds allow; around the bone, a lump.
-            const btVector3 center = boneWorld * Misc::Convert::toBullet(bone.mCenter * scale);
-            const float radius = bone.mRadius * scale;
-            const float half = bone.mCenter.length() * scale;
-            btTransform bodyWorld;
-            float thickness;
-            if (half > radius * 0.35f)
-            {
-                const btVector3 axis = (center - boneWorld.getOrigin()).normalized();
-                thickness = std::clamp(std::sqrt(std::max(radius * radius - half * half, 0.f)) * 0.9f,
-                    std::max(radius * 0.2f, 1.5f), radius);
-                part->mShape = std::make_unique<btCapsuleShape>(thickness, std::max(2 * half - 2 * thickness, 0.1f));
-                bodyWorld = btTransform(shortestArcQuat(btVector3(0, 1, 0), axis), center);
-            }
-            else
-            {
-                thickness = std::max(radius * 0.7f, 1.5f);
-                part->mShape = std::make_unique<btSphereShape>(thickness);
-                bodyWorld = btTransform(boneWorld.getRotation(), center);
-            }
-            part->mBoneFromBody = bodyWorld.inverse() * boneWorld;
-
-            // Flesh is about as dense as water (~70 units to a meter).
-            btVector3 aabbMin;
-            btVector3 aabbMax;
-            part->mShape->getAabb(btTransform::getIdentity(), aabbMin, aabbMax);
-            const btVector3 size = aabbMax - aabbMin;
-            const float volume = static_cast<float>(size.x() * size.y() * size.z()) * 0.6f / (70.f * 70.f * 70.f);
-            makeBody(*part, bodyWorld, std::clamp(volume * 1000.f, 0.3f, 200.f), thickness);
-
-
-            partOfBone[i] = static_cast<int>(ragdoll->mParts.size());
-            ragdoll->mParts.push_back(std::move(part));
+            const auto found = bones.find(def.mBone);
+            if (found == bones.end())
+                throw std::runtime_error("Creature ragdoll requires bone: " + def.mBone);
+            for (int i = 0; i < 16; ++i)
+                if (!std::isfinite(found->second.ptr()[i]))
+                    throw std::runtime_error("Ragdoll bone matrix is not finite");
         }
-        // Joined to the part above; any parts with none (bits not under the main body) to the biggest.
-        const auto parentPart = [&](size_t bone) {
-            for (int parent = bones[bone].mParent; parent >= 0; parent = bones[parent].mParent)
-                if (partOfBone[parent] >= 0)
-                    return partOfBone[parent];
-            return -1;
+        const auto boneAt = [&](const CreatureRigPart& def) -> const osg::Matrixf& { return bones.find(def.mBone)->second; };
+        mActorOffset = actor.getRefData().getPosition().asVec3() - boneAt(rig.mParts.front()).getTrans();
+        std::vector<int> depth;
+        float totalMass = 0.f;
+        // What a dead body of this kind does in water: metal and bare bone go down,
+        // a gasbag or a fish comes up, flesh hangs near the surface.
+        const auto* record = actor.get<ESM::Creature>()->mBase;
+        const int flags = record->mFlags;
+        // The record's blood type is its material: 1 is dust and bone, 2 is metal sparks.
+        const float density = record->mBloodType == 2 ? 2.5f
+            : record->mBloodType == 1 ? 1.3f
+            : (flags & ESM::Creature::Flies) ? .7f
+            : ((flags & ESM::Creature::Swims) && !(flags & ESM::Creature::Walks)) ? .9f
+            : (flags & ESM::Creature::Bipedal) ? .95f : 1.05f;
+        for (const auto& def : rig.mParts)
+        {
+            const osg::Matrixf& bone = boneAt(def);
+            // The bone already carries the reference's scale and the mesh's own.
+            const osg::Vec3f scale = bone.getScale();
+            const float size = (scale.x() + scale.y() + scale.z()) / 3.f;
+            if (!std::isfinite(size) || size <= 1e-3f)
+                throw std::runtime_error("Invalid creature bone scale: " + def.mBone);
+            const osg::Vec3f center = def.mCenter * bone;
+            osg::Vec3f axisWorld = osg::Matrixf::transform3x3(def.mAxis, bone);
+            if (axisWorld.normalize() < 1e-6f)
+                axisWorld = osg::Vec3f(0, 0, 1);
+            auto part = std::make_unique<Part>(actor);
+            part->mBone = def.mBone;
+            const btTransform bodyWorld(shortestArcQuat(btVector3(0, 1, 0), Misc::Convert::toBullet(axisWorld)),
+                Misc::Convert::toBullet(center));
+            const float radius = def.mRadius * size;
+            part->mShape = std::make_unique<btCapsuleShape>(radius, std::max(2.f * def.mHalfLength * size, .1f));
+            const osg::Matrixf bodyMatrix = osg::Matrixf::rotate(Misc::Convert::toOsg(bodyWorld.getRotation()))
+                * osg::Matrixf::translate(Misc::Convert::toOsg(bodyWorld.getOrigin()));
+            part->mRenderFromBody = bone * osg::Matrixf::inverse(bodyMatrix);
+            const float mass = def.mMass * std::pow(size, 2.25f);
+            part->mRelativeDensity = density;
+            makeBody(*part, bodyWorld, mass, radius);
+            if (def.mHalfLength > def.mRadius * 6.f)
+            {
+                // A long tentacle is one stiff piece: if its tip grips the floor, a netch's
+                // corpse stands on its tentacles as on stilts. Let the tips slide out instead.
+                part->mBody->setFriction(.03f);
+                part->mBody->setRollingFriction(0.f);
+                part->mBody->setSpinningFriction(0.f);
+            }
+            part->mBody->setLinearVelocity(Misc::Convert::toBullet(velocity));
+            totalMass += mass;
+            depth.push_back(def.mParent < 0 ? 0 : depth[def.mParent] + 1);
+            mParts.push_back(std::move(part));
+        }
+        mKickScale = std::clamp(std::sqrt(64.f / std::max(totalMass, 1.f)), .25f, 1.f);
+        // The chain answers a kick as the NPC body does: the core leads, the ends of the limbs lag.
+        const auto kickShare = [&](std::size_t i) {
+            if (kickProfile == KickProfile::LowTrip) return 1.f;
+            return depth[i] <= 1 ? 1.f : depth[i] == 2 ? .75f : .55f;
         };
-        int root = 0;
-        for (size_t i = 0; i < chosen.size(); ++i)
-            if (parentPart(chosen[i]) < 0 && bones[chosen[i]].mRadius > bones[chosen[root]].mRadius)
-                root = static_cast<int>(i);
-        const FatalImpact impact(actor, velocity, kick, false);
-        const btVector3 pivot = ragdoll->mParts[static_cast<size_t>(root)]->mBody->getWorldTransform().getOrigin();
-        for (const auto& part : ragdoll->mParts)
-            impact.apply(*part->mBody, pivot);
-        ragdoll->addToWorld();
-
-        for (size_t i = 0; i < chosen.size(); ++i)
+        if (kick.length2() > 0.f)
         {
-            int parent = parentPart(chosen[i]);
-            if (parent < 0 && static_cast<int>(i) != root)
-                parent = root;
-            if (parent >= 0)
-                ragdoll->addJoint(parent, i, bones[chosen[i]].mWorld.getTrans(), 30, 30, 15);
+            btScalar weighted = 0;
+            btVector3 com(0, 0, 0);
+            for (std::size_t i = 0; i < mParts.size(); ++i)
+            {
+                const btScalar mass = 1 / mParts[i]->mBody->getInvMass();
+                weighted += kickShare(i) * mass;
+                com += mParts[i]->mBody->getCenterOfMassPosition() * mass;
+            }
+            com /= totalMass;
+            btVector3 lead = Misc::Convert::toBullet(kick) * totalMass / weighted;
+            btVector3 spin(0, 0, 0);
+            if (contact)
+            {
+                mImpulse = kick * totalMass;
+                mContact = *contact;
+                btVector3 along(kick.x(), kick.y(), 0);
+                const btScalar speed = along.length();
+                const btVector3 lever = Misc::Convert::toBullet(*contact) - com;
+                if (speed > 1.f)
+                {
+                    along /= speed;
+                    if (kickProfile == KickProfile::LowTrip)
+                        lead = along * (speed * btScalar(1.3)) + btVector3(0, 0, kick.z());
+                    const btVector3 axis = lever.cross(along);
+                    // A tumble's pace, whatever the size of the body.
+                    if (axis.length() > 1.f)
+                        spin = axis.normalized() * btMin(btScalar(3.5), speed * btScalar(.35) / btMax(lever.length(), btScalar(5)));
+                }
+            }
+            for (std::size_t i = 0; i < mParts.size(); ++i)
+            {
+                btRigidBody* body = mParts[i]->mBody;
+                body->setLinearVelocity(body->getLinearVelocity() + lead * kickShare(i)
+                    + spin.cross(body->getCenterOfMassPosition() - com));
+                body->setAngularVelocity(body->getAngularVelocity() + spin);
+            }
         }
-        ragdoll->mMainPartIndex = static_cast<size_t>(root);
-        ragdoll->addJointFriction();
-
-        // Bind every original skinned bone to the nearest simulated ancestor.
-        // Skipping tiny wing bones caused insect skins to stretch away from
-        // their torso when the physical parts dropped vertically.
-        for (size_t i = 0; i < bones.size(); ++i)
+        mJointFriction = std::make_unique<JointFriction>();
+        static std::atomic<std::uint64_t> generation{ 0 };
+        static_cast<JointFriction*>(mJointFriction.get())->mGeneration = (std::uint64_t(1) << 62) | ++generation;
+        for (std::size_t i = 0; i < mParts.size(); ++i)
         {
-            int driver = partOfBone[i];
-            if (driver < 0)
-                for (int parent = bones[i].mParent; parent >= 0; parent = bones[parent].mParent)
-                    if (partOfBone[parent] >= 0)
-                    {
-                        driver = partOfBone[parent];
-                        break;
-                    }
-            if (driver < 0)
-                driver = root;
-
-            const size_t selectedBone = chosen[static_cast<size_t>(driver)];
-            const osg::Matrixf relative
-                = bones[i].mWorld * osg::Matrixf::inverse(bones[selectedBone].mWorld);
-            ragdoll->mSkinnedBoneBindings.push_back(
-                { bones[i].mName, static_cast<size_t>(driver), relative });
-        }
-        return ragdoll;
-    }
-
-    std::unique_ptr<Ragdoll> Ragdoll::fromRigidPieces(const MWWorld::Ptr& actor, const std::vector<RigidPiece>& pieces,
-        const osg::Vec3f& velocity, const osg::Vec3f& kick, PhysicsTaskScheduler* scheduler)
-    {
-        // The bigger pieces come loose (legs, shell, head...), at most a handful; the rest stay on them.
-        const auto size = [&](size_t i) { return (pieces[i].mMax - pieces[i].mMin).length() * 0.5f; };
-        float largest = 0;
-        for (size_t i = 0; i < pieces.size(); ++i)
-            largest = std::max(largest, size(i));
-        std::vector<size_t> chosen;
-        for (size_t i = 0; i < pieces.size(); ++i)
-            if (size(i) >= largest * 0.12f && size(i) > 1.f)
-                chosen.push_back(i);
-        constexpr size_t maxParts = 16;
-        if (chosen.size() > maxParts)
-        {
-            std::vector<size_t> bySize = chosen;
-            std::nth_element(bySize.begin(), bySize.begin() + maxParts - 1, bySize.end(),
-                [&](size_t a, size_t b) { return size(a) > size(b); });
-            const float cutoff = size(bySize[maxParts - 1]);
-            std::erase_if(chosen, [&](size_t i) { return size(i) < cutoff; });
-            chosen.resize(std::min(chosen.size(), maxParts));
-        }
-        // A small piece with no loose piece above it would have nothing to go along with (it would hang in the
-        // air where the body was): it comes loose too, taking any small ones below it along.
-        std::vector<bool> loose(pieces.size(), false);
-        for (size_t i : chosen)
-            loose[i] = true;
-        for (size_t i = 0; i < pieces.size(); ++i)
-        {
-            if (loose[i])
+            const auto& def = rig.mParts[i];
+            if (def.mParent < 0)
                 continue;
-            bool carried = false;
-            for (int parent = pieces[i].mParent; parent >= 0 && !carried; parent = pieces[parent].mParent)
-                carried = loose[parent];
-            if (!carried)
-                loose[i] = true;
+            btRigidBody& parent = *mParts[def.mParent]->mBody;
+            btRigidBody& child = *mParts[i]->mBody;
+            const btTransform& childWorld = child.getWorldTransform();
+            const btVector3 childAxis = childWorld.getBasis() * btVector3(0, 1, 0);
+            const btTransform jointWorld(shortestArcQuat(btVector3(1, 0, 0), childAxis),
+                Misc::Convert::toBullet(boneAt(def).getTrans()));
+            auto joint = std::make_unique<RagdollEnhancement::ConeTwist>(
+                parent, child, parent.getWorldTransform().inverse() * jointWorld, childWorld.inverse() * jointWorld);
+            joint->setLimit(btRadians(def.mSwing1), btRadians(def.mSwing2), btRadians(def.mTwist), .9f, .6f, 1.f);
+            joint->setOverrideNumSolverIterations(120);
+            for (int axis = 0; axis < 3; ++axis)
+            {
+                joint->setParam(BT_CONSTRAINT_ERP, .9f, axis);
+                joint->setParam(BT_CONSTRAINT_CFM, 0.f, axis);
+            }
+            mJoints.push_back(std::move(joint));
         }
-        chosen.clear();
-        for (size_t i = 0; i < pieces.size(); ++i)
-            if (loose[i])
-                chosen.push_back(i);
-        if (chosen.size() < 2)
-            return nullptr;
-
-        std::unique_ptr<Ragdoll> ragdoll(new Ragdoll(scheduler));
-        ragdoll->mDisableInternalCollision = true;
-        osg::Vec3f middle;
-        std::vector<btTransform> bodies;
-        for (size_t i : chosen)
-        {
-            const RigidPiece& piece = pieces[i];
-            auto part = std::make_shared<Part>(actor);
-            part->mBone = piece.mName;
-            const btTransform nodeWorld = withoutScale(piece.mWorld, part->mBoneScale);
-            const osg::Vec3f scale = part->mBoneScale;
-            const osg::Vec3f center = (piece.mMin + piece.mMax) * 0.5f;
-            osg::Vec3f half = (piece.mMax - piece.mMin) * 0.5f;
-            half = osg::Vec3f(std::max(half.x() * scale.x(), 1.f), std::max(half.y() * scale.y(), 1.f),
-                std::max(half.z() * scale.z(), 1.f));
-            part->mBoxHalfExtents = half;
-            part->mShape = std::make_unique<btBoxShape>(Misc::Convert::toBullet(half));
-            const btTransform bodyWorld(nodeWorld.getRotation(),
-                nodeWorld * Misc::Convert::toBullet(osg::Vec3f(
-                    center.x() * scale.x(), center.y() * scale.y(), center.z() * scale.z())));
-            part->mBoneFromBody = bodyWorld.inverse() * nodeWorld;
-            // Shells and limbs: about half as dense as water, a box being roomier than what it holds.
-            const float volume = 8.f * half.x() * half.y() * half.z() / (70.f * 70.f * 70.f);
-            makeBody(*part, bodyWorld, std::clamp(volume * 500.f, 0.2f, 100.f),
-                std::min({ half.x(), half.y(), half.z() }));
-            middle += Misc::Convert::toOsg(bodyWorld.getOrigin());
-            bodies.push_back(bodyWorld);
-            ragdoll->mParts.push_back(std::move(part));
-        }
-        middle /= static_cast<float>(chosen.size());
-
-        // Falling apart: the pieces spread a little from the middle, but never get a vertical launch.
-        const FatalImpact impact(actor, velocity, kick, false);
-        for (size_t i = 0; i < ragdoll->mParts.size(); ++i)
-        {
-            osg::Vec3f out = Misc::Convert::toOsg(bodies[i].getOrigin()) - middle;
-            out.z() = 0;
-            if (out.normalize() > 0)
-                out *= 25.f;
-            impact.apply(*ragdoll->mParts[i]->mBody, Misc::Convert::toBullet(middle), Misc::Convert::toBullet(out));
-        }
-        ragdoll->addToWorld();
-        return ragdoll;
-    }
-
-    Ragdoll::Ragdoll(PhysicsTaskScheduler* scheduler)
-        : mTaskScheduler(scheduler)
-    {
+        addJointFriction();
+        addToWorld();
+        try { configureEnhancement(); }
+        catch (...) { mTaskScheduler->removeRagdollBodies(mBodies, mConstraints, mJointFriction.get()); mRegistered = false; throw; }
+        recordInitialPose(bones);
     }
 
     void Ragdoll::makeBody(Part& part, const btTransform& bodyWorld, float mass, float thickness)
     {
-        // Bodies should carry far more inertia than the old lightweight pieces.
-        // Keep their separately modelled buoyancy (relative density) unchanged.
-        constexpr float massMultiplier = 2.75f;
-        const float simulatedMass = mass * massMultiplier;
-        part.mOriginalMass = simulatedMass;
+        // Choose the activation shape before computing any off-centre impulse.
+        auto* shape = Settings::game().mRagdollEnhancement && part.mEnhancedShape
+            ? part.mEnhancedShape.get() : part.mShape.get();
         btVector3 inertia(0, 0, 0);
-        part.mShape->calculateLocalInertia(simulatedMass, inertia);
-        part.mMotionState = std::make_unique<RagdollMotionState>(bodyWorld);
-        btRigidBody::btRigidBodyConstructionInfo info(
-            simulatedMass, part.mMotionState.get(), part.mShape.get(), inertia);
+        shape->calculateLocalInertia(mass, inertia);
+        btRigidBody::btRigidBodyConstructionInfo info(mass, nullptr, shape, inertia);
         info.m_friction = 0.8f;
-        info.m_restitution = 0.f;
+        info.m_restitution = 0.05f;
         info.m_linearDamping = 0.15f;
-        info.m_angularDamping = 0.5f;
+        info.m_angularDamping = 0.7f;
         // In game units (~70 per meter), like the other simulated objects.
         info.m_linearSleepingThreshold = 4.f;
         info.m_angularSleepingThreshold = 1.f;
         auto body = std::make_unique<btRigidBody>(info);
+        body->setWorldTransform(bodyWorld);
+        body->setInterpolationWorldTransform(bodyWorld);
         if (thickness > 0)
         {
             body->setCcdMotionThreshold(thickness * 0.5f);
@@ -584,50 +648,19 @@ namespace MWPhysics
 
     void Ragdoll::addToWorld()
     {
-        mFlyingCorpse = !mParts.empty() && mParts.front()->getPtr().getClass().canFly(mParts.front()->getPtr());
-        // Creature limbs, wings and feelers often start inside overlapping collision
-        // capsules. Internal contacts can violently spin the entire ragdoll.
-        // Disable creature-to-self contacts, while preserving contacts with
-        // terrain, actors, objects and other corpses. Humanoid NPCs retain
-        // their existing self-collision behaviour.
-        if (mFlyingCorpse || mDisableInternalCollision)
-            for (size_t i = 0; i < mParts.size(); ++i)
-                for (size_t j = i + 1; j < mParts.size(); ++j)
-                {
-                    mParts[i]->mBody->setIgnoreCollisionCheck(mParts[j]->mBody, true);
-                    mParts[j]->mBody->setIgnoreCollisionCheck(mParts[i]->mBody, true);
-                }
-
-        // Self-collision is now enabled: hands/forearms, legs and the torso cannot
-        // freely pass through non-adjacent parts of the same ragdoll.
-        // Directly jointed parts still ignore each other via addConstraint(..., true)
-        // in PhysicsTaskScheduler, because their capsules overlap at the joints.
-        // Other ragdolls and loose items remain normally collidable.
-        for (const auto& part : mParts)
-            mTaskScheduler->addRigidBody(part->mBody, CollisionType_Dynamic,
-                CollisionType_DynamicSupport | CollisionType_Actor | CollisionType_Dynamic | CollisionType_Projectile);
-
-        if (mFlyingCorpse)
-        {
-            // Restore the previous controlled aerial fall: gravity stays strong
-            // enough for visible descent, and the velocity cap avoids spikes.
-            setGravityScale(1.20f);
-            auto controller = std::make_unique<FlyingCorpseFall>();
-            for (const auto& part : mParts)
+        // The parts don't collide with each other: they overlap at the joints.
+        for (size_t i = 0; i < mParts.size(); ++i)
+            for (size_t j = i + 1; j < mParts.size(); ++j)
             {
-                part->mBody->setDamping(0.65f, 0.38f);
-                controller->mBodies.push_back(part->mBody);
+                mParts[i]->mBody->setIgnoreCollisionCheck(mParts[j]->mBody, true);
+                mParts[j]->mBody->setIgnoreCollisionCheck(mParts[i]->mBody, true);
             }
-            mFlyingFallController = std::move(controller);
-            mTaskScheduler->addAction(mFlyingFallController.get());
-        }
-    }
-
-    void Ragdoll::setGravityScale(float scale)
-    {
-        const btVector3 gravity(0, 0, -Constants::GravityConst * Constants::UnitsPerMeter * scale);
         for (const auto& part : mParts)
-            mTaskScheduler->setBodyGravity(part->mBody, gravity);
+            mBodies.push_back(part->mBody);
+        for (const auto& joint : mJoints)
+            mConstraints.push_back(joint.get());
+        mTaskScheduler->addRagdollBodies(mBodies, mConstraints, mJointFriction.get());
+        mRegistered = true;
     }
 
     void Ragdoll::addJoint(size_t parentIndex, size_t childIndex, const osg::Vec3f& position, float swing1,
@@ -640,44 +673,621 @@ namespace MWPhysics
         btVector3 childAxis = childWorld.getBasis() * btVector3(0, 1, 0);
         const btTransform jointWorld(
             shortestArcQuat(btVector3(1, 0, 0), childAxis), Misc::Convert::toBullet(position));
-        auto joint = std::make_unique<btConeTwistConstraint>(
+        auto joint = std::make_unique<RagdollEnhancement::ConeTwist>(
             parent, child, parent.getWorldTransform().inverse() * jointWorld, childWorld.inverse() * jointWorld);
         // Firm limits (little give, quickly corrected), so joints don't stretch.
-        const float flyingScale = mFlyingCorpse ? 1.4f : 1.f;
-        joint->setLimit(btRadians(swing1 * flyingScale), btRadians(swing2 * flyingScale),
-            btRadians(twist * flyingScale), 0.9f, 0.55f, 0.9f);
-        if (mFlyingCorpse)
-            joint->setOverrideNumSolverIterations(28);
-        mTaskScheduler->addConstraint(joint.get());
+        joint->setLimit(btRadians(swing1), btRadians(swing2), btRadians(twist), 0.9f, 0.6f, 1.f);
+        // A hard landing hits a few parts first; the world's 20 iterations left the others
+        // pulled up to 9 units from their joints for a few steps. Solve these to convergence.
+        joint->setOverrideNumSolverIterations(100);
+        // A kick on the chest must travel through the whole chain within the step that
+        // delivers it: the world's 20 iterations left the neck and shoulders pulled apart
+        // by up to 9 units while limbs caught up. Solve the joints to convergence and pull
+        // a separated anchor back at once, without softness.
+        joint->setOverrideNumSolverIterations(120);
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            joint->setParam(BT_CONSTRAINT_ERP, 0.9f, axis);
+            joint->setParam(BT_CONSTRAINT_CFM, 0.f, axis);
+        }
+        RagdollJointControl control;
+        control.joint = joint.get(); control.parent = parentIndex; control.child = childIndex;
+        control.baselineA = joint->getAFrame(); control.baselineB = joint->getBFrame();
+        control.baselineSpans = btVector3(btRadians(swing1), btRadians(swing2), btRadians(twist));
+        control.enhancedSpans = control.baselineSpans;
+        if (childIndex == 3 || childIndex == 5) control.enhancedSpans.setY(btRadians(55));
+        const RagdollNeutralProfile pose;
+        const btQuaternion neutralParent = pose.neutral[parentIndex] * mBoneInBody[parentIndex].inverse();
+        control.enhancedA = btTransform(neutralParent.inverse() * pose.limitCenter[childIndex],
+            control.baselineA.getOrigin());
+        control.enhancedB = btTransform(mBoneInBody[childIndex], control.baselineB.getOrigin());
+        control.neutral = pose.limitCenter[childIndex].inverse() * pose.neutral[childIndex];
+        const btVector3 axis = child.getWorldTransform().getBasis().getColumn(2);
+        const btScalar inertia = RagdollEnhancement::effectiveInertia(parent, child, axis);
+        const btScalar mass = 1 / child.getInvMass();
+        const btScalar lever = btMax(btScalar(8), (child.getCenterOfMassPosition()
+            - Misc::Convert::toBullet(position)).length());
+        const btScalar gravityTorque = mass * btScalar(627.2) * lever;
+        // Near-critical boundary damping, still smoothly gated by penetration
+        // and independently capped. A 12*I setting stored too much rebound.
+        // Bounds for the SUM of cone/twist potential world gradients and guard.
+        // Update these with profile spans, soft width or guard changes; the fixed
+        // normalization preserves a conservative potential and caps |spring| at .5*mgL.
+        constexpr btScalar gradientBounds[] = { 0, 13, 12, 13, 20, 13, 20, 14, 20, 14, 20 };
+        control.soft = { btRadians(12), gravityTorque * btScalar(.5) / gradientBounds[childIndex], inertia * 60,
+            gravityTorque, false };
+        const btScalar frequency = btScalar(.55) * SIMD_2_PI;
+        control.tone = { inertia * frequency * frequency, 4 * inertia * frequency,
+            gravityTorque * btScalar(.06), gravityTorque * btScalar(.30) };
+        static_cast<JointFriction*>(mJointFriction.get())->mLinks.push_back(control);
         mJoints.push_back(std::move(joint));
     }
 
     void Ragdoll::addJointFriction()
     {
-        auto friction = std::make_unique<JointFriction>();
+        auto* friction = static_cast<JointFriction*>(mJointFriction.get());
+        friction->mBodies = mBodies;
+        // mBodies is populated on registration; parts are already available here.
+        for (const auto& part : mParts)
+        {
+            friction->mBodies.push_back(part->mBody);
+            friction->mWaterBodies.emplace_back(part->mBody, part->mRelativeDensity);
+        }
+        for (std::size_t i = 0; i < mParts.size(); ++i)
+            if (const auto& part = mParts[i]; part->mEnhancedShape)
+            {
+                RagdollShapeControl shape;
+                shape.body = part->mBody;
+                shape.part = i;
+                shape.kind = i == 8 || i == 10 ? RagdollShapeControl::Kind::Foot : RagdollShapeControl::Kind::Hand;
+                shape.baseline = part->mShape.get();
+                shape.enhanced = part->mEnhancedShape.get();
+                shape.mass = 1 / part->mBody->getInvMass();
+                shape.baseline->calculateLocalInertia(shape.mass, shape.baselineInertia);
+                shape.enhanced->calculateLocalInertia(shape.mass, shape.enhancedInertia);
+                shape.surfaceVertices = part->mExtremityVertices;
+                shape.hullVertices = static_cast<btConvexHullShape*>(shape.enhanced)->getNumPoints();
+                friction->mShapes.push_back(std::move(shape));
+            }
         for (const auto& joint : mJoints)
             friction->mPairs.emplace_back(&joint->getRigidBodyA(), &joint->getRigidBodyB());
+    }
+
+    Ragdoll::~Ragdoll()
+    {
+        if (mRegistered)
+            mTaskScheduler->removeRagdollBodies(mBodies, mConstraints, mJointFriction.get());
+    }
+
+    bool Ragdoll::detachHead(const osg::Vec3f& cutVelocity, const osg::Vec3f& headAngularImpulse)
+    {
+        if (mTorsoDetached || mSeveredLimbsMask) return false;
+        if (mHeadDetached)
+            return true;
+        for (int axis = 0; axis < 3; ++axis)
+            if (!std::isfinite(cutVelocity[axis]) || !std::isfinite(headAngularImpulse[axis]))
+                return false;
+        if (!mRegistered || mParts.size() <= sHeadPart)
+            return false;
+        btRigidBody* head = mParts[sHeadPart]->mBody;
+        const auto found = std::find_if(mJoints.begin(), mJoints.end(), [head](const auto& joint) {
+            return &joint->getRigidBodyA() == head || &joint->getRigidBodyB() == head;
+        });
+        if (found == mJoints.end())
+            return false;
+        btTypedConstraint* removed = found->get();
+        auto friction = std::make_unique<JointFriction>();
+        for (const auto& joint : mJoints)
+            if (joint.get() != removed)
+                friction->mPairs.emplace_back(&joint->getRigidBodyA(), &joint->getRigidBodyB());
+        friction->mDetachedHead = head;
+        for (btRigidBody* body : mBodies)
+            if (body != head)
+                friction->mHeadCollisionPending.push_back(body);
+
+        mTaskScheduler->cancelSuperKick(mSuperKickToken);
+        const auto snapshot = mTaskScheduler->detachRagdollConstraint(
+            removed, mJointFriction.get(), friction.get(), head, mBodies,
+            Misc::Convert::toBullet(cutVelocity), Misc::Convert::toBullet(headAngularImpulse));
+        mConstraints.erase(std::remove(mConstraints.begin(), mConstraints.end(), removed), mConstraints.end());
+        mJoints.erase(found);
         mJointFriction = std::move(friction);
-        mTaskScheduler->addAction(mJointFriction.get());
+        mHeadDetached = true;
+        configureEnhancement();
+
+        const auto renderMatrix = [&](const btTransform& body) {
+            return mParts[sHeadPart]->mRenderFromBody
+                * osg::Matrixf::rotate(Misc::Convert::toOsg(body.getRotation()))
+                * osg::Matrixf::translate(Misc::Convert::toOsg(body.getOrigin()));
+        };
+        const osg::Matrixf before = renderMatrix(snapshot.before);
+        const osg::Matrixf after = renderMatrix(snapshot.after);
+        for (int i = 0; i < 16; ++i)
+            mHeadDetachTransformError = std::max(mHeadDetachTransformError, std::abs(before.ptr()[i] - after.ptr()[i]));
+        mHeadDetachLinearVelocityError = (snapshot.linearAfter
+            - (snapshot.launched ? snapshot.requestedVelocity + btVector3(0, 0, Misc::BrutalHeadSeparationSpeed) : snapshot.linearBefore)).length();
+        mHeadDetachAngularVelocityError = (snapshot.angularAfter - snapshot.headAngularExpected).length();
+        mHeadDetachLinearVelocity = Misc::Convert::toOsg(snapshot.linearBefore);
+        mHeadDetachAngularVelocity = Misc::Convert::toOsg(snapshot.angularBefore);
+        const auto& retainedBefore = snapshot.retainedBefore;
+        const auto& retainedAfter = snapshot.retainedAfter;
+        const auto comVelocity = [](const auto& state) {
+            return state.mass > 0 ? osg::Vec3f(Misc::Convert::toOsg(state.linear / state.mass)) : osg::Vec3f();
+        };
+        mHeadDetachRetainedState = { comVelocity(retainedBefore), comVelocity(retainedAfter),
+            osg::Vec3f(snapshot.retainedTransformError, snapshot.retainedLinearVelocityError,
+                snapshot.retainedAngularVelocityError),
+            Misc::Convert::toOsg(retainedBefore.linear), Misc::Convert::toOsg(retainedAfter.linear),
+            Misc::Convert::toOsg(retainedBefore.angular), Misc::Convert::toOsg(retainedAfter.angular),
+            osg::Vec3f(retainedBefore.mass, (retainedAfter.linear - retainedBefore.linear).length(),
+                (retainedAfter.angular - retainedBefore.angular).length()),
+            Misc::Convert::toOsg(retainedBefore.center), Misc::Convert::toOsg(retainedAfter.center) };
+        mHeadDetachAppliedState = { cutVelocity, Misc::Convert::toOsg(snapshot.linearAfter),
+            Misc::Convert::toOsg(snapshot.angularAfter), headAngularImpulse,
+            Misc::Convert::toOsg(snapshot.angularAfter - snapshot.angularBefore),
+            osg::Vec3f(snapshot.targetLinearVelocityError, mHeadDetachAngularVelocityError,
+                snapshot.retainedAngularVelocityError),
+            Misc::Convert::toOsg(snapshot.appliedHeadImpulse),
+            osg::Vec3f(snapshot.launched, 62.831853071795864, snapshot.unclampedHeadAngularSpeed) };
+        for (const auto& velocity : snapshot.partLinearAfter)
+            mHeadDetachPartVelocities.emplace_back(Misc::Convert::toOsg(velocity));
+        return true;
+    }
+
+    std::string Ragdoll::getBisectionPoseData() const
+    {
+        if (!mTorsoDetached || !mRegistered || mBodies.size() != 11) return {};
+        const auto actorFrame = bisectionActorFrame(getPtr());
+        if (!actorFrame) return {};
+        // Both anchors belong to the same completed physics snapshot, even when
+        // the physics worker advances independently of the save operation.
+        const auto anchors = mTaskScheduler->readRigidBodyTransforms({ mBodies[0], mBodies[1] });
+        std::string bytes("BSP1");
+        bytes.reserve(BisectionPoseBytes);
+        for (const auto& world : anchors)
+        {
+            const auto relative = actorFrame->inverse() * world;
+            const auto position = relative.getOrigin();
+            auto rotation = relative.getRotation();
+            if (!validBisectionAnchor(position, rotation)) return {};
+            rotation.normalize();
+            for (btScalar value : { position.x(), position.y(), position.z(),
+                     rotation.x(), rotation.y(), rotation.z(), rotation.w() })
+                appendBisectionFloat(bytes, static_cast<float>(value));
+        }
+        return bytes;
+    }
+
+    bool Ragdoll::detachTorso(const osg::Vec3f& cutVelocity, const osg::Vec3f& upperSeparation,
+        const std::string& savedPose)
+    {
+        if (mTorsoDetached) return true;
+        if (mHeadDetached || mSeveredLimbsMask || !mRegistered || mParts.size() != 11) return false;
+        auto* pelvis = mBodies[0];
+        auto* torso = mBodies[1];
+        const auto found = std::find_if(mJoints.begin(), mJoints.end(), [&](const auto& joint) {
+            return (&joint->getRigidBodyA() == pelvis && &joint->getRigidBodyB() == torso)
+                || (&joint->getRigidBodyB() == pelvis && &joint->getRigidBodyA() == torso);
+        });
+        if (found == mJoints.end()) return false;
+        std::optional<std::array<btTransform, 2>> desiredAnchors;
+        if (!savedPose.empty())
+            if (const auto actorFrame = bisectionActorFrame(getPtr()))
+                desiredAnchors = readBisectionPose(savedPose, *actorFrame);
+        mTorsoPosePayloadRejected = !savedPose.empty() && !desiredAnchors;
+        auto* removed = found->get();
+        auto friction = std::make_unique<JointFriction>();
+        friction->mTorsoDetached = true;
+        for (const auto& joint : mJoints)
+            if (joint.get() != removed)
+                friction->mPairs.emplace_back(&joint->getRigidBodyA(), &joint->getRigidBodyB());
+        // A nonempty payload denotes restoration, including a rejected payload
+        // from an older/corrupt save. It must never replay a fresh cut launch.
+        mTaskScheduler->cancelSuperKick(mSuperKickToken);
+        const auto snapshot = mTaskScheduler->detachRagdollTorso(removed, mJointFriction.get(),
+            friction.get(), mBodies, savedPose.empty() ? Misc::Convert::toBullet(cutVelocity) : btVector3(0, 0, 0),
+            savedPose.empty() ? Misc::Convert::toBullet(upperSeparation) : btVector3(0, 0, 0), desiredAnchors);
+        mTorsoDetachErrors = snapshot.errors;
+        mTorsoPoseRestored = snapshot.poseRestored;
+        mTorsoPosePayloadRejected |= desiredAnchors.has_value() && !snapshot.poseRestored;
+        mTorsoPoseRestoreError = snapshot.poseRestoreError;
+        mTorsoPoseRestoreDisplacement = snapshot.poseRestoreDisplacement;
+        mTorsoPoseRestoreRotation = snapshot.poseRestoreRotation;
+        mTorsoPoseAnchorDistance = snapshot.poseAnchorDistance;
+        mConstraints.erase(std::remove(mConstraints.begin(), mConstraints.end(), removed), mConstraints.end());
+        mJoints.erase(found);
+        mJointFriction = std::move(friction);
+        mTorsoDetached = true;
+        return true;
+    }
+
+    bool Ragdoll::detachLimbs(unsigned mask, const osg::Vec3f& cutVelocity, const std::string& savedPose)
+    {
+        if (!LimbSevering::validMask(mask)) return false;
+        if (mSeveredLimbsMask) return mSeveredLimbsMask == mask;
+        if (mHeadDetached || mTorsoDetached || !mRegistered || mBodies.size() != LimbSevering::PartCount)
+            return false;
+        for (int axis = 0; axis < 3; ++axis)
+            if (!std::isfinite(cutVelocity[axis])) return false;
+        std::vector<btTypedConstraint*> removed;
+        for (std::size_t bit = 0; bit < LimbSevering::Roots.size(); ++bit)
+        {
+            if (!(mask & (1u << bit))) continue;
+            auto* child = mBodies[LimbSevering::Roots[bit]];
+            auto* parent = mBodies[sPartDefs[LimbSevering::Roots[bit]].mParent];
+            const auto found = std::find_if(mJoints.begin(), mJoints.end(), [&](const auto& joint) {
+                return (&joint->getRigidBodyA() == parent && &joint->getRigidBodyB() == child)
+                    || (&joint->getRigidBodyB() == parent && &joint->getRigidBodyA() == child);
+            });
+            if (found == mJoints.end()) return false;
+            removed.push_back(found->get());
+        }
+        auto friction = std::make_unique<JointFriction>();
+        friction->mSeveredLimbsMask = mask;
+        friction->mRemovedConstraints = removed;
+        for (const auto& joint : mJoints)
+            if (std::find(removed.begin(), removed.end(), joint.get()) == removed.end())
+                friction->mPairs.emplace_back(&joint->getRigidBodyA(), &joint->getRigidBodyB());
+        std::optional<std::array<btTransform, LimbSevering::PartCount>> desiredPose;
+        if (!savedPose.empty())
+            if (const auto frame = bisectionActorFrame(getPtr()))
+                desiredPose = LimbSevering::decodePose(savedPose, mask, *frame);
+        mLimbPosePayloadRejected = !savedPose.empty() && !desiredPose;
+        mTaskScheduler->cancelSuperKick(mSuperKickToken);
+        const auto snapshot = mTaskScheduler->detachRagdollLimbs(removed, mJointFriction.get(), friction.get(),
+            mBodies, mask, savedPose.empty() ? Misc::Convert::toBullet(cutVelocity) : btVector3(0, 0, 0), desiredPose);
+        mLimbDetachErrors = snapshot.errors;
+        mLimbPoseRestored = snapshot.poseRestored;
+        mLimbPosePayloadRejected |= desiredPose.has_value() && !snapshot.poseRestored;
+        mLimbPoseRestoreError = snapshot.poseRestoreError;
+        std::erase_if(mConstraints, [&](auto* constraint) {
+            return std::find(removed.begin(), removed.end(), constraint) != removed.end();
+        });
+        std::erase_if(mJoints, [&](const auto& joint) {
+            return std::find(removed.begin(), removed.end(), joint.get()) != removed.end();
+        });
+        mJointFriction = std::move(friction);
+        mSeveredLimbsMask = mask;
+        return true;
+    }
+
+    std::string Ragdoll::getLimbSeveringPoseData() const
+    {
+        if (!mSeveredLimbsMask || !mRegistered || mBodies.size() != LimbSevering::PartCount) return {};
+        const auto frame = bisectionActorFrame(getPtr());
+        if (!frame) return {};
+        // Body and every fragment are read under one completed-step lock. The
+        // stable actor frame avoids turning a saved floor gap vertical on reload.
+        const auto transforms = mTaskScheduler->readRigidBodyTransforms(mBodies);
+        std::array<btTransform, LimbSevering::PartCount> pose;
+        std::copy(transforms.begin(), transforms.end(), pose.begin());
+        return LimbSevering::encodePose(mSeveredLimbsMask, pose, *frame);
+    }
+
+    std::vector<osg::Vec3f> Ragdoll::getHeadState() const
+    {
+        osg::Vec3f position, linear, angular;
+        if (mLastTransforms.size() > sHeadPart)
+        {
+            const auto& body = mLastTransforms[sHeadPart];
+            position = (mParts[sHeadPart]->mRenderFromBody
+                * osg::Matrixf::rotate(Misc::Convert::toOsg(body.getRotation()))
+                * osg::Matrixf::translate(Misc::Convert::toOsg(body.getOrigin()))).getTrans();
+        }
+        if (mLinearVelocities.size() > sHeadPart)
+            linear = Misc::Convert::toOsg(mLinearVelocities[sHeadPart]);
+        if (mAngularVelocities.size() > sHeadPart)
+            angular = Misc::Convert::toOsg(mAngularVelocities[sHeadPart]);
+        const auto* friction = static_cast<const JointFriction*>(mJointFriction.get());
+        std::vector<osg::Vec3f> state{ osg::Vec3f(mHeadDetached, mJoints.size(),
+                     friction ? friction->mHeadCollisionPairsEnabled.load(std::memory_order_relaxed) : 0),
+            osg::Vec3f(mHeadDetachTransformError, mHeadDetachLinearVelocityError, mHeadDetachAngularVelocityError),
+            position, linear, angular, mHeadDetachLinearVelocity, mHeadDetachAngularVelocity };
+        state.insert(state.end(), mHeadDetachRetainedState.begin(), mHeadDetachRetainedState.end());
+        state.insert(state.end(), mHeadDetachAppliedState.begin(), mHeadDetachAppliedState.end());
+        state.insert(state.end(), mHeadDetachPartVelocities.begin(), mHeadDetachPartVelocities.end());
+        return state;
+    }
+
+    std::vector<std::pair<std::string, osg::Matrixf>> Ragdoll::getBonePoses(std::optional<float> interpolation) const
+    {
+        // One lock spans the entire articulated body, so joints cannot mix physics steps.
+        std::vector<btTransform> rendered;
+        mLastTransforms = mTaskScheduler->readRigidBodyTransforms(
+            mBodies, &mLinearVelocities, &mAngularVelocities, &rendered, interpolation);
+        mMaxSpeed = mMaxAngularSpeed = 0.f;
+        for (size_t i=0; i<mBodies.size(); ++i)
+        {
+            mMaxSpeed = std::max(mMaxSpeed, float(mLinearVelocities[i].length()));
+            mMaxAngularSpeed = std::max(mMaxAngularSpeed, float(mAngularVelocities[i].length()));
+        }
+        mLastPoses.clear();
+        mLastPoses.reserve(mParts.size());
+        for (size_t i = 0; i < mParts.size(); ++i)
+        {
+            const auto& part = mParts[i];
+            const auto& body=rendered[i];
+            mLastPoses.emplace_back(part->mBone,part->mRenderFromBody
+                *osg::Matrixf::rotate(Misc::Convert::toOsg(body.getRotation()))
+                *osg::Matrixf::translate(Misc::Convert::toOsg(body.getOrigin())));
+        }
+        return mLastPoses;
+    }
+
+    float Ragdoll::bottom() const
+    {
+        float z = std::numeric_limits<float>::max();
+        for (size_t i=0; i<mParts.size(); ++i)
+        {
+            btVector3 lo, hi; mParts[i]->mBody->getCollisionShape()->getAabb(mLastTransforms[i], lo, hi);
+            z = std::min(z, float(lo.z()));
+        }
+        return z;
+    }
+
+    float Ragdoll::retainedBottom() const
+    {
+        float z = std::numeric_limits<float>::max();
+        for (size_t i = 0; i < mParts.size(); ++i)
+        {
+            // A detached head can fall to a different floor. It must not drag
+            // the remaining corpse's persisted scene reference down with it.
+            if (mHeadDetached && mParts[i]->mBone == "Bip01 Head")
+                continue;
+            if (mTorsoDetached && i >= 1 && i <= 6)
+                continue; // The lower half owns the persisted actor root/floor.
+            if (LimbSevering::fragment(i, mSeveredLimbsMask))
+                continue; // A detached limb on a lower floor cannot move the torso's scene reference.
+            btVector3 lo, hi;
+            mParts[i]->mBody->getCollisionShape()->getAabb(mLastTransforms[i], lo, hi);
+            z = std::min(z, float(lo.z()));
+        }
+        return z;
+    }
+
+    float Ragdoll::findKickPart(const osg::Vec3f& origin, const osg::Vec3f& forward, float reach,
+        float minimumDot, std::size_t& part, osg::Vec3f& point) const
+    {
+        float best = -1.f;
+        // Render interpolation intentionally trails physics. Target the latest
+        // completed physical pose, then measure reach to its collision surface.
+        const auto transforms = mTaskScheduler->readRigidBodyTransforms(mBodies);
+        const btVector3 from = Misc::Convert::toBullet(origin);
+        for (std::size_t i = 0; i < mParts.size() && i < transforms.size(); ++i)
+        {
+            const osg::Vec3f offset = Misc::Convert::toOsg(transforms[i].getOrigin()) - origin;
+            osg::Vec3f flat(offset.x(), offset.y(), 0.f);
+            if (flat.normalize() < 1e-3f || flat * forward < minimumDot) continue;
+            btTransform source = btTransform::getIdentity();
+            source.setOrigin(from);
+            auto contact = mTaskScheduler->getHitPoint(source, mParts[i]->mBody);
+            if (!contact && mCreature)
+            {
+                // The player can walk into a corpse. A boot starting inside a big creature's
+                // capsule finds no surface to cross, yet it plainly touches that part.
+                const auto* capsule = static_cast<const btCapsuleShape*>(mParts[i]->mShape.get());
+                const btVector3 local = transforms[i].invXform(from);
+                const btScalar along = btClamped(local.y(), -capsule->getHalfHeight(), capsule->getHalfHeight());
+                if ((local - btVector3(0, along, 0)).length() <= capsule->getRadius())
+                    contact = from;
+            }
+            if (!contact) continue;
+            const float distance = (*contact - from).length();
+            if (distance > reach || (best >= 0.f && distance >= best)) continue;
+            // Ragdolls are dynamic bodies; only solid world geometry blocks the
+            // boot-to-surface ray. A reachable corpse behind a wall is not a hit.
+            btCollisionWorld::ClosestRayResultCallback obstruction(from, *contact);
+            obstruction.m_collisionFilterGroup = CollisionType_Actor;
+            obstruction.m_collisionFilterMask = CollisionType_World | CollisionType_Door | CollisionType_HeightMap;
+            mTaskScheduler->rayTest(from, *contact, obstruction);
+            if (obstruction.hasHit() && obstruction.m_closestHitFraction < btScalar(.999)) continue;
+            best = distance;
+            part = i;
+            point = Misc::Convert::toOsg(*contact);
+        }
+        return best;
+    }
+
+    bool Ragdoll::isDetachedHeadPart(std::size_t part) const
+    {
+        return mHeadDetached && part == sHeadPart;
+    }
+
+    bool Ragdoll::applyKick(std::size_t part, const osg::Vec3f& velocity, const osg::Vec3f& point)
+    {
+        if (!mRegistered || part >= mParts.size()) return false;
+        auto* control = static_cast<JointFriction*>(mJointFriction.get());
+        if (!mTaskScheduler->applyRagdollKick(mJointFriction.get(), part, Misc::Convert::toBullet(point),
+                Misc::Convert::toBullet(velocity * mKickScale), (std::uint64_t(1) << 63) | ++control->mSerial)) return false;
+        ++mKickCount;
+        return true;
+    }
+
+    bool Ragdoll::startSuperKick(std::uint64_t token, std::uint64_t kickId, const osg::Vec3f& velocity,
+        const btCollisionObject* attacker)
+    {
+        if (!mRegistered || mHeadDetached || mTorsoDetached || mSeveredLimbsMask
+            || (!mCreature && mBodies.size() != 11)) return false;
+        mTaskScheduler->startSuperKick(token, kickId, mBodies, velocity * mKickScale, attacker);
+        mSuperKickToken = token;
+        getBonePoses(1.f);
+        mInitialCOMVelocity = getDynamics()[1];
+        return true;
+    }
+
+    std::map<std::string, double> Ragdoll::getSuperKickState() const
+    {
+        return mSuperKickToken ? mTaskScheduler->readSuperKick(mSuperKickToken) : std::map<std::string, double>{};
+    }
+
+    void Ragdoll::guardSuperKickSpawn()
+    {
+        mTaskScheduler->guardSuperKickSpawn(mBodies);
+    }
+
+    void Ragdoll::configureEnhancement()
+    {
+        const auto& game = Settings::game();
+        RagdollControlConfig config;
+        // The anatomical profile describes the human body; a creature keeps plain joints.
+        config.enabled = game.mRagdollEnhancement && !mCreature;
+        config.softStops = game.mRagdollSoftStops; config.neutralPose = game.mRagdollNeutralPose;
+        config.limbResponse = game.mRagdollLimbResponse; config.selfCollision = game.mRagdollSelfCollision;
+        config.softStrength = game.mRagdollSoftStrength; config.toneStrength = game.mRagdollToneStrength;
+        config.impactStrength = game.mRagdollImpactStrength;
+        config.waterEnabled = mWaterEnabled;
+        config.waterHeight = mWaterHeight;
+        if (!std::isfinite(config.softStrength) || !std::isfinite(config.toneStrength)
+            || !std::isfinite(config.impactStrength))
+            throw std::runtime_error("Non-finite ragdoll profile strength");
+        mTaskScheduler->configureRagdoll(mJointFriction.get(), config);
+    }
+
+    std::map<std::string, double> Ragdoll::getEnhancementState() const
+    {
+        auto state = mTaskScheduler->readRagdollControl(mJointFriction.get());
+        state["limbsMask"] = mSeveredLimbsMask;
+        state["limbConstraintCount"] = mJoints.size();
+        state["limbDetachTransformError"] = mLimbDetachErrors[0];
+        state["limbDetachVelocityError"] = mLimbDetachErrors[1];
+        state["limbDetachAngularError"] = mLimbDetachErrors[2];
+        state["limbPoseRestored"] = mLimbPoseRestored;
+        state["limbPosePayloadRejected"] = mLimbPosePayloadRejected;
+        state["limbPoseRestoreError"] = mLimbPoseRestoreError;
+        state["torsoDetached"] = mTorsoDetached;
+        state["torsoConstraintCount"] = mJoints.size();
+        state["torsoDetachTransformError"] = mTorsoDetachErrors[0];
+        state["torsoDetachVelocityError"] = mTorsoDetachErrors[1];
+        state["torsoDetachAngularError"] = mTorsoDetachErrors[2];
+        state["torsoPoseRestored"] = mTorsoPoseRestored;
+        state["torsoPosePayloadRejected"] = mTorsoPosePayloadRejected;
+        state["torsoPoseRestoreError"] = mTorsoPoseRestoreError;
+        state["torsoPoseRestoreDisplacement"] = mTorsoPoseRestoreDisplacement;
+        state["torsoPoseRestoreRotation"] = mTorsoPoseRestoreRotation;
+        state["torsoPoseAnchorDistance"] = mTorsoPoseAnchorDistance;
+        for (const auto& [bone, prefix] : { std::pair{ "Bip01 L Hand", "hand4." },
+                 std::pair{ "Bip01 R Hand", "hand6." }, std::pair{ "Bip01 L Foot", "foot8." },
+                 std::pair{ "Bip01 R Foot", "foot10." } })
+        {
+            const auto found = mUnsupportedExtremityBones.find(bone);
+            state[std::string(prefix) + "unsupportedBoneCount"]
+                = found == mUnsupportedExtremityBones.end() ? 0 : found->second;
+        }
+        state["initialMaxAngularSpeed"] = mInitialMaxAngularSpeed;
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            const std::string suffix(1, "XYZ"[axis]);
+            state["initialRootVelocity" + suffix] = mInitialRootVelocity[axis];
+            state["initialAnimationVelocity" + suffix] = mInheritedVelocity[axis] - mInitialRootVelocity[axis];
+        }
+        return state;
+    }
+
+    bool Ragdoll::applyImpact(std::size_t part, const osg::Vec3f& point, const osg::Vec3f& impulse,
+        std::uint64_t id, bool alreadyApplied)
+    {
+        if (part == std::numeric_limits<std::size_t>::max())
+        {
+            const auto transforms = mTaskScheduler->readRigidBodyTransforms(mBodies);
+            btScalar distance = BT_LARGE_FLOAT;
+            for (std::size_t i = 0; i < transforms.size(); ++i)
+            {
+                const auto delta = transforms[i].getOrigin() - Misc::Convert::toBullet(point);
+                if (delta.length2() < distance) { distance = delta.length2(); part = i; }
+            }
+        }
+        if (!id)
+            id = (std::uint64_t(1) << 62) | ++static_cast<JointFriction*>(mJointFriction.get())->mSerial;
+        if (mCreature)
+        {
+            // No anatomical controller: share the momentum across the connected body.
+            if (alreadyApplied || part >= mParts.size()) return false;
+            btScalar mass = 0;
+            for (const auto& each : mParts) mass += 1 / each->mBody->getInvMass();
+            const bool applied = mTaskScheduler->applyRagdollKick(mJointFriction.get(), part,
+                Misc::Convert::toBullet(point), Misc::Convert::toBullet(impulse) / mass, id);
+            if (applied && !mImpulse.length2())
+            {
+                mImpulse = impulse;
+                mContact = point;
+            }
+            return applied;
+        }
+        const bool applied = mTaskScheduler->applyRagdollImpact(mJointFriction.get(),
+            { id, part, Misc::Convert::toBullet(point), Misc::Convert::toBullet(impulse), alreadyApplied });
+        if (applied && !alreadyApplied && getEnhancementState().at("simulatedAge") == 0)
+        {
+            // Native lethal hits create the pose with zero kick, then deliver J.
+            // Record the resulting initial state before the first physical step;
+            // compatibility notifications and later corpse hits retain their history.
+            mLastTransforms = mTaskScheduler->readRigidBodyTransforms(mBodies, &mLinearVelocities, &mAngularVelocities);
+            mInitialCOMVelocity = getDynamics()[1];
+            mImpulse = impulse;
+            mContact = point;
+        }
+        return applied;
+    }
+
+    bool Ragdoll::getEquipmentFrame(bool left, osg::Matrixf& frame, osg::Vec3f& linear, osg::Vec3f& angular) const
+    {
+        const std::size_t index = left ? 4 : 6; // Actual hand geometry is rigidly owned by its forearm.
+        if (mBodies.size() <= index)
+            return false;
+        std::vector<btVector3> velocities, spins;
+        const auto transforms = mTaskScheduler->readRigidBodyTransforms(mBodies, &velocities, &spins);
+        const auto& transform = transforms[index];
+        frame = osg::Matrixf::rotate(Misc::Convert::toOsg(transform.getRotation()))
+            * osg::Matrixf::translate(Misc::Convert::toOsg(transform.getOrigin()));
+        linear = Misc::Convert::toOsg(velocities[index]);
+        angular = Misc::Convert::toOsg(spins[index]);
+        return true;
+    }
+
+    std::vector<btRigidBody*> Ragdoll::getEquipmentGripBodies() const
+    {
+        if (mBodies.size() <= 6)
+            return {};
+        return { mBodies[4], mBodies[6] };
+    }
+
+    std::vector<osg::Vec3f> Ragdoll::getDynamics() const
+    {
+        osg::Vec3f center, velocity; float mass = 0.f;
+        for (size_t i=0; i<mParts.size(); ++i)
+        {
+            const float m = 1.f/mParts[i]->mBody->getInvMass(); mass += m;
+            center += Misc::Convert::toOsg(mLastTransforms[i].getOrigin())*m;
+            velocity += Misc::Convert::toOsg(mLinearVelocities[i])*m;
+        }
+        return {center/mass, velocity/mass, mInheritedVelocity, mInitialCOMVelocity,
+            mImpulse, mContact, osg::Vec3f(mInitialPoseError, mMaxSpeed, mMaxAngularSpeed)};
+    }
+
+    float Ragdoll::maxJointError() const
+    {
+        if (mLastTransforms.size() != mParts.size())
+            return 0.f;
+        float result = 0.f;
+        for (const auto& joint : mJoints)
+        {
+            const auto* cone = static_cast<const btConeTwistConstraint*>(joint.get());
+            const auto a = std::find(mBodies.begin(), mBodies.end(), &joint->getRigidBodyA());
+            const auto b = std::find(mBodies.begin(), mBodies.end(), &joint->getRigidBodyB());
+            const btVector3 anchorA = mLastTransforms[a - mBodies.begin()] * cone->getAFrame().getOrigin();
+            const btVector3 anchorB = mLastTransforms[b - mBodies.begin()] * cone->getBFrame().getOrigin();
+            result = std::max(result, static_cast<float>((anchorA - anchorB).length()));
+        }
+        return result;
     }
 
     std::optional<osg::Vec3f> Ragdoll::getActorPosition(const osg::Vec3f& actorPosition)
     {
-        if (mLastPoses.empty())
+        if (mLastTransforms.empty())
             return std::nullopt;
-        const osg::Vec3f main = mLastMainBonePosition;
-        // Keep the actor following the creature's main mass, not an arbitrary
-        // wing bone that may precede the torso in the source mesh skeleton.
-        if (!mActorOffset)
-            mActorOffset = osg::Vec2f(actorPosition.x() - main.x(), actorPosition.y() - main.y());
-        if (mFlyingCorpse)
-        {
-            if (!mFlyingActorOffsetZ)
-                mFlyingActorOffsetZ = actorPosition.z() - main.z();
-            return osg::Vec3f(main.x() + mActorOffset->x(), main.y() + mActorOffset->y(),
-                main.z() + *mFlyingActorOffsetZ);
-        }
-        return osg::Vec3f(main.x() + mActorOffset->x(), main.y() + mActorOffset->y(), main.z());
+        const auto& body = mLastTransforms.front();
+        return (mParts.front()->mRenderFromBody
+            * osg::Matrixf::rotate(Misc::Convert::toOsg(body.getRotation()))
+            * osg::Matrixf::translate(Misc::Convert::toOsg(body.getOrigin()))).getTrans() + mActorOffset;
     }
 
     MWWorld::Ptr Ragdoll::getPtr() const
@@ -685,328 +1295,9 @@ namespace MWPhysics
         return mParts.front()->getPtr();
     }
 
-    bool Ragdoll::hasComeApart(float duration)
-    {
-        // A bad fit shows straight away; after a few seconds it's settled (or being dragged around).
-        constexpr float checkTime = 3.f;
-        if (mAge > checkTime || mParts.empty())
-            return false;
-        mAge += duration;
-        mCheckTimer += duration;
-
-        std::vector<btVector3> positions;
-        positions.reserve(mParts.size());
-        for (const auto& part : mParts)
-        {
-            btTransform transform;
-            part->mMotionState->getWorldTransform(transform);
-            positions.push_back(transform.getOrigin());
-        }
-        if (mLastPositions.empty())
-        {
-            for (const btVector3& position : positions)
-                mStartDistances.push_back(static_cast<float>((position - positions.at(mMainPartIndex)).length()));
-            mLastPositions = std::move(positions);
-            mCheckTimer = 0;
-            return false;
-        }
-        // Over a while, not every frame: the parts only move each physics step.
-        constexpr float checkInterval = 0.25f;
-        if (mCheckTimer < checkInterval)
-            return false;
-
-        // Faster than anything falls or is thrown, or a joint pulled far apart.
-        constexpr float maxSpeed = 2500.f;
-        for (size_t i = 0; i < positions.size(); ++i)
-        {
-            if ((positions[i] - mLastPositions[i]).length() > maxSpeed * mCheckTimer)
-                return true;
-            if (isJointed()
-                && (positions[i] - positions.at(mMainPartIndex)).length()
-                    > mStartDistances[i] * 2.f + (mFlyingCorpse ? 250.f : 80.f))
-                return true;
-        }
-        mLastPositions = std::move(positions);
-        mCheckTimer = 0;
-        return false;
-    }
-
-    void Ragdoll::setAtRest()
-    {
-        // Restored corpses already have their saved pose; do not let them
-        // restart a fall or jitter every time a cell is loaded.
-        if (mFrozen)
-            return;
-        std::vector<std::pair<btRigidBody*, btScalar>> bodies;
-        bodies.reserve(mParts.size());
-        for (const auto& part : mParts)
-            bodies.emplace_back(part->mBody, part->mOriginalMass);
-        mTaskScheduler->setRagdollBodiesFrozen(bodies, true);
-        mFrozen = true;
-    }
-
-    void Ragdoll::updateFreezeTimer(float duration, bool beingDragged)
-    {
-        if (mFrozen || beingDragged || duration <= 0.f || mParts.empty())
-            return;
-
-        // Motion-state snapshots are synchronized with the physics simulation.
-        // Check translation AND rotation of every limb, not just the pelvis.
-        mFreezeAge += duration;
-        mFreezeSampleTime += duration;
-        constexpr float sampleInterval = 0.25f;
-        if (mFreezeSampleTime < sampleInterval)
-            return;
-        const float sampleDuration = mFreezeSampleTime;
-        mFreezeSampleTime = 0.f;
-
-        std::vector<btTransform> current;
-        current.reserve(mParts.size());
-        for (const auto& part : mParts)
-        {
-            btTransform transform;
-            part->mMotionState->getWorldTransform(transform);
-            current.push_back(transform);
-        }
-
-        if (mPreviousFreezeTransforms.size() != current.size())
-        {
-            mPreviousFreezeTransforms = current;
-            mJitterStartPositions.clear();
-            mJitterWindowTime = 0.f;
-            mStableTime = 0.f;
-            return;
-        }
-
-        // Below roughly 2 world units/s and 0.08 rad/s for EVERY part
-        // continuously for 0.5s: a genuinely settled corpse.
-        constexpr float maxStableSpeed = 2.f;
-        constexpr float maxStableAngularSpeed = 0.08f;
-        bool allStill = true;
-        for (size_t i = 0; i < current.size(); ++i)
-        {
-            const btScalar travel = (current[i].getOrigin() - mPreviousFreezeTransforms[i].getOrigin()).length();
-            const btScalar rotation = current[i].getRotation().angleShortestPath(
-                mPreviousFreezeTransforms[i].getRotation());
-            if (travel > maxStableSpeed * sampleDuration || rotation > maxStableAngularSpeed * sampleDuration)
-            {
-                allStill = false;
-                break;
-            }
-        }
-        mStableTime = allStill ? mStableTime + sampleDuration : 0.f;
-        mPreviousFreezeTransforms = current;
-
-        // Detect wedged bodies that shake in place but make no net progress.
-        // Compare a TWO-SECOND window, so falling or sliding down stairs does
-        // not look like stationary high-frequency jitter.
-        bool locallyStuck = false;
-        if (mJitterStartPositions.size() != current.size())
-        {
-            mJitterStartPositions.clear();
-            for (const btTransform& transform : current)
-                mJitterStartPositions.push_back(transform.getOrigin());
-            mJitterWindowTime = 0.f;
-        }
-        else
-        {
-            mJitterWindowTime += sampleDuration;
-            if (mJitterWindowTime >= 2.f)
-            {
-                const float pelvisTravel = static_cast<float>(
-                    (current.at(mMainPartIndex).getOrigin() - mJitterStartPositions.at(mMainPartIndex)).length());
-                float totalTravel = 0.f;
-                for (size_t i = 0; i < current.size(); ++i)
-                    totalTravel += static_cast<float>(
-                        (current[i].getOrigin() - mJitterStartPositions[i]).length());
-                const float meanTravel = totalTravel / current.size();
-                locallyStuck = pelvisTravel < 12.f && meanTravel < 20.f;
-                mJitterStartPositions.clear();
-                for (const btTransform& transform : current)
-                    mJitterStartPositions.push_back(transform.getOrigin());
-                mJitterWindowTime = 0.f;
-            }
-        }
-
-        const bool settled = mFreezeAge >= 3.f && mStableTime >= 0.5f;
-        const bool wedged = mFreezeAge >= 6.f && locallyStuck;
-        if (!settled && !wedged)
-            return;
-
-        // Fix the complete body at once: simply sleeping it is not enough,
-        // because joint contacts or terrain penetration can wake it repeatedly.
-        std::vector<std::pair<btRigidBody*, btScalar>> bodies;
-        bodies.reserve(mParts.size());
-        for (const auto& part : mParts)
-            bodies.emplace_back(part->mBody, part->mOriginalMass);
-        mTaskScheduler->setRagdollBodiesFrozen(bodies, true);
-        mFrozen = true;
-    }
-
-    void Ragdoll::unfreezeForDragging()
-    {
-        // Reset the settling and wedging measurements for the next drop.
-        mFreezeAge = 0.f;
-        mFreezeSampleTime = 0.f;
-        mStableTime = 0.f;
-        mJitterWindowTime = 0.f;
-        mPreviousFreezeTransforms.clear();
-        mJitterStartPositions.clear();
-        if (!mFrozen)
-            return;
-
-        std::vector<std::pair<btRigidBody*, btScalar>> bodies;
-        bodies.reserve(mParts.size());
-        for (const auto& part : mParts)
-            bodies.emplace_back(part->mBody, part->mOriginalMass);
-        mTaskScheduler->setRagdollBodiesFrozen(bodies, false);
-        // Re-registering Bullet bodies as dynamic restores world gravity. Flyers
-        // must immediately resume their custom aerial gravity after being grabbed.
-        if (mFlyingCorpse)
-            setGravityScale(1.20f);
-        mFrozen = false;
-    }
-
-    void Ragdoll::restoreFlightGravity()
-    {
-        if (mFlyingCorpse && !mFrozen)
-            setGravityScale(1.20f);
-    }
-
-    void Ragdoll::liftStrayParts(const std::function<float(const osg::Vec3f&)>& groundAt, float depth)
-    {
-        for (const auto& part : mParts)
-        {
-            btTransform bodyWorld;
-            part->mMotionState->getWorldTransform(bodyWorld);
-            const osg::Vec3f position = Misc::Convert::toOsg(bodyWorld.getOrigin());
-            const float ground = groundAt(position);
-            if (position.z() >= ground - depth)
-                continue;
-            btVector3 aabbMin;
-            btVector3 aabbMax;
-            part->mShape->getAabb(btTransform::getIdentity(), aabbMin, aabbMax);
-            bodyWorld.getOrigin().setZ(ground + aabbMax.length() + 2.f);
-            part->mMotionState->setWorldTransform(bodyWorld);
-            part->mMotionState->setWorldTransform(bodyWorld); // no interpolation from under the ground
-            mTaskScheduler->placeBody(part->mBody, bodyWorld);
-        }
-    }
-
-    void Ragdoll::strike(const osg::Vec3f& point, const osg::Vec3f& impulse)
-    {
-        Part* nearest = nullptr;
-        float nearestDistance = std::numeric_limits<float>::max();
-        for (const auto& part : mParts)
-        {
-            btTransform bodyWorld;
-            part->mMotionState->getWorldTransform(bodyWorld);
-            const float distance = (Misc::Convert::toOsg(bodyWorld.getOrigin()) - point).length2();
-            if (distance < nearestDistance)
-            {
-                nearestDistance = distance;
-                nearest = part.get();
-            }
-        }
-        if (nearest != nullptr)
-            mTaskScheduler->applyImpulse(
-                nearest->mBody, Misc::Convert::toBullet(impulse), Misc::Convert::toBullet(point));
-    }
-
-    std::vector<std::shared_ptr<PtrHolder>> Ragdoll::getParts() const
-    {
-        return { mParts.begin(), mParts.end() };
-    }
-
-    float Ragdoll::getMass() const
-    {
-        float mass = 0;
-        for (const auto& part : mParts)
-            if (part->mBody->getInvMass() > 0)
-                mass += static_cast<float>(1 / part->mBody->getInvMass());
-        return mass;
-    }
-
-    std::optional<osg::Vec3f> Ragdoll::getGrabPoint(const osg::Vec3f& eye) const
-    {
-        if (mParts.size() != 1)
-            return std::nullopt;
-        const Part& part = *mParts.front();
-        btTransform bodyWorld;
-        part.mMotionState->getWorldTransform(bodyWorld);
-        // The nearest point of the box, a little inside so the pin isn't right on the edge.
-        btVector3 local = bodyWorld.inverse() * Misc::Convert::toBullet(eye);
-        const osg::Vec3f& half = part.mBoxHalfExtents;
-        local.setX(std::clamp<btScalar>(local.x(), -half.x() * 0.8f, half.x() * 0.8f));
-        local.setY(std::clamp<btScalar>(local.y(), -half.y() * 0.8f, half.y() * 0.8f));
-        local.setZ(std::clamp<btScalar>(local.z(), -half.z() * 0.8f, half.z() * 0.8f));
-        return Misc::Convert::toOsg(bodyWorld * local);
-    }
-
-    Ragdoll::~Ragdoll()
-    {
-        if (mFlyingFallController != nullptr)
-            mTaskScheduler->removeAction(mFlyingFallController.get());
-        if (mJointFriction != nullptr)
-            mTaskScheduler->removeAction(mJointFriction.get());
-        for (const auto& joint : mJoints)
-            mTaskScheduler->removeConstraint(joint.get());
-        for (const auto& part : mParts)
-            mTaskScheduler->removeCollisionObject(part->mBody);
-    }
-
-    std::vector<std::pair<std::string, osg::Matrixf>> Ragdoll::getBonePoses(float interpolation) const
-    {
-        std::vector<std::pair<std::string, osg::Matrixf>> poses;
-        poses.reserve(mParts.size());
-        for (const auto& part : mParts)
-        {
-            const btTransform bodyWorld = part->mMotionState->getInterpolatedTransform(interpolation);
-            const btTransform bone = bodyWorld * part->mBoneFromBody;
-            poses.emplace_back(part->mBone,
-                osg::Matrixf::scale(part->mBoneScale) * osg::Matrixf::rotate(Misc::Convert::toOsg(bone.getRotation()))
-                    * osg::Matrixf::translate(Misc::Convert::toOsg(bone.getOrigin())));
-        }
-        if (!poses.empty())
-            mLastMainBonePosition = poses.at(mMainPartIndex).second.getTrans();
-        if (!mSkinnedBoneBindings.empty())
-        {
-            std::vector<std::pair<std::string, osg::Matrixf>> allBones;
-            allBones.reserve(mSkinnedBoneBindings.size());
-            // Parent-first original hierarchy; every tiny wingtip/feelers follows
-            // its simulated driver rather than stretching as the body drops.
-            for (const auto& binding : mSkinnedBoneBindings)
-                allBones.emplace_back(binding.mName,
-                    binding.mRelativeToDriver * poses.at(binding.mDriverPart).second);
-            poses = std::move(allBones);
-        }
-        mLastPoses = poses;
-        return poses;
-    }
-
     void Ragdoll::updatePtr(const MWWorld::Ptr& updated)
     {
         for (const auto& part : mParts)
             part->updatePtr(updated);
-    }
-
-    std::shared_ptr<PtrHolder> Ragdoll::findPart(const osg::Vec3f& eye, const osg::Vec3f& direction) const
-    {
-        std::shared_ptr<PtrHolder> best;
-        float bestDistance = std::numeric_limits<float>::max();
-        for (const auto& part : mParts)
-        {
-            btTransform bodyWorld;
-            part->mMotionState->getWorldTransform(bodyWorld);
-            const osg::Vec3f toCenter = Misc::Convert::toOsg(bodyWorld.getOrigin()) - eye;
-            const float along = std::max(toCenter * direction, 0.f);
-            const float distance = (toCenter - direction * along).length();
-            if (distance < bestDistance)
-            {
-                bestDistance = distance;
-                best = part;
-            }
-        }
-        return best;
     }
 }

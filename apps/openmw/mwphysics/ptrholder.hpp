@@ -13,7 +13,7 @@
 
 namespace MWPhysics
 {
-    class PtrHolder : public std::enable_shared_from_this<PtrHolder>
+    class PtrHolder
     {
     public:
         explicit PtrHolder(const MWWorld::Ptr& ptr, const osg::Vec3f& position)
@@ -31,9 +31,6 @@ namespace MWPhysics
         MWWorld::Ptr getPtr() const { return mPtr; }
 
         btCollisionObject* getCollisionObject() const { return mCollisionObject.get(); }
-
-        /// How dense it is relative to water, for floating (a simulated body; others don't float).
-        virtual float getRelativeDensity() const { return 1.05f; }
 
         void setVelocity(osg::Vec3f velocity) { mVelocity = velocity; }
 
