@@ -11,22 +11,57 @@
 #include "../mwworld/class.hpp"
 
 #include "collisiontype.hpp"
+#include "contacttestwrapper.h"
 #include "mtphysics.hpp"
+#include "playerkinetics.hpp"
 #include "trace.h"
 
 #include <cmath>
 
 namespace MWPhysics
 {
+    namespace
+    {
+        class StandingClearanceCallback final : public btCollisionWorld::ContactResultCallback
+        {
+        public:
+            explicit StandingClearanceCallback(const btCollisionObject* actor)
+                : mActor(actor)
+            {
+                m_collisionFilterGroup = CollisionType_Actor;
+                m_collisionFilterMask = actor->getBroadphaseHandle()->m_collisionFilterMask
+                    & ~CollisionType_Projectile;
+            }
 
-    Actor::Actor(const MWWorld::Ptr& ptr, const Resource::BulletShape& shape, PhysicsTaskScheduler* scheduler,
+            bool needsCollision(btBroadphaseProxy* proxy) const override
+            {
+                return proxy->m_clientObject != mActor && ContactResultCallback::needsCollision(proxy);
+            }
+
+            btScalar addSingleResult(btManifoldPoint& contact, const btCollisionObjectWrapper*, int, int,
+                const btCollisionObjectWrapper*, int, int) override
+            {
+                // Resting contact and round-off are not an obstruction. Check the
+                // complete standing volume so overhangs and thin ceilings count.
+                mBlocked |= contact.getDistance() < -0.01f;
+                return 0;
+            }
+
+            bool mBlocked = false;
+
+        private:
+            const btCollisionObject* mActor;
+        };
+    }
+
+    Actor::Actor(const MWWorld::Ptr& ptr, const Resource::BulletShape* shape, PhysicsTaskScheduler* scheduler,
         bool canWaterWalk, DetourNavigator::CollisionShapeType collisionShapeType)
         : PtrHolder(ptr, ptr.getRefData().getPosition().asVec3())
         , mStandingOnPtr(nullptr)
         , mCanWaterWalk(canWaterWalk)
         , mWalkingOnWater(false)
-        , mMeshTranslation(shape.mCollisionBox.mCenter)
-        , mOriginalHalfExtents(shape.mCollisionBox.mExtents)
+        , mMeshTranslation(shape->mCollisionBox.mCenter)
+        , mOriginalHalfExtents(shape->mCollisionBox.mExtents)
         , mStuckFrames(0)
         , mLastStuckPosition{ 0, 0, 0 }
         , mForce(0.f, 0.f, 0.f)
@@ -42,14 +77,14 @@ namespace MWPhysics
         // (NPCs have bodyparts and use a different approach)
         if (!ptr.getClass().isNpc() && mOriginalHalfExtents.length2() == 0.f)
         {
-            if (shape.mCollisionShape)
+            if (shape->mCollisionShape)
             {
                 btTransform transform;
                 transform.setIdentity();
                 btVector3 min;
                 btVector3 max;
 
-                shape.mCollisionShape->getAabb(transform, min, max);
+                shape->mCollisionShape->getAabb(transform, min, max);
                 mOriginalHalfExtents.x() = static_cast<float>((max[0] - min[0]) / 2.f);
                 mOriginalHalfExtents.y() = static_cast<float>((max[1] - min[1]) / 2.f);
                 mOriginalHalfExtents.z() = static_cast<float>((max[2] - min[2]) / 2.f);
@@ -144,8 +179,16 @@ namespace MWPhysics
         mTaskScheduler->setCollisionFilterMask(mCollisionObject.get(), getCollisionMask());
     }
 
+    void Actor::setRagdoll(bool value)
+    {
+        mRagdoll = value;
+        updateCollisionMask();
+    }
+
     int Actor::getCollisionMask() const
     {
+        if (mRagdoll)
+            return 0;
         int collisionMask = CollisionType_World | CollisionType_HeightMap;
         if (mExternalCollisionMode)
             collisionMask |= CollisionType_Actor | CollisionType_Projectile | CollisionType_Door;
@@ -161,20 +204,78 @@ namespace MWPhysics
         mPreviousPosition = worldPosition;
         mPosition = worldPosition;
         mSimulationPosition = worldPosition;
+        // A scripted relocation is not a measured movement for ragdoll inheritance.
+        mSimulationVelocity = osg::Vec3f();
         mPositionOffset = osg::Vec3f();
         mStandingOnPtr = nullptr;
         mSkipSimulation = true;
+        clearExternalVelocity();
     }
 
-    void Actor::setSimulationPosition(const osg::Vec3f& position)
+    bool Actor::setSimulationPosition(const osg::Vec3f& position)
     {
-        if (!std::exchange(mSkipSimulation, false))
-            mSimulationPosition = position;
+        if (std::exchange(mSkipSimulation, false))
+            return false;
+        mSimulationPosition = position;
+        return true;
     }
 
     osg::Vec3f Actor::getScaledMeshTranslation() const
     {
-        return mRotation * osg::componentMultiply(mMeshTranslation, mScale);
+        osg::Vec3f translation = osg::componentMultiply(mMeshTranslation, mScale);
+        if (mSlideCollisionLow)
+            translation.z() -= mOriginalHalfExtents.z() * mScale.z() * (1.f - PlayerKinetics::SlideHeightFraction);
+        return mRotation * translation;
+    }
+
+    bool Actor::updateSlideCollision(bool low, btCollisionWorld* world)
+    {
+        std::scoped_lock lock(mPositionMutex);
+        if (!mSlideCollisionLow && !low)
+            return false;
+
+        bool blocked = false;
+        if (mSlideCollisionLow && mInternalCollisionMode)
+        {
+            // Probe a separate standing shape. Never temporarily enlarge the
+            // live body: other queries must only see a shape we can occupy.
+            std::unique_ptr<btConvexShape> standingShape;
+            const btVector3 extents = Misc::Convert::toBullet(mOriginalHalfExtents);
+            if (mCollisionShapeType == DetourNavigator::CollisionShapeType::Cylinder)
+                standingShape = std::make_unique<btCylinderShapeZ>(extents);
+            else
+                standingShape = std::make_unique<btBoxShape>(extents);
+            standingShape->setMargin(mConvexShape->getMargin());
+            standingShape->setLocalScaling(Misc::Convert::toBullet(mScale));
+
+            btCollisionObject probe;
+            probe.setCollisionShape(standingShape.get());
+            btTransform transform;
+            transform.setIdentity();
+            transform.setRotation(Misc::Convert::toBullet(mRotation));
+            const osg::Vec3f center
+                = mPosition + mRotation * osg::componentMultiply(mMeshTranslation, mScale);
+            transform.setOrigin(Misc::Convert::toBullet(center));
+            probe.setWorldTransform(transform);
+            StandingClearanceCallback callback(mCollisionObject.get());
+            ContactTestWrapper::contactTest(world, &probe, callback);
+            blocked = callback.mBlocked;
+            if (blocked && !low)
+                return true;
+        }
+
+        // Report overhead clearance even while the low hull is still requested.
+        // Camera/exit animation must know before they begin rising, rather than
+        // finding out after a standing shape has already been requested.
+        if (mSlideCollisionLow == low)
+            return blocked;
+
+        mSlideCollisionLow = low;
+        mHalfExtents.z() = mOriginalHalfExtents.z() * mScale.z()
+            * (low ? PlayerKinetics::SlideHeightFraction : 1.f);
+        updateCollisionObjectPositionUnsafe();
+        world->updateSingleAabb(mCollisionObject.get());
+        return blocked;
     }
 
     void Actor::updateCollisionObjectPosition()
@@ -185,7 +286,10 @@ namespace MWPhysics
 
     void Actor::updateCollisionObjectPositionUnsafe()
     {
-        mShape->setLocalScaling(Misc::Convert::toBullet(mScale));
+        osg::Vec3f collisionScale = mScale;
+        if (mSlideCollisionLow)
+            collisionScale.z() *= PlayerKinetics::SlideHeightFraction;
+        mShape->setLocalScaling(Misc::Convert::toBullet(collisionScale));
         osg::Vec3f newPosition = getScaledMeshTranslation() + mPosition;
 
         auto& trans = mCollisionObject->getWorldTransform();
@@ -255,6 +359,8 @@ namespace MWPhysics
         mPtr.getClass().adjustScale(mPtr, scaleVec, false);
         mScale = scaleVec;
         mHalfExtents = osg::componentMultiply(mOriginalHalfExtents, scaleVec);
+        if (mSlideCollisionLow)
+            mHalfExtents.z() *= PlayerKinetics::SlideHeightFraction;
 
         scaleVec = osg::Vec3f(scale, scale, scale);
         mPtr.getClass().adjustScale(mPtr, scaleVec, true);
@@ -274,6 +380,31 @@ namespace MWPhysics
     osg::Vec3f Actor::getRenderingHalfExtents() const
     {
         return mRenderingHalfExtents;
+    }
+
+    void Actor::addExternalVelocity(const osg::Vec3f& delta)
+    {
+        mPendingExternalVelocity += delta;
+        const float speed = mPendingExternalVelocity.length();
+        if (speed > 2000.f)
+            mPendingExternalVelocity *= 2000.f / speed;
+    }
+
+    void Actor::clearExternalVelocity()
+    {
+        mSimulationVelocity=osg::Vec3f();
+        mPendingExternalVelocity = osg::Vec3f();
+        mSlideActorContactTime = 0.f;
+        mClearExternalVelocity = true;
+    }
+
+    osg::Vec3f Actor::consumeExternalVelocity(bool& clear)
+    {
+        const osg::Vec3f delta = mPendingExternalVelocity;
+        mPendingExternalVelocity = osg::Vec3f();
+        clear = mClearExternalVelocity;
+        mClearExternalVelocity = false;
+        return delta;
     }
 
     void Actor::setInertialForce(const osg::Vec3f& force)
