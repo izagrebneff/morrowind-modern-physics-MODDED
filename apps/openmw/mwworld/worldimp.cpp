@@ -1537,7 +1537,7 @@ namespace MWWorld
                 bones.emplace(bone, *world);
             }
             if (bones.size() == MWPhysics::Ragdoll::getRequiredBones().size())
-                return mPhysics->createRagdoll(actor, bones, kick);
+                return mPhysics->createRagdoll(actor, bones, kick, animation->getDeathRagdollMotion());
         }
 
         // Any other skinned body: parts fitted to the mesh.
