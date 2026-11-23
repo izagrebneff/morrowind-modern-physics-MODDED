@@ -6,6 +6,7 @@ running expensive native C++ builds.  This is NOT a complete C++ parser.
 """
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -43,6 +44,32 @@ def main() -> int:
             errors.append(f"{path.relative_to(ROOT)}: missing interface header")
             continue
         declarations[name] = set(NAME.findall(without_comments(path.read_text(encoding="utf-8"))))
+
+    # Preserve a snapshot of the fork's public gameplay contract.  This detects
+    # deleted methods even when callers use local variables such as world->foo().
+    protected = json.loads((ROOT / "CI" / "brutal_port_contracts.json").read_text(encoding="utf-8"))
+    for relative, names in protected.items():
+        header = ROOT / relative
+        if not header.is_file():
+            errors.append(f"{relative}: required fork interface was removed")
+            continue
+        source = without_comments(header.read_text(encoding="utf-8"))
+        if relative.endswith("mwbase/world.hpp"):
+            pattern = re.compile(r"virtual\\s+[\\s\\S]{0,180}?\\b([A-Za-z_]\\w*)\\s*\\([^;{}]*?\\)\\s*(?:const\\s*)?(?:override\\s*)?(?:=\\s*0\\s*)?;")
+        else:
+            pattern = re.compile(r"\\b([A-Za-z_]\\w*)\\s*\\([^;{}]*?\\)\\s*(?:const\\s*)?override\\s*;")
+        actual = set(pattern.findall(source))
+        for name in sorted(set(names) - actual):
+            errors.append(f"{relative}: original public method {name}() removed")
+
+    # A previous wholesale replacement dropped attackWindUp and broke projectile
+    # animation on both Windows and Ubuntu; pin its argument through all layers.
+    for relative in ("apps/openmw/mwbase/world.hpp",
+                     "apps/openmw/mwworld/worldimp.hpp",
+                     "apps/openmw/mwworld/worldimp.cpp"):
+        source = without_comments((ROOT / relative).read_text(encoding="utf-8"))
+        if not re.search(r"\\blaunchProjectile\\s*\\([^;{}]*\\battackWindUp\\b", source):
+            errors.append(f"{relative}: launchProjectile() lost attackWindUp")
 
     for path in sorted(OPENMW.rglob("*")):
         if path.suffix not in (".hpp", ".h", ".cpp", ".cc") or not path.is_file():
