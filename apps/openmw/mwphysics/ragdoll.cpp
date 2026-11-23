@@ -923,6 +923,18 @@ namespace MWPhysics
         }
     }
 
+    std::optional<osg::Vec3f> Ragdoll::getImpactCenter() const
+    {
+        if (mParts.empty() || mMainPartIndex >= mParts.size())
+            return std::nullopt;
+        btTransform bodyWorld;
+        mParts[mMainPartIndex]->mMotionState->getWorldTransform(bodyWorld);
+        const osg::Vec3f center = Misc::Convert::toOsg(bodyWorld.getOrigin());
+        if (!std::isfinite(center.x()) || !std::isfinite(center.y()) || !std::isfinite(center.z()))
+            return std::nullopt;
+        return center;
+    }
+
     void Ragdoll::strike(const osg::Vec3f& point, const osg::Vec3f& impulse)
     {
         Part* nearest = nullptr;
