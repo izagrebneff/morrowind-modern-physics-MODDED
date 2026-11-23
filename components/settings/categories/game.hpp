@@ -101,6 +101,26 @@ namespace Settings
         SettingValue<bool> mBrutalClassicNpcAnimations{ mIndex, "Game", "brutal classic npc animations" };
         SettingValue<bool> mBrutalDismemberment{ mIndex, "Game", "brutal dismemberment" };
         SettingValue<bool> mBrutalKickAlwaysRagdoll{ mIndex, "Game", "brutal kick always ragdoll" };
+        SettingValue<bool> mMeleeContactAlwaysHits{ mIndex, "Game", "melee contact always hits" };
+        SettingValue<bool> mNpcBloodDecals{ mIndex, "Game", "npc blood decals" };
+        SettingValue<float> mNpcHurtHealthFraction{ mIndex, "Game", "npc hurt health fraction",
+            makeClampSanitizerFloat(0, 1) };
+        SettingValue<bool> mPlayerHitRecovery{ mIndex, "Game", "player hit recovery" };
+        SettingValue<float> mPlayerFatigueRegenFraction{ mIndex, "Game", "player fatigue regen fraction",
+            makeClampSanitizerFloat(0, 10) };
+        SettingValue<bool> mPlayerActiveShieldBlock{ mIndex, "Game", "player active shield block" };
+        SettingValue<bool> mRagdollEnhancement{ mIndex, "Game", "ragdoll enhancement" };
+        SettingValue<bool> mRagdollSoftStops{ mIndex, "Game", "ragdoll soft stops" };
+        SettingValue<bool> mRagdollNeutralPose{ mIndex, "Game", "ragdoll neutral pose" };
+        SettingValue<bool> mRagdollLimbResponse{ mIndex, "Game", "ragdoll limb response" };
+        SettingValue<bool> mRagdollSelfCollision{ mIndex, "Game", "ragdoll self collision" };
+        SettingValue<float> mRagdollSoftStrength{ mIndex, "Game", "ragdoll soft strength", makeClampSanitizerFloat(0, 3) };
+        SettingValue<float> mRagdollToneStrength{ mIndex, "Game", "ragdoll tone strength", makeClampSanitizerFloat(0, 3) };
+        SettingValue<float> mRagdollImpactStrength{ mIndex, "Game", "ragdoll impact strength", makeClampSanitizerFloat(0, 3) };
+        SettingValue<bool> mFirstPersonRigidViewmodel{ mIndex, "Game", "first person rigid viewmodel" };
+        SettingValue<bool> mFirstPersonFullBody{ mIndex, "Game", "first person full body" };
+        SettingValue<bool> mFirstPersonBodyAllowThirdPerson{ mIndex, "Game", "first person body allow third person" };
+        SettingValue<float> mFirstPersonBodyForward{ mIndex, "Game", "first person body forward", makeClampSanitizerFloat(0, 40) };
         SettingValue<bool> mTerrainObstructsFocus{ mIndex, "Game", "terrain obstructs focus" };
     };
 }
