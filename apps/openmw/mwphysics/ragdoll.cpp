@@ -906,7 +906,43 @@ namespace MWPhysics
         {
             btTransform bodyWorld;
             part->mMotionState->getWorldTransform(bodyWorld);
-            const float distance = (Misc::Convert::toOsg(bodyWorld.getOrigin()) - point).length2();
+            // Choose the part whose *collision surface* is closest to the hit,
+            // not the part with the closest centre. Long upper arms and legs
+            // otherwise absorb hits meant for the head or torso.
+            const btVector3 local = bodyWorld.invXform(Misc::Convert::toBullet(point));
+            btScalar distance = (local).length2();
+            switch (part->mShape->getShapeType())
+            {
+                case CAPSULE_SHAPE_PROXYTYPE:
+                {
+                    const auto& capsule = *static_cast<const btCapsuleShape*>(part->mShape.get());
+                    btVector3 axis(0, 0, 0);
+                    axis[capsule.getUpAxis()] = btClamped(
+                        local[capsule.getUpAxis()], -capsule.getHalfHeight(), capsule.getHalfHeight());
+                    const btScalar surfaceDistance = btMax(btScalar(0),
+                        (local - axis).length() - capsule.getRadius());
+                    distance = surfaceDistance * surfaceDistance;
+                    break;
+                }
+                case BOX_SHAPE_PROXYTYPE:
+                {
+                    const btVector3 half = static_cast<const btBoxShape*>(part->mShape.get())
+                                               ->getHalfExtentsWithMargin();
+                    const btVector3 closest(btClamped(local.x(), -half.x(), half.x()),
+                        btClamped(local.y(), -half.y(), half.y()), btClamped(local.z(), -half.z(), half.z()));
+                    distance = (local - closest).length2();
+                    break;
+                }
+                case SPHERE_SHAPE_PROXYTYPE:
+                {
+                    const btScalar surfaceDistance = btMax(btScalar(0),
+                        local.length() - static_cast<const btSphereShape*>(part->mShape.get())->getRadius());
+                    distance = surfaceDistance * surfaceDistance;
+                    break;
+                }
+                default:
+                    break;
+            }
             if (distance < nearestDistance)
             {
                 nearestDistance = distance;
