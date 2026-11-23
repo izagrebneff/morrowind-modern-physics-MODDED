@@ -408,10 +408,19 @@ namespace MWPhysics
             ragdoll->mParts.push_back(std::move(part));
         }
         // Joined to the part above; any parts with none (bits not under the main body) to the biggest.
+        // Some modded creatures have malformed skeleton parent links (invalid
+        // indices or cycles). Never index outside the rig or spin forever while
+        // resolving a simulated ancestor; fall back to the main body instead.
         const auto parentPart = [&](size_t bone) {
-            for (int parent = bones[bone].mParent; parent >= 0; parent = bones[parent].mParent)
-                if (partOfBone[parent] >= 0)
-                    return partOfBone[parent];
+            int parent = bones[bone].mParent;
+            for (size_t depth = 0; depth < bones.size(); ++depth)
+            {
+                if (parent < 0 || static_cast<size_t>(parent) >= bones.size())
+                    break;
+                if (partOfBone[static_cast<size_t>(parent)] >= 0)
+                    return partOfBone[static_cast<size_t>(parent)];
+                parent = bones[static_cast<size_t>(parent)].mParent;
+            }
             return -1;
         };
         int root = 0;
@@ -442,12 +451,20 @@ namespace MWPhysics
         {
             int driver = partOfBone[i];
             if (driver < 0)
-                for (int parent = bones[i].mParent; parent >= 0; parent = bones[parent].mParent)
-                    if (partOfBone[parent] >= 0)
+            {
+                int parent = bones[i].mParent;
+                for (size_t depth = 0; depth < bones.size(); ++depth)
+                {
+                    if (parent < 0 || static_cast<size_t>(parent) >= bones.size())
+                        break;
+                    if (partOfBone[static_cast<size_t>(parent)] >= 0)
                     {
-                        driver = partOfBone[parent];
+                        driver = partOfBone[static_cast<size_t>(parent)];
                         break;
                     }
+                    parent = bones[static_cast<size_t>(parent)].mParent;
+                }
+            }
             if (driver < 0)
                 driver = root;
 
@@ -656,7 +673,10 @@ namespace MWPhysics
         // impact must not pull the shoulders and neck away from the torso.
         // Keep a smaller budget for irregular creature rigs and flying corpses
         // to avoid amplifying their overlapping procedural body geometry.
-        const int jointSolverIterations = (mFlyingCorpse || mDisableInternalCollision) ? 28 : 100;
+        // Procedural creature rigs need extra constraint resolution under
+        // uneven limb masses, but still less than the stable humanoid budget.
+        // Flying corpses retain their lighter solver and controlled descent.
+        const int jointSolverIterations = mFlyingCorpse ? 28 : (mDisableInternalCollision ? 48 : 100);
         joint->setOverrideNumSolverIterations(jointSolverIterations);
         mTaskScheduler->addConstraint(joint.get());
         mJoints.push_back(std::move(joint));
