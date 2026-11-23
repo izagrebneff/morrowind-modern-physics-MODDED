@@ -134,6 +134,9 @@ namespace MWPhysics
         /// The physically simulated torso, which may not be the first weighted mesh bone.
         const osg::Vec3f& getMainPosition() const { return mLastMainBonePosition; }
 
+        /// Current physics-thread snapshot of the principal simulated body for explosion falloff.
+        std::optional<osg::Vec3f> getImpactCenter() const;
+
         /// Where the actor (whose position is at its feet, actorPosition now) should be for its body to be where
         /// the ragdoll is: following the main part (the pelvis, say) along the ground, at its height. Empty
         /// before the bones were first posed.
