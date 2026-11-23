@@ -1167,6 +1167,55 @@ namespace MWRender
         return osg::computeLocalToWorld(paths.front());
     }
 
+    void Animation::sampleDeathRagdollMotion(float duration)
+    {
+        // Capture only death animations, not every living actor's skeleton.
+        // Subtract pelvis translation: PhysicsSystem already inherits root motion.
+        if (!(duration > 0.f && duration <= 0.2f))
+        {
+            mRagdollPreviousPositions.clear();
+            mRagdollBoneVelocities.clear();
+            return;
+        }
+        static constexpr std::string_view bones[] = { "Bip01 Pelvis", "Bip01 Spine1", "Bip01 Head",
+            "Bip01 L UpperArm", "Bip01 L Forearm", "Bip01 R UpperArm", "Bip01 R Forearm",
+            "Bip01 L Thigh", "Bip01 L Calf", "Bip01 R Thigh", "Bip01 R Calf" };
+        std::map<std::string, osg::Vec3f, std::less<>> positions;
+        for (std::string_view name : bones)
+        {
+            const auto world = getBoneWorldMatrix(name);
+            if (!world)
+            {
+                mRagdollPreviousPositions.clear();
+                mRagdollBoneVelocities.clear();
+                return;
+            }
+            positions.emplace(std::string(name), world->getTrans());
+        }
+        const auto pelvis = positions.find("Bip01 Pelvis");
+        const auto previousPelvis = mRagdollPreviousPositions.find("Bip01 Pelvis");
+        mRagdollBoneVelocities.clear();
+        if (previousPelvis != mRagdollPreviousPositions.end())
+        {
+            const osg::Vec3f rootDelta = pelvis->second - previousPelvis->second;
+            for (const auto& [name, position] : positions)
+            {
+                const auto previous = mRagdollPreviousPositions.find(name);
+                if (previous == mRagdollPreviousPositions.end())
+                    continue;
+                osg::Vec3f velocity = (position - previous->second - rootDelta) / duration;
+                // Avoid explosive velocities from looping/death animation discontinuities.
+                constexpr float maxRelativeSpeed = 220.f;
+                const float speed = velocity.length();
+                if (std::isfinite(speed) && speed > maxRelativeSpeed)
+                    velocity *= maxRelativeSpeed / speed;
+                if (std::isfinite(speed))
+                    mRagdollBoneVelocities.emplace(name, velocity);
+            }
+        }
+        mRagdollPreviousPositions = std::move(positions);
+    }
+
     void Animation::setBoneWorldMatrix(std::string_view bone, const osg::Matrixf& world)
     {
         const auto found = getNodeMap().find(std::string(bone));
