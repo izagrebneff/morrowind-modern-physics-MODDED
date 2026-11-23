@@ -215,7 +215,7 @@ namespace MWPhysics
         /// Ragdoll::getRequiredBones(), kick how the killing blow throws it (on top of how it was moving).
         /// @return false if it can't be (missing bones)
         bool createRagdoll(const MWWorld::Ptr& actor, const std::map<std::string, osg::Matrixf, std::less<>>& bones,
-            const osg::Vec3f& kick);
+            const osg::Vec3f& kick, const Ragdoll::BoneVelocities& motion = {});
         /// The simulated bones of the actor's ragdoll (world matrices, parents first); empty without one.
         std::vector<std::pair<std::string, osg::Matrixf>> getRagdollBonePoses(const MWWorld::ConstPtr& actor) const;
         /// What getRagdollBonePoses gave last.
