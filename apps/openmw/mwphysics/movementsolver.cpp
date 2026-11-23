@@ -1,4 +1,5 @@
 #include "movementsolver.hpp"
+#include "../mwphysics/playerkinetics.hpp"
 
 #include <BulletCollision/CollisionDispatch/btCollisionObject.h>
 #include <BulletCollision/CollisionDispatch/btCollisionWorld.h>
@@ -22,6 +23,7 @@
 #include "stepper.hpp"
 #include "trace.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace MWPhysics
@@ -34,6 +36,15 @@ namespace MWPhysics
 
     namespace
     {
+        // A small grade/speed floor rejects contact noise and stopped wall slides.
+        // Use the support plane, not world Z travel (steps and corrections can fall).
+        bool isSlidingDownhill(const osg::Vec3f& velocity, const osg::Vec3f& normal)
+        {
+            const float speed = std::hypot(velocity.x(), velocity.y());
+            return speed > 5.f && isWalkableSlope(normal)
+                && velocity.x() * normal.x() + velocity.y() * normal.y() > .01f * normal.z() * speed;
+        }
+
         class ContactCollectionCallback : public btCollisionWorld::ContactResultCallback
         {
         public:
@@ -128,14 +139,21 @@ namespace MWPhysics
     void MovementSolver::move(
         ActorFrameData& actor, float time, const btCollisionWorld* collisionWorld, const WorldFrameData& worldData)
     {
+        const osg::Vec3f previous=actor.mPosition;
+        actor.mSimulationVelocity=osg::Vec3f();
         // Reset per-frame data
         actor.mWalkingOnWater = false;
+        actor.mBrutalSlideDownhill = false;
+        actor.mBrutalSlideGroundNormal = osg::Vec3f();
+        actor.mBrutalSlideGroundPoint = osg::Vec3f();
         // Anything to collide with?
         if (actor.mSkipCollisionDetection)
         {
+            actor.mLocomotionVelocity = osg::Vec3f();
             actor.mPosition += (osg::Quat(actor.mRotation.x(), osg::Vec3f(-1, 0, 0))
                                    * osg::Quat(actor.mRotation.y(), osg::Vec3f(0, 0, -1)))
                 * actor.mMovement * time;
+            if (time>0.f) actor.mSimulationVelocity=(actor.mPosition-previous)/time;
             return;
         }
 
@@ -151,6 +169,7 @@ namespace MWPhysics
         ActorTracer tracer;
 
         osg::Vec3f velocity;
+        osg::Vec3f slideSupportNormal;
 
         // Dead and paralyzed actors underwater will float to the surface,
         // if the CharacterController tells us to do so
@@ -164,6 +183,70 @@ namespace MWPhysics
                            * osg::Quat(actor.mRotation.y(), osg::Vec3f(0, 0, -1)))
                 * actor.mMovement;
         }
+        else if (actor.mKineticMovement)
+        {
+            // Desired input is rotated once. Persisted momentum stays in world space
+            // when the player looks around or releases the controls in mid-air.
+            osg::Vec3f wish = osg::Quat(actor.mRotation.y(), osg::Vec3f(0, 0, -1)) * actor.mMovement;
+            const float jump = wish.z();
+            wish.z() = 0.f;
+            const bool grounded = actor.mIsOnGround && !actor.mIsOnSlope;
+            osg::Vec3f& moving = actor.mLocomotionVelocity;
+            if (actor.mBrutalSliding && grounded && !actor.mInert && actor.mInertia.z() <= 0.f
+                && actor.mStuckFrames == 0)
+            {
+                // A close hull sweep proves support at this step, including after
+                // a relocation. Never use the long stair-down probe to add gravity
+                // along a distant surface or retain a slide in the air.
+                tracer.doTrace(actor.mCollisionObject, actor.mPosition,
+                    actor.mPosition - osg::Vec3f(0, 0, 2.f * sGroundOffset), collisionWorld);
+                if (tracer.mFraction < 1.f && !isActor(tracer.mHitObject) && isWalkableSlope(tracer.mPlaneNormal))
+                    slideSupportNormal = tracer.mPlaneNormal;
+            }
+            if (grounded)
+            {
+                // Source CGameMovement::Friction, then Accelerate.
+                const float speed = moving.length();
+                if (speed > 0.f)
+                {
+                    // Rising out of a slide restores standing friction continuously.
+                    // Idle/crouching under a ceiling has no slide-friction blend.
+                    const float friction = PlayerKinetics::Friction
+                        + (PlayerKinetics::SlideFriction - PlayerKinetics::Friction) * actor.mBrutalSlideFrictionBlend;
+                    // Downhill gravity has a low terminal speed on shallow grades.
+                    // The ordinary stop-speed floor would artificially pin it there.
+                    const float control = isSlidingDownhill(moving, slideSupportNormal)
+                        ? speed : std::max(speed, PlayerKinetics::StopSpeed);
+                    const float drop = control * friction * time;
+                    moving *= std::max(speed - drop, 0.f) / speed;
+                }
+            }
+            if (slideSupportNormal.z() > 0.f)
+            {
+                const float gravityStep = Constants::GravityConst * Constants::UnitsPerMeter * time;
+                // Horizontal component of gravity rejected from the support normal.
+                moving.x() += gravityStep * slideSupportNormal.z() * slideSupportNormal.x();
+                moving.y() += gravityStep * slideSupportNormal.z() * slideSupportNormal.y();
+            }
+            float wishSpeed = wish.length();
+            if (wishSpeed > 0.f && !actor.mBrutalSliding)
+            {
+                const osg::Vec3f direction = wish / wishSpeed;
+                const float accelerate = grounded ? PlayerKinetics::Accelerate : PlayerKinetics::AirAccelerate;
+                const float target = grounded ? wishSpeed : std::min(wishSpeed, PlayerKinetics::AirWishCap);
+                const float add = target - moving * direction;
+                if (add > 0.f)
+                    moving += direction * std::min(accelerate * wishSpeed * time, add);
+            }
+            actor.mInertia.x() = actor.mInertia.y() = 0.f;
+            if (grounded && jump > 0.f && !actor.mBrutalSliding)
+                actor.mInertia.z() = jump;
+            velocity = actor.mLocomotionVelocity;
+            velocity.z() = actor.mInertia.z();
+            if (slideSupportNormal.z() > 0.f)
+                velocity.z() = -(velocity.x() * slideSupportNormal.x() + velocity.y() * slideSupportNormal.y())
+                    / slideSupportNormal.z();
+        }
         else
         {
             velocity = (osg::Quat(actor.mRotation.y(), osg::Vec3f(0, 0, -1))) * actor.mMovement;
@@ -174,6 +257,10 @@ namespace MWPhysics
             else if (!actor.mIsOnGround || actor.mIsOnSlope)
                 velocity = velocity + actor.mInertia;
         }
+
+        velocity += actor.mExternalVelocity;
+        if (!actor.mKineticMovement || actor.mFlying || actor.mPosition.z() < swimlevel)
+            actor.mLocomotionVelocity = osg::Vec3f();
 
         // Now that we have the effective movement vector, apply wind forces to it
         if (worldData.mIsInStorm && velocity.length() > 0)
@@ -198,6 +285,7 @@ namespace MWPhysics
         osg::Vec3f lastSlideNormal(0, 0, 1);
         osg::Vec3f lastSlideNormalFallback(0, 0, 1);
         bool forceGroundTest = false;
+        bool touchedSlideActor = false;
 
         for (int iterations = 0; iterations < sMaxIterations && remainingTime > 0.0001f; ++iterations)
         {
@@ -275,6 +363,24 @@ namespace MWPhysics
                 // need to know the unadjusted normal to handle certain types of seams properly
                 const auto origPlaneNormal = planeNormal;
 
+                // Report only the velocity contributed by the external channel,
+                // and only a blocking non-walkable contact (successful stair steps
+                // take the other branch). Keep the strongest contact per frame.
+                const float closingSpeed = -(actor.mExternalVelocity * origPlaneNormal);
+                if (!isWalkableSlope(origPlaneNormal) && closingSpeed > actor.mExternalImpactSpeed)
+                {
+                    actor.mExternalImpactSpeed = closingSpeed;
+                    actor.mExternalImpactPosition = tracer.mHitPoint;
+                    actor.mExternalImpactNormal = origPlaneNormal;
+                    actor.mExternalImpactObject = tracer.mHitObject;
+                }
+                if (!isWalkableSlope(origPlaneNormal) && closingSpeed > 0.f)
+                {
+                    actor.mExternalVelocity = reject(actor.mExternalVelocity, origPlaneNormal);
+                    if (!actor.mFlying && !underwater)
+                        actor.mExternalVelocity.z() = 0.f;
+                }
+
                 // If we touched the ground this frame, and whatever we ran into is a wall of some sort,
                 // pretend that its collision normal is pointing horizontally
                 // (fixes snagging on slightly downward-facing walls, and crawling up the bases of very steep walls
@@ -283,6 +389,41 @@ namespace MWPhysics
                 {
                     planeNormal.z() = 0;
                     planeNormal.normalize();
+                }
+
+                if (actor.mKineticMovement && !isWalkableSlope(origPlaneNormal))
+                {
+                    // Clip only into the blocking wall. Never store attempted motion
+                    // behind walls, and never turn a ceiling hit into horizontal braking.
+                    osg::Vec3f horizontalNormal(planeNormal.x(), planeNormal.y(), 0.f);
+                    if (horizontalNormal.normalize() > 0.001f
+                        && actor.mLocomotionVelocity * horizontalNormal < 0.f)
+                    {
+                        auto* hitActor = isActor(tracer.mHitObject)
+                            ? dynamic_cast<Actor*>(static_cast<PtrHolder*>(tracer.mHitObject->getUserPointer())) : nullptr;
+                        const bool slideContact = actor.mBrutalSlideFrictionBlend > 0.f
+                            && actor.mIsOnGround && !actor.mIsOnSlope
+                            && !actor.mInert && !actor.mFlying && !underwater && actor.mStuckFrames == 0 && hitActor
+                            && hitActor->canReceiveSlideKnockdown()
+                            && actor.mSlideActorContactTime < PlayerKinetics::SlideActorContactDuration;
+                        if (slideContact)
+                        {
+                            // A witnessed foot contact queues a living knockdown.
+                            // Keep only the glide/exit's friction-decayed momentum until
+                            // that short handoff completes; the sweep below still
+                            // blocks actual travel against the standing hull.
+                            touchedSlideActor = true;
+                        }
+                        else
+                        {
+                            actor.mLocomotionVelocity = reject(actor.mLocomotionVelocity, horizontalNormal);
+                            // A real obstruction ends the handoff grace for this
+                            // glide; removing it must not revive stored motion.
+                            actor.mSlideActorContactTime = PlayerKinetics::SlideActorContactDuration;
+                        }
+                    }
+                    if (origPlaneNormal.z() < -0.5f && actor.mInertia.z() > 0.f)
+                        actor.mInertia.z() = 0.f;
                 }
 
                 // Move up to what we ran into (with a bit of a collision margin)
@@ -375,6 +516,12 @@ namespace MWPhysics
             }
         }
 
+        const osg::Vec3f beforeGroundCorrection = newPosition;
+        if (touchedSlideActor)
+            actor.mSlideActorContactTime += time;
+        osg::Vec3f groundNormal, groundPoint;
+        bool continuousWalkableGround = false;
+        bool closeSlideSupport = false;
         bool isOnGround = false;
         bool isOnSlope = false;
         if (forceGroundTest || (actor.mInertia.z() <= 0.f && newPosition.z() >= swimlevel))
@@ -395,6 +542,11 @@ namespace MWPhysics
                         actor.mWalkingOnWater = true;
                     if (!actor.mFlying && !isOnSlope)
                     {
+                        // Save this before the clearance trace overwrites the ground hit.
+                        groundNormal = tracer.mPlaneNormal;
+                        groundPoint = tracer.mHitPoint;
+                        closeSlideSupport = tracer.mFraction * dropDistance <= 2.f * sGroundOffset;
+                        continuousWalkableGround = actor.mIsOnGround && !actor.mIsOnSlope;
                         if (tracer.mFraction * dropDistance > sGroundOffset)
                             newPosition.z() = tracer.mEndPos.z() + sGroundOffset;
                         else
@@ -425,10 +577,28 @@ namespace MWPhysics
             }
         }
 
+        // Position corrections are not momentum: the final ground probe may snap a
+        // previously grounded actor down after an external position change. Keep only
+        // the part needed to follow a continuous walkable slope as physical movement.
+        osg::Vec3f groundCorrection = newPosition - beforeGroundCorrection;
+        if (continuousWalkableGround && groundNormal.z() > 0.f)
+        {
+            const osg::Vec3f sweptMovement = beforeGroundCorrection - actor.mPosition;
+            const float tangentRise
+                = -(groundNormal.x() * sweptMovement.x() + groundNormal.y() * sweptMovement.y()) / groundNormal.z();
+            const float tangentCorrection = tangentRise - sweptMovement.z();
+            groundCorrection.z() -= std::clamp(tangentCorrection,
+                std::min(0.f, groundCorrection.z()), std::max(0.f, groundCorrection.z()));
+        }
+
         if ((isOnGround && !isOnSlope) || newPosition.z() < swimlevel || actor.mFlying)
             actor.mInertia = osg::Vec3f(0.f, 0.f, 0.f);
         else
         {
+            // Preserve downhill departure momentum when the supporting ramp ends.
+            // Subsequent airborne steps are owned entirely by ordinary gravity.
+            if (slideSupportNormal.z() > 0.f)
+                actor.mInertia.z() = std::min(actor.mInertia.z(), origVelocity.z());
             actor.mInertia.z() -= time * Constants::GravityConst * Constants::UnitsPerMeter;
             if (actor.mInertia.z() < 0)
                 actor.mInertia.z() *= actor.mSlowFall;
@@ -438,12 +608,29 @@ namespace MWPhysics
                 actor.mInertia.y() *= actor.mSlowFall;
             }
         }
+        if (actor.mFlying || newPosition.z() < swimlevel)
+            actor.mExternalVelocity *= std::exp(-3.f * time);
+        else if (isOnGround)
+        {
+            const float speed = actor.mExternalVelocity.length();
+            if (speed > 0.f)
+                actor.mExternalVelocity *= std::max(0.f, 1.f - 850.f * time / speed);
+        }
         actor.mIsOnGround = isOnGround;
         actor.mIsOnSlope = isOnSlope;
 
         actor.mPosition = newPosition;
         // remove what was added earlier in compensating for doTrace not taking interior transformation into account
         actor.mPosition.z() -= actor.mHalfExtentsZ; // vanilla-accurate
+        if (time > 0.f)
+            actor.mSimulationVelocity = (actor.mPosition - previous - groundCorrection) / time;
+        if ((actor.mBrutalSliding || actor.mBrutalSlideLow) && !actor.mInert && closeSlideSupport && isOnGround && !isOnSlope
+            && actor.mStuckFrames == 0 && newPosition.z() >= swimlevel)
+        {
+            actor.mBrutalSlideGroundNormal = groundNormal;
+            actor.mBrutalSlideGroundPoint = groundPoint;
+            actor.mBrutalSlideDownhill = actor.mBrutalSliding && isSlidingDownhill(actor.mSimulationVelocity, groundNormal);
+        }
     }
 
     void MovementSolver::move(ProjectileFrameData& projectile, float time, const btCollisionWorld* collisionWorld)
@@ -458,7 +645,7 @@ namespace MWPhysics
 
         ProjectileConvexCallback resultCallback(
             projectile.mCaster, projectile.mCollisionObject, btFrom, btTo, *projectile.mProjectile);
-        resultCallback.m_collisionFilterMask = CollisionType_AnyPhysical | CollisionType_Dynamic;
+        resultCallback.m_collisionFilterMask = CollisionType_AnyPhysical;
         resultCallback.m_collisionFilterGroup = CollisionType_Projectile;
 
         const btQuaternion btrot = btQuaternion::getIdentity();
