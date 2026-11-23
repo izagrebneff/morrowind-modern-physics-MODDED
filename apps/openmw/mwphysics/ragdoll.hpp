@@ -1,191 +1,148 @@
+// Derived from sunspotdark/morrowind-modern-physics
+// (https://github.com/sunspotdark/morrowind-modern-physics, commit eb50a40,
+// apps/openmw/mwphysics/ragdoll.hpp), GPLv3; see LICENSE.
+// Adapted for OpenMW 0.51: standard dead NPCs only, atomic lifecycle and pose snapshots.
 #ifndef OPENMW_MWPHYSICS_RAGDOLL_H
 #define OPENMW_MWPHYSICS_RAGDOLL_H
-
-#include <functional>
+#include <array>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
-
 #include <osg/Matrixf>
-#include <osg/Vec2f>
 #include <osg/Vec3f>
-
 #include <LinearMath/btTransform.h>
-
 #include "ptrholder.hpp"
-
-class btCollisionShape;
+#include "ragdollstep.hpp"
 class btRigidBody;
+class btCollisionObject;
 class btTypedConstraint;
 class btActionInterface;
-
 namespace MWPhysics
 {
     class PhysicsTaskScheduler;
-    class RagdollMotionState;
-
-    /// A dead actor's body as linked simulated parts (pelvis, chest, head, arms, legs...), each driving a bone of
-    /// its skeleton.
+    struct CreatureRig;
     class Ragdoll
     {
     public:
         using BoneMatrices = std::map<std::string, osg::Matrixf, std::less<>>;
-
-        /// The bones this needs, in hierarchy order (parents first). Their world matrices are the starting pose.
+        using BoneMotion = std::map<std::string, std::pair<osg::Vec3f, osg::Vec3f>, std::less<>>;
+        using ExtremityVertices = std::map<std::string, std::vector<osg::Vec3f>, std::less<>>;
+        using UnsupportedExtremityBones = std::map<std::string, unsigned, std::less<>>;
+        enum class KickProfile { Chest, LowTrip };
         static const std::vector<std::string>& getRequiredBones();
-
-        /// @param bones world matrices of getRequiredBones()
-        /// @param velocity of the actor as it died
-        /// @param kick velocity change of the upper body from the blow that killed it
+        static BoneMotion sampleAnimationMotion(const BoneMatrices& previous, const BoneMatrices& current,
+            const osg::Vec3f& actorTranslation, float duration);
         Ragdoll(const MWWorld::Ptr& actor, const BoneMatrices& bones, const osg::Vec3f& velocity,
-            const osg::Vec3f& kick, PhysicsTaskScheduler* scheduler);
-        /// A body without the standard skeleton, as one box: bodyWorld/halfExtents place it, baseWorld is where the
-        /// actor's model is, which then follows it (its pose is the only one, unnamed).
-        Ragdoll(const MWWorld::Ptr& actor, const btTransform& bodyWorld, const osg::Vec3f& halfExtents, float mass,
-            const osg::Matrixf& baseWorld, PhysicsTaskScheduler* scheduler, const osg::Vec3f& velocity = {});
-        /// A bone of a skinned mesh, and the bounds (in its own space) of the part of the mesh it moves.
-        struct SkinnedBone
-        {
-            std::string mName;
-            int mParent; // index of the closest skinned ancestor, -1 for none
-            osg::Matrixf mWorld;
-            osg::Vec3f mCenter;
-            float mRadius;
-        };
-
-        /// A body of any (skinned) shape, its parts fitted to the mesh. Bones are parents first.
-        /// @return null if it would hardly have any parts
-        static std::unique_ptr<Ragdoll> fromSkeleton(const MWWorld::Ptr& actor, const std::vector<SkinnedBone>& bones,
-            const osg::Vec3f& velocity, const osg::Vec3f& kick, PhysicsTaskScheduler* scheduler);
-
-        /// A node of a model built of rigid pieces, and the bounds (in its own space) of the pieces it carries.
-        struct RigidPiece
-        {
-            std::string mName;
-            int mParent; // index of the closest such ancestor, -1 for none
-            osg::Matrixf mWorld;
-            osg::Vec3f mMin;
-            osg::Vec3f mMax;
-        };
-
-        /// A body built of rigid pieces falls apart: each (big enough) piece is a loose object of its own; the
-        /// smaller ones stay on the piece above them. Pieces are parents first.
-        /// @return null if it would hardly fall apart
-        static std::unique_ptr<Ragdoll> fromRigidPieces(const MWWorld::Ptr& actor,
-            const std::vector<RigidPiece>& pieces, const osg::Vec3f& velocity, const osg::Vec3f& kick,
-            PhysicsTaskScheduler* scheduler);
-
+            const osg::Vec3f& kick, PhysicsTaskScheduler* scheduler,
+            const std::optional<osg::Vec3f>& contact = std::nullopt, const BoneMotion& motion = {},
+            const ExtremityVertices& surfaceVertices = {}, const UnsupportedExtremityBones& unsupportedBones = {},
+            KickProfile kickProfile = KickProfile::Chest);
+        // A creature's body from its planned rig: no anatomical drives, cuts or equipment release.
+        Ragdoll(const MWWorld::Ptr& actor, const CreatureRig& rig, const BoneMatrices& bones,
+            const osg::Vec3f& velocity, const osg::Vec3f& kick, PhysicsTaskScheduler* scheduler,
+            const std::optional<osg::Vec3f>& contact = std::nullopt, KickProfile kickProfile = KickProfile::Chest);
         ~Ragdoll();
-
-        /// Whether the parts are joined together (otherwise they're loose pieces).
-        bool isJointed() const { return !mJoints.empty(); }
-
-        /// Where the simulated bones are now (world matrices), parents first. Interpolation is how far the time
-        /// since the last physics step is to the next one, for smooth movement at any frame rate.
-        std::vector<std::pair<std::string, osg::Matrixf>> getBonePoses(float interpolation) const;
-
-        void updatePtr(const MWWorld::Ptr& updated);
-
-        float getMass() const;
-
-        std::vector<std::shared_ptr<PtrHolder>> getParts() const;
-
-        /// Still and anchored: saved corpses start frozen instead of rattling again.
-        void setAtRest();
-
-        /// Freeze after at least three seconds when the body settles, or after six
-        /// seconds of local jitter without net movement. Never freeze an ongoing fall.
-        void updateFreezeTimer(float duration, bool beingDragged);
-        /// The grab button is the only way to thaw a frozen ragdoll.
-        void unfreezeForDragging();
-        /// Reapply aerial gravity after Bullet releases a held corpse part.
-        void restoreFlightGravity();
-
-        /// Puts each part that is more than depth under the ground (groundAt: its height there) back on top of it,
-        /// still: a small piece can slip through the ground on its own.
-        void liftStrayParts(const std::function<float(const osg::Vec3f&)>& groundAt, float depth);
-
-        /// Push the part nearest point (world space) there with impulse (mass x velocity change).
-        void strike(const osg::Vec3f& point, const osg::Vec3f& impulse);
-
-        /// The part closest to a view ray from eye along direction (normalized), for grabbing.
-        std::shared_ptr<PtrHolder> findPart(const osg::Vec3f& eye, const osg::Vec3f& direction) const;
-
-        /// For a single body: the point on it nearest to eye, where it is grabbed. Otherwise none.
-        std::optional<osg::Vec3f> getGrabPoint(const osg::Vec3f& eye) const;
-
-        /// Whether it has come apart (a model the parts don't suit: parts flying off, joints torn), checked over
-        /// its first seconds; duration is the time since the last check.
-        bool hasComeApart(float duration);
-
-        MWWorld::Ptr getPtr() const;
-
-        /// Where the actor was when the body went limp (somewhere safe to put it back).
-        void setStartPosition(const osg::Vec3f& position) { mStartPosition = position; }
-        const osg::Vec3f& getStartPosition() const { return mStartPosition; }
-
-        /// What getBonePoses gave last (so the rest of the frame agrees with what the bones were set to).
-        const std::vector<std::pair<std::string, osg::Matrixf>>& getLastBonePoses() const { return mLastPoses; }
-
-        /// The physically simulated torso, which may not be the first weighted mesh bone.
-        const osg::Vec3f& getMainPosition() const { return mLastMainBonePosition; }
-
-        /// Where the actor (whose position is at its feet, actorPosition now) should be for its body to be where
-        /// the ragdoll is: following the main part (the pelvis, say) along the ground, at its height. Empty
-        /// before the bones were first posed.
+        // Render-only interpolation; omitted alpha uses the scheduler's coherent residual clock.
+        // Physical transforms and velocities remain the exact latest completed Bullet step.
+        std::vector<std::pair<std::string, osg::Matrixf>> getBonePoses(
+            std::optional<float> interpolation = std::nullopt) const;
         std::optional<osg::Vec3f> getActorPosition(const osg::Vec3f& actorPosition);
-
+        const std::vector<std::pair<std::string, osg::Matrixf>>& getLastBonePoses() const { return mLastPoses; }
+        void updatePtr(const MWWorld::Ptr& updated);
+        MWWorld::Ptr getPtr() const;
+        const std::vector<btRigidBody*>& getCollisionBodies() const { return mBodies; }
+        std::size_t partCount() const { return mParts.size(); }
+        float maxJointError() const;
+        std::vector<osg::Vec3f> getDynamics() const;
+        float bottom() const;
+        float retainedBottom() const;
+        void recordLanding(float height, float damage) { ++mLandingCount; mLastFallHeight=height; mLastFallDamage=damage; }
+        osg::Vec3f getLandingState() const { return osg::Vec3f(mLandingCount,mLastFallHeight,mLastFallDamage); }
+        float initialRotationError() const { return mInitialRotationError; }
+        float initialMatrixError() const { return mInitialMatrixError; }
+        float speed() const { return mMaxSpeed; }
+        float angularSpeed() const { return mMaxAngularSpeed; }
+        // Zero cut velocity restores a saved severed state without relaunching.
+        bool detachHead(const osg::Vec3f& cutVelocity, const osg::Vec3f& headAngularImpulse);
+        bool detachTorso(const osg::Vec3f& cutVelocity, const osg::Vec3f& upperSeparation,
+            const std::string& savedPose = {});
+        std::string getBisectionPoseData() const;
+        bool detachLimbs(unsigned mask, const osg::Vec3f& cutVelocity, const std::string& savedPose = {});
+        std::string getLimbSeveringPoseData() const;
+        unsigned getSeveredLimbsMask() const { return mSeveredLimbsMask; }
+        bool isTorsoDetached() const { return mTorsoDetached; }
+        std::vector<osg::Vec3f> getHeadState() const;
+        // Nearest unobstructed collision surface in the kick cone, using the
+        // current physical pose. Returns its distance, or a negative value.
+        float findKickPart(const osg::Vec3f& origin, const osg::Vec3f& forward, float reach, float minimumDot,
+            std::size_t& part, osg::Vec3f& point) const;
+        bool isDetachedHeadPart(std::size_t part) const;
+        // One bounded momentum change for exactly the struck connected fragment.
+        bool applyKick(std::size_t part, const osg::Vec3f& velocity, const osg::Vec3f& point);
+        int kickCount() const { return mKickCount; }
+        std::map<std::string, double> getEnhancementState() const;
+        bool applyImpact(std::size_t part, const osg::Vec3f& point, const osg::Vec3f& impulse,
+            std::uint64_t id, bool alreadyApplied = false);
+        void configureEnhancement();
+        void setWater(bool enabled, float height) { mWaterEnabled = enabled; mWaterHeight = height; }
+        bool getEquipmentFrame(bool left, osg::Matrixf& frame, osg::Vec3f& linear, osg::Vec3f& angular) const;
+        std::vector<btRigidBody*> getEquipmentGripBodies() const;
+        bool startSuperKick(std::uint64_t token, std::uint64_t kickId, const osg::Vec3f& velocity,
+            const btCollisionObject* attacker);
+        std::map<std::string, double> getSuperKickState() const;
+        void guardSuperKickSpawn();
     private:
         struct Part;
-
-        explicit Ragdoll(PhysicsTaskScheduler* scheduler);
         static void makeBody(Part& part, const btTransform& bodyWorld, float mass, float thickness);
         void addToWorld();
-        void setGravityScale(float scale);
-        void addJointFriction(); // once all joints are made
-        void addJoint(size_t parentIndex, size_t childIndex, const osg::Vec3f& position, float swing1, float swing2,
-            float twist);
-
-        struct SkinnedBoneBinding
-        {
-            std::string mName;
-            size_t mDriverPart;
-            osg::Matrixf mRelativeToDriver;
-        };
-        // Keep ALL skinned bones driven by their simulated ancestors; particularly
-        // insect wing tips and small appendages that otherwise stretch on death.
-        std::vector<SkinnedBoneBinding> mSkinnedBoneBindings;
-        mutable std::vector<std::pair<std::string, osg::Matrixf>> mLastPoses;
-        mutable osg::Vec3f mLastMainBonePosition;
-        size_t mMainPartIndex = 0;
-        bool mFlyingCorpse = false;
-        bool mDisableInternalCollision = false; // Procedural creature rigs have overlapping limb shapes.
-        std::unique_ptr<btActionInterface> mJointFriction;
-        std::unique_ptr<btActionInterface> mFlyingFallController;
-        std::optional<osg::Vec2f> mActorOffset; // from the main part to the actor, along the ground
-        std::optional<float> mFlyingActorOffsetZ; // actor origin is not at the flying creature's torso
-        // For hasComeApart: how long it has been checked, how far each part started from the main one, and where
-        // each part was at the last check.
-        osg::Vec3f mStartPosition;
-        float mAge = 0;
-        float mCheckTimer = 0;
-        float mFreezeAge = 0.f;
-        float mFreezeSampleTime = 0.f;
-        float mStableTime = 0.f;
-        float mJitterWindowTime = 0.f;
-        bool mFrozen = false;
-        std::vector<btTransform> mPreviousFreezeTransforms;
-        std::vector<btVector3> mJitterStartPositions;
-        std::vector<float> mStartDistances;
-        std::vector<btVector3> mLastPositions;
-
+        void addJointFriction();
+        void recordInitialPose(const BoneMatrices& bones);
+        void addJoint(size_t parentIndex, size_t childIndex, const osg::Vec3f& position,
+            float swing1, float swing2, float twist);
         PhysicsTaskScheduler* mTaskScheduler;
-        std::vector<std::shared_ptr<Part>> mParts; // shared: a part can be held (see PhysicsTaskScheduler)
+        std::vector<std::unique_ptr<Part>> mParts;
         std::vector<std::unique_ptr<btTypedConstraint>> mJoints;
+        std::unique_ptr<btActionInterface> mJointFriction;
+        std::vector<btRigidBody*> mBodies;
+        std::vector<btTypedConstraint*> mConstraints;
+        std::array<btQuaternion, 11> mBoneInBody;
+        mutable std::vector<btTransform> mLastTransforms;
+        mutable std::vector<std::pair<std::string, osg::Matrixf>> mLastPoses;
+        osg::Vec3f mActorOffset;
+        osg::Vec3f mInitialRootVelocity, mInheritedVelocity, mImpulse, mContact, mCOM, mCOMVelocity, mInitialCOMVelocity;
+        mutable std::vector<btVector3> mLinearVelocities, mAngularVelocities;
+        mutable float mMaxSpeed = 0.f, mMaxAngularSpeed = 0.f;
+        float mInitialMaxAngularSpeed = 0.f;
+        float mInitialPoseError = 0.f, mInitialRotationError=0.f, mInitialMatrixError=0.f;
+        float mLandingCount=0.f, mLastFallHeight=0.f, mLastFallDamage=0.f;
+        bool mHeadDetached = false;
+        bool mTorsoDetached = false;
+        unsigned mSeveredLimbsMask = 0;
+        std::array<btScalar, 3> mLimbDetachErrors{};
+        bool mLimbPoseRestored = false, mLimbPosePayloadRejected = false;
+        btScalar mLimbPoseRestoreError = 0;
+        std::array<btScalar, 3> mTorsoDetachErrors{};
+        bool mTorsoPoseRestored = false, mTorsoPosePayloadRejected = false;
+        btScalar mTorsoPoseRestoreError = 0, mTorsoPoseRestoreDisplacement = 0,
+            mTorsoPoseRestoreRotation = 0, mTorsoPoseAnchorDistance = 0;
+        int mKickCount = 0;
+        float mHeadDetachTransformError = 0.f;
+        float mHeadDetachLinearVelocityError = 0.f;
+        float mHeadDetachAngularVelocityError = 0.f;
+        osg::Vec3f mHeadDetachLinearVelocity, mHeadDetachAngularVelocity;
+        std::array<osg::Vec3f, 10> mHeadDetachRetainedState{};
+        std::array<osg::Vec3f, 8> mHeadDetachAppliedState{};
+        std::vector<osg::Vec3f> mHeadDetachPartVelocities;
+        UnsupportedExtremityBones mUnsupportedExtremityBones;
+        bool mRegistered = false;
+        bool mCreature = false;
+        float mKickScale = 1.f;
+        bool mWaterEnabled = false;
+        float mWaterHeight = 0.f;
+        std::uint64_t mSuperKickToken = 0;
     };
 }
-
 #endif
