@@ -92,6 +92,10 @@ namespace MWPhysics
         /// Wake the body and push it: impulse applied at point (world space).
         void applyImpulse(btRigidBody* body, const btVector3& impulse, const btVector3& point);
 
+        // Brutal Morrowind: apply additive, speed-limited central impulse to a
+        // dynamic prop. Do not disturb held or embedded objects.
+        bool applyBrutalObjectImpulse(const std::shared_ptr<Object>& object, const btVector3& impulse);
+
         // Carrying a dynamic object: each physics step it is steered towards the hold target.
         /// steerRotation: also turn it to the target orientation. holdMass: if set, its mass while held (a heavier
         /// grip drags what it is jointed to, e.g. the rest of a ragdoll).
