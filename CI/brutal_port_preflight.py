@@ -55,9 +55,9 @@ def main() -> int:
             continue
         source = without_comments(header.read_text(encoding="utf-8"))
         if relative.endswith("mwbase/world.hpp"):
-            pattern = re.compile(r"virtual\\s+[\\s\\S]{0,180}?\\b([A-Za-z_]\\w*)\\s*\\([^;{}]*?\\)\\s*(?:const\\s*)?(?:override\\s*)?(?:=\\s*0\\s*)?;")
+            pattern = re.compile(r"virtual\s+[\s\S]{0,180}?\b([A-Za-z_]\w*)\s*\([^;{}]*?\)\s*(?:const\s*)?(?:override\s*)?(?:=\s*0\s*)?;")
         else:
-            pattern = re.compile(r"\\b([A-Za-z_]\\w*)\\s*\\([^;{}]*?\\)\\s*(?:const\\s*)?override\\s*;")
+            pattern = re.compile(r"\b([A-Za-z_]\w*)\s*\([^;{}]*?\)\s*(?:const\s*)?override\s*;")
         actual = set(pattern.findall(source))
         for name in sorted(set(names) - actual):
             errors.append(f"{relative}: original public method {name}() removed")
@@ -68,7 +68,7 @@ def main() -> int:
                      "apps/openmw/mwworld/worldimp.hpp",
                      "apps/openmw/mwworld/worldimp.cpp"):
         source = without_comments((ROOT / relative).read_text(encoding="utf-8"))
-        if not re.search(r"\\blaunchProjectile\\s*\\([^;{}]*\\battackWindUp\\b", source):
+        if not re.search(r"\blaunchProjectile\s*\([^;{}]*\battackWindUp\b", source):
             errors.append(f"{relative}: launchProjectile() lost attackWindUp")
 
     for path in sorted(OPENMW.rglob("*")):
