@@ -646,8 +646,13 @@ namespace MWPhysics
         const float flyingScale = mFlyingCorpse ? 1.4f : 1.f;
         joint->setLimit(btRadians(swing1 * flyingScale), btRadians(swing2 * flyingScale),
             btRadians(twist * flyingScale), 0.9f, 0.55f, 0.9f);
-        if (mFlyingCorpse)
-            joint->setOverrideNumSolverIterations(28);
+        // Brutal Morrowind solves ragdoll joint anchors more tightly than the
+        // generic world solver.  In particular, a heavy landing or strong
+        // impact must not pull the shoulders and neck away from the torso.
+        // Keep a smaller budget for irregular creature rigs and flying corpses
+        // to avoid amplifying their overlapping procedural body geometry.
+        const int jointSolverIterations = (mFlyingCorpse || mDisableInternalCollision) ? 28 : 100;
+        joint->setOverrideNumSolverIterations(jointSolverIterations);
         mTaskScheduler->addConstraint(joint.get());
         mJoints.push_back(std::move(joint));
     }
