@@ -1,4 +1,5 @@
 #include "mtphysics.hpp"
+#include "ragdollkick.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -954,6 +955,46 @@ namespace MWPhysics
         const btVector3 angular = body->getAngularVelocity();
         if (angular.length2() > maxAngularSpeed * maxAngularSpeed)
             body->setAngularVelocity(angular * (maxAngularSpeed / angular.length()));
+    }
+
+    bool PhysicsTaskScheduler::applyBrutalRagdollKick(const std::vector<btRigidBody*>& bodies,
+        btRigidBody* hit, const btVector3& point, const btVector3& impulse)
+    {
+        MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
+        if (bodies.empty() || !hit || !RagdollEnhancement::finite(point)
+            || !RagdollEnhancement::finite(impulse))
+            return false;
+        btScalar totalMass = 0;
+        for (const btRigidBody* part : bodies)
+        {
+            if (!part || part->getInvMass() <= 0 || !std::isfinite(part->getInvMass()))
+                return false; // Preserve frozen-corpse behavior.
+            totalMass += btScalar(1) / part->getInvMass();
+        }
+        if (!(totalMass > 0) || !std::isfinite(totalMass))
+            return false;
+        // This is the original Brutal RagdollKick::prepare distribution,
+        // retaining its 15% local articulation and bounded angular impulse.
+        constexpr btScalar maxImpulse = 30000.f;
+        btVector3 bounded = impulse;
+        if (bounded.length2() > maxImpulse * maxImpulse)
+            bounded *= maxImpulse / bounded.length();
+        const auto plan = RagdollKick::prepare(bodies, hit, point, bounded / totalMass);
+        if (!plan)
+            return false;
+        plan->apply();
+        constexpr btScalar maxSpeed = 2000.f;
+        constexpr btScalar maxAngularSpeed = 40.f;
+        for (btRigidBody* part : bodies)
+        {
+            const btVector3 velocity = part->getLinearVelocity();
+            if (velocity.length2() > maxSpeed * maxSpeed)
+                part->setLinearVelocity(velocity * (maxSpeed / velocity.length()));
+            const btVector3 angular = part->getAngularVelocity();
+            if (angular.length2() > maxAngularSpeed * maxAngularSpeed)
+                part->setAngularVelocity(angular * (maxAngularSpeed / angular.length()));
+        }
+        return true;
     }
 
     bool PhysicsTaskScheduler::applyBrutalObjectImpulse(
