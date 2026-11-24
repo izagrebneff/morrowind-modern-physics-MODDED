@@ -28,6 +28,7 @@ namespace MWRender
     class RotateController;
     class HeadAnimationTime;
     struct DecapitationGeometry;
+    struct LimbSeveringGeometry;
 
     class NpcAnimation : public ActorAnimation, public WeaponAnimation, public MWWorld::InventoryStoreListener
     {
@@ -50,6 +51,7 @@ namespace MWRender
         // Bounded Parts
         PartHolderPtr mObjectParts[ESM::PRT_Count];
         std::unique_ptr<DecapitationGeometry> mBrutalHeadCut;
+        std::unique_ptr<LimbSeveringGeometry> mBrutalLimbCut;
         std::array<MWSound::Sound*, ESM::PRT_Count> mSounds;
 
         const ESM::NPC* mNpc;
@@ -130,6 +132,7 @@ namespace MWRender
         // joint transaction; returns false without changing visible geometry
         // if this NPC's armor/rig cannot support a closed cut.
         bool setBrutalHeadSevered(bool severed);
+        bool setBrutalLimbsSevered(unsigned mask);
 
         void enableHeadAnimation(bool enable) override;
 
