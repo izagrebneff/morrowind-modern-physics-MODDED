@@ -847,7 +847,10 @@ namespace MWPhysics
         config.enabled = enabled;
         config.softStops = true;
         config.neutralPose = neutralPose;
-        config.limbResponse = true;
+        // The procedural creature skeleton does not use Brutal's authored
+        // humanoid limb index map (3/5/7/9). Keep anatomical responses for
+        // eleven-part NPCs only; creature soft stops remain fully enabled.
+        config.limbResponse = neutralPose;
         config.selfCollision = selfCollision;
         // Original fork's existing buoyancy controller remains authoritative.
         config.waterEnabled = false;
