@@ -601,6 +601,7 @@ namespace MWClass
         float damage = 0.0f;
         if (!success)
         {
+            MWMechanics::queueMeleeSwingForHit(ptr, victim);
             MWBase::Environment::get().getLuaManager()->onHit(ptr, victim, weapon, MWWorld::Ptr(), type, attackStrength,
                 attackWindUp, damage, false, hitPosition, false, MWMechanics::DamageSourceType::Melee);
             MWMechanics::reduceWeaponCondition(damage, false, weapon, ptr);
@@ -675,7 +676,8 @@ namespace MWClass
 
         MWMechanics::diseaseContact(victim, ptr);
 
-        MWBase::Environment::get().getLuaManager()->onHit(ptr, victim, weapon, MWWorld::Ptr(), type, attackStrength,
+        MWMechanics::queueMeleeSwingForHit(ptr, victim);
+            MWBase::Environment::get().getLuaManager()->onHit(ptr, victim, weapon, MWWorld::Ptr(), type, attackStrength,
             attackWindUp, damage, healthdmg, hitPosition, true, MWMechanics::DamageSourceType::Melee);
     }
 
@@ -683,6 +685,9 @@ namespace MWClass
         const MWWorld::Ptr& attacker, bool successful, const MWMechanics::DamageSourceType sourceType) const
     {
         MWMechanics::CreatureStats& stats = getCreatureStats(ptr);
+        const float lethalSwingSide
+            = sourceType == MWMechanics::DamageSourceType::Melee && !attacker.isEmpty()
+            ? stats.consumeMeleeSwingSide(attacker.getCellRef().getRefNum()) : 0.f;
         bool wasDead = stats.isDead();
 
         bool setOnPcHitMe = true;
@@ -792,7 +797,7 @@ namespace MWClass
             if (!attacker.isEmpty() && hasHealthDamage)
             {
                 const osg::Vec3f direction = MWMechanics::getDeathKnockDirection(
-                    attacker, ptr, sourceType == MWMechanics::DamageSourceType::Melee);
+                    attacker, ptr, sourceType == MWMechanics::DamageSourceType::Melee, lethalSwingSide);
                 // The lethal melee impulse follows the attacker's real left
                 // or right hand swing; spells/ranged impacts keep radial push.
                 stats.setDeathKick(direction * std::clamp(120.f + healthDamage * 4.f, 140.f, 280.f));
