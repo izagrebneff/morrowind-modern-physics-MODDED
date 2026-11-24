@@ -2913,9 +2913,14 @@ namespace MWMechanics
         }
         mPtr.getClass().getCreatureStats(mPtr).setRagdollPose({});
         mPtr.getClass().getCreatureStats(mPtr).setBrutalHeadSevered(false);
+        mPtr.getClass().getCreatureStats(mPtr).setBrutalSeveredLimbsMask(0);
+        mPtr.getClass().getCreatureStats(mPtr).setBrutalPendingLimbMask(0);
         mPtr.getClass().getCreatureStats(mPtr).setEligibleLethalMeleeDismemberment(false);
         if (auto* npc = dynamic_cast<MWRender::NpcAnimation*>(mAnimation))
+        {
             npc->setBrutalHeadSevered(false);
+            npc->setBrutalLimbsSevered(0);
+        }
 
         if (mDeathState == CharState_None)
             return;
