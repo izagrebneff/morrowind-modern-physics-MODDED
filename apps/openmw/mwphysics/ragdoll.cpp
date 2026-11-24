@@ -24,7 +24,8 @@
 
 #include "collisiontype.hpp"
 #include "ragdollenhancement.hpp"
-#include "brutalragdollstep.hpp"
+#include "ragdollcontrol.hpp"
+#include "ragdollneutral.hpp"
 #include "mtphysics.hpp"
 
 namespace MWPhysics
@@ -66,87 +67,9 @@ namespace MWPhysics
         btTransform mPreviousTransform;
     };
 
-    // Friction in the joints: each step, some of the way jointed parts turn relative to each other is taken out.
-    // Without it a body collapses like a sack of liquid; with it, limbs still flop but settle instead of sloshing.
-    class JointFriction final : public BrutalRagdollStep
-    {
-    public:
-        std::vector<std::pair<btRigidBody*, btRigidBody*>> mPairs;
-        struct EnhancedLink
-        {
-            RagdollEnhancement::ConeTwist* mJoint;
-            RagdollEnhancement::SoftStopSettings mSoft;
-        };
-        std::vector<EnhancedLink> mEnhanced;
-
-        void beforeBrutalStep(btScalar dt) override
-        {
-            if (!std::isfinite(dt) || dt <= btScalar(0))
-                return;
-            // Original Brutal approach: evaluate every link from the same
-            // pre-step velocities, bound damping energy, and integrate once.
-            struct Moment
-            {
-                btRigidBody* body;
-                btVector3 torque;
-            };
-            std::vector<Moment> moments;
-            const auto accumulate = [&moments](btRigidBody* body, const btVector3& torque) {
-                for (Moment& moment : moments)
-                    if (moment.body == body)
-                    {
-                        moment.torque += torque;
-                        return;
-                    }
-                moments.push_back({ body, torque });
-            };
-            for (const EnhancedLink& link : mEnhanced)
-            {
-                auto& a = link.mJoint->getRigidBodyA();
-                auto& b = link.mJoint->getRigidBodyB();
-                if (!a.isActive() && !b.isActive())
-                    continue;
-                RagdollEnhancement::TorqueComponents components;
-                link.mJoint->softStopTorqueWorld(link.mSoft, &components);
-                const btVector3 damping = RagdollEnhancement::boundedDampingTorqueWorld(
-                    components.damping, b.getAngularVelocity() - a.getAngularVelocity(),
-                    a.getInvInertiaTensorWorld() + b.getInvInertiaTensorWorld(), dt);
-                const btVector3 torque = components.spring + damping;
-                if (!RagdollEnhancement::finite(torque))
-                    continue;
-                accumulate(&a, -torque);
-                accumulate(&b, torque);
-            }
-            // Bullet contact rows need these bounded torque impulses before
-            // the solver, not deferred applyTorque() after the simulation.
-            for (const Moment& moment : moments)
-                moment.body->applyTorqueImpulse(moment.torque * dt);
-        }
-
-        void updateAction(btCollisionWorld*, btScalar timeStep) override
-        {
-            constexpr btScalar rate = 14; // per second: about a fifth of the turning gone each step at 60 Hz
-            const btScalar fraction = 1 - std::exp(-rate * timeStep);
-            for (const auto& [a, b] : mPairs)
-            {
-                if (!a->isActive() && !b->isActive())
-                    continue;
-                const btVector3 relative = b->getAngularVelocity() - a->getAngularVelocity();
-                if (relative.length2() < 1e-4f)
-                    continue;
-                // The lighter part gives more.
-                const btScalar massA = a->getInvMass() > 0 ? 1 / a->getInvMass() : 0;
-                const btScalar massB = b->getInvMass() > 0 ? 1 / b->getInvMass() : 0;
-                if (massA + massB <= 0)
-                    continue;
-                const btVector3 change = relative * fraction;
-                a->setAngularVelocity(a->getAngularVelocity() + change * (massB / (massA + massB)));
-                b->setAngularVelocity(b->getAngularVelocity() - change * (massA / (massA + massB)));
-            }
-        }
-
-        void debugDraw(btIDebugDraw*) override {}
-    };
+    // JointFriction is now the complete original Brutal Morrowind controller
+    // from ragdollcontrol.hpp, with anatomical torque, soft stops, joint
+    // collision gating and impact response. No fork-local duplicate remains.
 
     // Restrict the descent of dead flyers, never living creatures. In the
     // previous working build this was the profile used for netches/cliff racers.
@@ -754,33 +677,91 @@ namespace MWPhysics
         joint->setOverrideNumSolverIterations(jointSolverIterations);
         mTaskScheduler->addConstraint(joint.get());
         mJoints.push_back(std::move(joint));
+        mJointParentChildren.emplace_back(parentIndex, childIndex);
     }
 
     void Ragdoll::addJointFriction()
     {
-        auto friction = std::make_unique<JointFriction>();
-        for (const auto& joint : mJoints)
+        auto controller = std::make_unique<JointFriction>();
+        const bool anatomical = mParts.size() == 11
+            && mParts.front()->mBone == "Bip01 Pelvis"
+            && mParts[1]->mBone == "Bip01 Spine1";
+
+        for (const auto& part : mParts)
         {
-            friction->mPairs.emplace_back(&joint->getRigidBodyA(), &joint->getRigidBodyB());
-            auto* enhanced = static_cast<RagdollEnhancement::ConeTwist*>(joint.get());
-            btRigidBody& parent = enhanced->getRigidBodyA();
-            btRigidBody& child = enhanced->getRigidBodyB();
-            if (parent.getInvMass() <= 0 || child.getInvMass() <= 0)
+            controller->mBodies.push_back(part->mBody);
+            controller->mWaterBodies.emplace_back(part->mBody, part->mRelativeDensity);
+        }
+
+        const RagdollNeutralProfile authoredPose;
+        constexpr btScalar gradientBounds[] = { 0, 13, 12, 13, 20, 13, 20, 14, 20, 14, 20 };
+        for (size_t i = 0; i < mJoints.size() && i < mJointParentChildren.size(); ++i)
+        {
+            auto* joint = static_cast<RagdollEnhancement::ConeTwist*>(mJoints[i].get());
+            const auto [parentIndex, childIndex] = mJointParentChildren[i];
+            btRigidBody& parent = joint->getRigidBodyA();
+            btRigidBody& child = joint->getRigidBodyB();
+            controller->mPairs.emplace_back(&parent, &child);
+            if (parentIndex >= mParts.size() || childIndex >= mParts.size()
+                || parent.getInvMass() <= 0 || child.getInvMass() <= 0)
                 continue;
+
+            RagdollJointControl control;
+            control.joint = joint;
+            control.parent = parentIndex;
+            control.child = childIndex;
+            control.baselineA = joint->getAFrame();
+            control.baselineB = joint->getBFrame();
+            control.enhancedA = control.baselineA;
+            control.enhancedB = control.baselineB;
+            control.baselineSpans = btVector3(joint->getSwingSpan1(),
+                joint->getSwingSpan2(), joint->getTwistSpan());
+            control.enhancedSpans = control.baselineSpans;
+            control.neutral = btQuaternion(0, 0, 0, 1);
+
+            if (anatomical)
+            {
+                if (childIndex == 3 || childIndex == 5)
+                    control.enhancedSpans.setY(btRadians(55));
+                const btQuaternion boneParent = mParts[parentIndex]->mBoneFromBody.getRotation();
+                const btQuaternion boneChild = mParts[childIndex]->mBoneFromBody.getRotation();
+                const btQuaternion neutralParent = authoredPose.neutral[parentIndex] * boneParent.inverse();
+                control.enhancedA = btTransform(
+                    neutralParent.inverse() * authoredPose.limitCenter[childIndex],
+                    control.baselineA.getOrigin());
+                control.enhancedB = btTransform(boneChild, control.baselineB.getOrigin());
+                control.neutral = authoredPose.limitCenter[childIndex].inverse()
+                    * authoredPose.neutral[childIndex];
+            }
+
             const btVector3 axis = child.getWorldTransform().getBasis().getColumn(2);
             const btScalar inertia = RagdollEnhancement::effectiveInertia(parent, child, axis);
             const btScalar mass = 1 / child.getInvMass();
             const btScalar lever = btMax(btScalar(8),
-                (child.getWorldTransform().getBasis() * enhanced->getBFrame().getOrigin()).length());
+                (child.getWorldTransform().getBasis() * control.baselineB.getOrigin()).length());
             const btScalar gravityTorque = mass * btScalar(627.2) * lever;
-            // Same soft-stop width/torque approach as Brutal Morrowind;
-            // conservative bound for mixed humanoid and creature rigs.
-            RagdollEnhancement::SoftStopSettings settings{
-                btRadians(12), gravityTorque * btScalar(.5) / btScalar(20),
+            const btScalar gradient = anatomical ? gradientBounds[childIndex] : btScalar(20);
+            control.soft = { btRadians(12), gravityTorque * btScalar(.5) / gradient,
                 inertia * btScalar(60), gravityTorque, false };
-            friction->mEnhanced.push_back({ enhanced, settings });
+            const btScalar frequency = btScalar(.55) * SIMD_2_PI;
+            control.tone = { inertia * frequency * frequency, 4 * inertia * frequency,
+                gravityTorque * btScalar(.06), gravityTorque * btScalar(.30) };
+            controller->mLinks.push_back(control);
         }
-        mJointFriction = std::move(friction);
+
+        // The full controller changes the collision filters and joint limits
+        // while the scheduler holds its physics-world mutex. If a modded rig
+        // violates anatomical limits, use Brutal's baseline fallback safely.
+        try
+        {
+            mTaskScheduler->configureBrutalRagdollAction(controller.get(), anatomical,
+                !mDisableInternalCollision && !mFlyingCorpse, true);
+        }
+        catch (...)
+        {
+            mTaskScheduler->configureBrutalRagdollAction(controller.get(), false, false, false);
+        }
+        mJointFriction = std::move(controller);
         mTaskScheduler->addBrutalRagdollAction(static_cast<BrutalRagdollStep*>(mJointFriction.get()));
     }
 
