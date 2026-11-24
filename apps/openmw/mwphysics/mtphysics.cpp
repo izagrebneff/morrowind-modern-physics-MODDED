@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <functional>
 #include <mutex>
 #include <optional>
@@ -923,9 +924,18 @@ namespace MWPhysics
     void PhysicsTaskScheduler::applyRagdollImpulse(
         btRigidBody* body, const btVector3& impulse, const btVector3& point)
     {
+        const auto finiteVector = [](const btVector3& v) {
+            return std::isfinite(v.x()) && std::isfinite(v.y()) && std::isfinite(v.z());
+        };
+        // Bullet propagates NaN/Inf contact impulses into broadphase and joints.
+        // Ignore invalid hits before acquiring the simulation lock or waking a corpse.
+        if (!finiteVector(impulse) || !finiteVector(point) || impulse.length2() <= btScalar(0))
+            return;
         MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
         if (!body || body->getInvMass() <= btScalar(0))
             return; // Do not wake a frozen corpse or static fallback shape.
+        if (!finiteVector(body->getCenterOfMassPosition()))
+            return;
 
         // Borrow Brutal's bounded-momentum approach without replacing the
         // fork's scheduler, corpse-freeze logic or articulated rig lifecycle.
