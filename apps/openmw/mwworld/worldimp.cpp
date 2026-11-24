@@ -1418,6 +1418,7 @@ namespace MWWorld
         osg::Vec3f velocity = impulse / mass;
         // Hand gear begins at the recorded attachment transform. Let it drop from the
         // grip rather than being flung upwards by Combat Juice's generic scatter launch.
+        const bool hasCorpseGearPose = static_cast<bool>(ptr.getRefData().mCorpseGearPose);
         if (ptr.getRefData().mCorpseGearPose)
         {
             const auto now = getTimeManager()->getSimulationTime();
@@ -1436,6 +1437,15 @@ namespace MWWorld
             velocity.normalize();
             velocity *= maxLaunchSpeed;
         }
+        // Ordinary dropped items receive the additive physical impulse used
+        // by Brutal Morrowind, rather than resetting their existing velocity.
+        // The game-unit impulse is scaled using the internal Bullet mass so
+        // the original LuaPhysics weight adjustment remains unchanged.
+        // Keep the original launch route for hand gear, whose saved attachment
+        // pose deliberately forces a downward release.
+        if (!hasCorpseGearPose && object->getMass() > 0.f
+            && mPhysics->applyBrutalObjectImpulse(ptr, velocity * object->getMass()))
+            return true;
         mPhysics->launchObject(ptr, velocity);
         return true;
     }
@@ -1527,7 +1537,7 @@ namespace MWWorld
                 bones.emplace(bone, *world);
             }
             if (bones.size() == MWPhysics::Ragdoll::getRequiredBones().size())
-                return mPhysics->createRagdoll(actor, bones, kick);
+                return mPhysics->createRagdoll(actor, bones, kick, animation->getDeathRagdollMotion());
         }
 
         // Any other skinned body: parts fitted to the mesh.
@@ -1695,9 +1705,15 @@ namespace MWWorld
             ++knocked;
         }
 
-        // Nothing loose in the way either: maybe the swing meets a wall, the ground or furniture. A sound only.
-        if (knocked == 0)
-            meleeHitWorld(attacker, weapon, isPlayer ? view : forward, eye, reach + bodyRadius, attackStrength);
+        // Give simulated corpses physical melee knockback, without changing
+        // damage, animations, or the original prop strike handling.
+        const osg::Vec3f swingDirection = isPlayer ? view : forward;
+        const bool ragdollHit = mPhysics->strikeRagdollAlongSwing(
+            eye, eye + swingDirection * (reach + bodyRadius), 38.f, knock * swingSpeed);
+
+        // Nothing loose or simulated in the way: sound for a wall or furniture.
+        if (knocked == 0 && !ragdollHit)
+            meleeHitWorld(attacker, weapon, swingDirection, eye, reach + bodyRadius, attackStrength);
     }
 
     void World::meleeHitWorld(const MWWorld::Ptr& attacker, const MWWorld::Ptr& weapon, osg::Vec3f direction,

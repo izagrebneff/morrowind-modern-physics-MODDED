@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <functional>
 #include <mutex>
 #include <optional>
@@ -437,6 +438,9 @@ namespace
                     actor->setOnSlope(frameData.mIsOnSlope);
                     actor->setWalkingOnWater(frameData.mWalkingOnWater);
                     actor->setInertialForce(frameData.mInertia);
+                    // Publish only after a completed step; preserve frame-to-frame
+                    // Brutal momentum without touching the existing gravity state.
+                    actor->setBrutalLocomotionVelocity(frameData.mBrutalLocomotionVelocity);
                 }
             }
             void operator()(MWPhysics::ProjectileSimulation& sim) const
@@ -915,6 +919,61 @@ namespace MWPhysics
         MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
         body->activate(true);
         body->applyImpulse(impulse, point - body->getCenterOfMassPosition());
+    }
+
+    void PhysicsTaskScheduler::applyRagdollImpulse(
+        btRigidBody* body, const btVector3& impulse, const btVector3& point)
+    {
+        const auto finiteVector = [](const btVector3& v) {
+            return std::isfinite(v.x()) && std::isfinite(v.y()) && std::isfinite(v.z());
+        };
+        // Bullet propagates NaN/Inf contact impulses into broadphase and joints.
+        // Ignore invalid hits before acquiring the simulation lock or waking a corpse.
+        if (!finiteVector(impulse) || !finiteVector(point) || impulse.length2() <= btScalar(0))
+            return;
+        MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
+        if (!body || body->getInvMass() <= btScalar(0))
+            return; // Do not wake a frozen corpse or static fallback shape.
+        if (!finiteVector(body->getCenterOfMassPosition()))
+            return;
+
+        // Borrow Brutal's bounded-momentum approach without replacing the
+        // fork's scheduler, corpse-freeze logic or articulated rig lifecycle.
+        constexpr btScalar maxImpulse = 30000.f;
+        constexpr btScalar maxLinearSpeed = 2000.f;
+        constexpr btScalar maxAngularSpeed = 40.f;
+        btVector3 bounded = impulse;
+        if (bounded.length2() > maxImpulse * maxImpulse)
+            bounded *= maxImpulse / bounded.length();
+        body->activate(true);
+        body->applyImpulse(bounded, point - body->getCenterOfMassPosition());
+
+        const btVector3 linear = body->getLinearVelocity();
+        if (linear.length2() > maxLinearSpeed * maxLinearSpeed)
+            body->setLinearVelocity(linear * (maxLinearSpeed / linear.length()));
+        const btVector3 angular = body->getAngularVelocity();
+        if (angular.length2() > maxAngularSpeed * maxAngularSpeed)
+            body->setAngularVelocity(angular * (maxAngularSpeed / angular.length()));
+    }
+
+    bool PhysicsTaskScheduler::applyBrutalObjectImpulse(
+        const std::shared_ptr<Object>& object, const btVector3& impulse)
+    {
+        const std::shared_ptr<PtrHolder> held = getHeldObject();
+        MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
+        if (!object || object == held || object->isStuck())
+            return false;
+        btRigidBody* body = object->getRigidBody();
+        if (!body || body->getInvMass() <= btScalar(0))
+            return false;
+        body->activate(true);
+        body->applyCentralImpulse(impulse);
+        // Ported from Brutal Morrowind's Object::applyDynamicImpulse.
+        constexpr btScalar maxSpeed = 2000.f;
+        const btVector3 velocity = body->getLinearVelocity();
+        if (velocity.length2() > maxSpeed * maxSpeed)
+            body->setLinearVelocity(velocity.normalized() * maxSpeed);
+        return true;
     }
 
     void PhysicsTaskScheduler::removeCollisionObject(btCollisionObject* collisionObject)

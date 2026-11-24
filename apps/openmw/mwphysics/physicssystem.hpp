@@ -123,6 +123,9 @@ namespace MWPhysics
         ActorFrameData(Actor& actor, bool inert, bool waterCollision, float slowFall, float waterlevel, bool isPlayer);
         osg::Vec3f mPosition;
         osg::Vec3f mInertia;
+        // Actor-local Brutal movement state, carried through the threaded simulation.
+        osg::Vec3f mBrutalLocomotionVelocity;
+        const bool mUseBrutalKinetics;
         const btCollisionObject* mStandingOn;
         bool mIsOnGround;
         bool mIsOnSlope;
@@ -212,7 +215,7 @@ namespace MWPhysics
         /// Ragdoll::getRequiredBones(), kick how the killing blow throws it (on top of how it was moving).
         /// @return false if it can't be (missing bones)
         bool createRagdoll(const MWWorld::Ptr& actor, const std::map<std::string, osg::Matrixf, std::less<>>& bones,
-            const osg::Vec3f& kick);
+            const osg::Vec3f& kick, const Ragdoll::BoneVelocities& motion = {});
         /// The simulated bones of the actor's ragdoll (world matrices, parents first); empty without one.
         std::vector<std::pair<std::string, osg::Matrixf>> getRagdollBonePoses(const MWWorld::ConstPtr& actor) const;
         /// What getRagdollBonePoses gave last.
@@ -235,6 +238,9 @@ namespace MWPhysics
         bool hasRagdoll(const MWWorld::ConstPtr& actor) const;
         /// Push the dead actor's ragdoll where it was hit (point, world space) with impulse. False without one.
         bool strikeRagdoll(const MWWorld::ConstPtr& actor, const osg::Vec3f& point, const osg::Vec3f& impulse);
+        /// Push the closest accessible corpse in a melee swing corridor; never strike live actors.
+        bool strikeRagdollAlongSwing(const osg::Vec3f& from, const osg::Vec3f& to,
+            float radius, const osg::Vec3f& knockVelocity);
 
         /// A simulated object was just created in the world (dropped, spawned): settle it onto the surface and
         /// let it fall. Objects loaded with a cell stay asleep where they were.
@@ -246,6 +252,9 @@ namespace MWPhysics
         void deflectObject(const MWWorld::Ptr& ptr, const osg::Vec3f& hitPoint, const osg::Vec3f& velocity);
         /// Set a simulated object moving.
         void launchObject(const MWWorld::Ptr& ptr, const osg::Vec3f& velocity);
+        /// Brutal dynamic-body impulses are additive; unlike launchObject they
+        /// retain an object's previous momentum.
+        bool applyBrutalObjectImpulse(const MWWorld::Ptr& ptr, const osg::Vec3f& impulse);
 
         // Carrying simulated objects (one at a time)
         bool canHoldObject(const MWWorld::ConstPtr& ptr) const;

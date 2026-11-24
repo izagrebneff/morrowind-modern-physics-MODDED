@@ -2478,6 +2478,8 @@ namespace MWMechanics
 
         osg::Vec3f movementFromAnimation
             = mAnimation->runAnimation(mSkipAnim && !isScriptedAnimPlaying() ? 0.f : duration);
+        if (mDeathState != CharState_None && !mRagdoll)
+            mAnimation->sampleDeathRagdollMotion(duration);
 
         if (mPtr.getClass().isActor() && !isScriptedAnimPlaying())
         {

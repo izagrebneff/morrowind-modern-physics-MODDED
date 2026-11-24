@@ -258,6 +258,10 @@ namespace MWRender
 
         mutable std::map<std::string, float, std::less<>> mAnimVelocities;
 
+        // Death-animation pose samples. Only populated while a death animation is playing.
+        std::map<std::string, osg::Vec3f, std::less<>> mRagdollPreviousPositions;
+        std::map<std::string, osg::Vec3f, std::less<>> mRagdollBoneVelocities;
+
         osg::ref_ptr<SceneUtil::LightListCallback> mLightListCallback;
 
         bool mPlayScriptedOnly;
@@ -474,6 +478,14 @@ namespace MWRender
         void setBoneWorldMatrix(std::string_view bone, const osg::Matrixf& world);
         /// Stop every animation, leaving the bones as they are.
         void stopAllAnimations();
+
+        /// Sample relative bone motion from consecutive death-animation frames.
+        /// Skips missing bones and invalid frame times; no extra scene updates.
+        void sampleDeathRagdollMotion(float duration);
+        const std::map<std::string, osg::Vec3f, std::less<>>& getDeathRagdollMotion() const
+        {
+            return mRagdollBoneVelocities;
+        }
 
         /// A bone of the skinned meshes, and the bounds (in its own space) of the vertices it moves.
         struct SkinnedBone

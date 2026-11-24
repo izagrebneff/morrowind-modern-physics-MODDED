@@ -257,7 +257,7 @@ namespace MWPhysics
     }
 
     Ragdoll::Ragdoll(const MWWorld::Ptr& actor, const BoneMatrices& bones, const osg::Vec3f& velocity,
-        const osg::Vec3f& kick, PhysicsTaskScheduler* scheduler)
+        const osg::Vec3f& kick, PhysicsTaskScheduler* scheduler, const BoneVelocities& motion)
         : mTaskScheduler(scheduler)
     {
         const auto position = [&](std::string_view bone) { return bones.find(bone)->second.getTrans(); };
@@ -297,6 +297,11 @@ namespace MWPhysics
             makeBody(*part, bodyWorld, def.mMass, def.mRadius);
 
             impact.apply(*part->mBody, pivot);
+            // Add a limited part of the last animated relative velocity without
+            // double-counting actor locomotion, which FatalImpact already handles.
+            if (const auto found = motion.find(part->mBone); found != motion.end())
+                part->mBody->setLinearVelocity(part->mBody->getLinearVelocity()
+                    + Misc::Convert::toBullet(found->second) * btScalar(0.35f));
 
             mParts.push_back(std::move(part));
         }
@@ -403,10 +408,19 @@ namespace MWPhysics
             ragdoll->mParts.push_back(std::move(part));
         }
         // Joined to the part above; any parts with none (bits not under the main body) to the biggest.
+        // Some modded creatures have malformed skeleton parent links (invalid
+        // indices or cycles). Never index outside the rig or spin forever while
+        // resolving a simulated ancestor; fall back to the main body instead.
         const auto parentPart = [&](size_t bone) {
-            for (int parent = bones[bone].mParent; parent >= 0; parent = bones[parent].mParent)
-                if (partOfBone[parent] >= 0)
-                    return partOfBone[parent];
+            int parent = bones[bone].mParent;
+            for (size_t depth = 0; depth < bones.size(); ++depth)
+            {
+                if (parent < 0 || static_cast<size_t>(parent) >= bones.size())
+                    break;
+                if (partOfBone[static_cast<size_t>(parent)] >= 0)
+                    return partOfBone[static_cast<size_t>(parent)];
+                parent = bones[static_cast<size_t>(parent)].mParent;
+            }
             return -1;
         };
         int root = 0;
@@ -437,12 +451,20 @@ namespace MWPhysics
         {
             int driver = partOfBone[i];
             if (driver < 0)
-                for (int parent = bones[i].mParent; parent >= 0; parent = bones[parent].mParent)
-                    if (partOfBone[parent] >= 0)
+            {
+                int parent = bones[i].mParent;
+                for (size_t depth = 0; depth < bones.size(); ++depth)
+                {
+                    if (parent < 0 || static_cast<size_t>(parent) >= bones.size())
+                        break;
+                    if (partOfBone[static_cast<size_t>(parent)] >= 0)
                     {
-                        driver = partOfBone[parent];
+                        driver = partOfBone[static_cast<size_t>(parent)];
                         break;
                     }
+                    parent = bones[static_cast<size_t>(parent)].mParent;
+                }
+            }
             if (driver < 0)
                 driver = root;
 
@@ -487,8 +509,18 @@ namespace MWPhysics
             if (loose[i])
                 continue;
             bool carried = false;
-            for (int parent = pieces[i].mParent; parent >= 0 && !carried; parent = pieces[parent].mParent)
-                carried = loose[parent];
+            int parent = pieces[i].mParent;
+            // Modded rigid-piece hierarchies can contain invalid indices or
+            // cycles. Bound traversal by the number of pieces and use a valid
+            // parent only; otherwise release this piece as a safe fallback.
+            for (size_t depth = 0; depth < pieces.size() && !carried; ++depth)
+            {
+                if (parent < 0 || static_cast<size_t>(parent) >= pieces.size())
+                    break;
+                const size_t parentIndex = static_cast<size_t>(parent);
+                carried = loose[parentIndex];
+                parent = pieces[parentIndex].mParent;
+            }
             if (!carried)
                 loose[i] = true;
         }
@@ -646,8 +678,16 @@ namespace MWPhysics
         const float flyingScale = mFlyingCorpse ? 1.4f : 1.f;
         joint->setLimit(btRadians(swing1 * flyingScale), btRadians(swing2 * flyingScale),
             btRadians(twist * flyingScale), 0.9f, 0.55f, 0.9f);
-        if (mFlyingCorpse)
-            joint->setOverrideNumSolverIterations(28);
+        // Brutal Morrowind solves ragdoll joint anchors more tightly than the
+        // generic world solver.  In particular, a heavy landing or strong
+        // impact must not pull the shoulders and neck away from the torso.
+        // Keep a smaller budget for irregular creature rigs and flying corpses
+        // to avoid amplifying their overlapping procedural body geometry.
+        // Procedural creature rigs need extra constraint resolution under
+        // uneven limb masses, but still less than the stable humanoid budget.
+        // Flying corpses retain their lighter solver and controlled descent.
+        const int jointSolverIterations = mFlyingCorpse ? 28 : (mDisableInternalCollision ? 48 : 100);
+        joint->setOverrideNumSolverIterations(jointSolverIterations);
         mTaskScheduler->addConstraint(joint.get());
         mJoints.push_back(std::move(joint));
     }
@@ -893,15 +933,112 @@ namespace MWPhysics
         }
     }
 
+    std::optional<osg::Vec3f> Ragdoll::getImpactCenter() const
+    {
+        if (mParts.empty() || mMainPartIndex >= mParts.size())
+            return std::nullopt;
+        btTransform bodyWorld;
+        mParts[mMainPartIndex]->mMotionState->getWorldTransform(bodyWorld);
+        const osg::Vec3f center = Misc::Convert::toOsg(bodyWorld.getOrigin());
+        if (!std::isfinite(center.x()) || !std::isfinite(center.y()) || !std::isfinite(center.z()))
+            return std::nullopt;
+        return center;
+    }
+
+    std::optional<std::pair<osg::Vec3f, float>> Ragdoll::getMeleeImpactPoint(
+        const osg::Vec3f& from, const osg::Vec3f& to, float padding) const
+    {
+        const osg::Vec3f segment = to - from;
+        const float lengthSquared = segment.length2();
+        if (!(lengthSquared > 1e-4f) || !(padding > 0.f))
+            return std::nullopt;
+
+        std::optional<std::pair<osg::Vec3f, float>> result;
+        float bestDistanceSquared = std::numeric_limits<float>::max();
+        for (const auto& part : mParts)
+        {
+            if (!part->mBody || part->mBody->getInvMass() <= btScalar(0))
+                continue;
+            btTransform transform;
+            part->mMotionState->getWorldTransform(transform);
+
+            btVector3 localCenter;
+            btScalar boundingRadius = 0.f;
+            part->mShape->getBoundingSphere(localCenter, boundingRadius);
+            if (!std::isfinite(boundingRadius) || boundingRadius < btScalar(0))
+                continue;
+            const osg::Vec3f center = Misc::Convert::toOsg(transform * localCenter);
+            if (!std::isfinite(center.x()) || !std::isfinite(center.y()) || !std::isfinite(center.z()))
+                continue;
+
+            const float along = std::clamp(((center - from) * segment) / lengthSquared, 0.f, 1.f);
+            const osg::Vec3f onSwing = from + segment * along;
+            const float distanceSquared = (center - onSwing).length2();
+            const float effectiveRadius = padding + std::min(static_cast<float>(boundingRadius), 45.f);
+            if (distanceSquared > effectiveRadius * effectiveRadius)
+                continue;
+
+            // Prefer an early hit in the swing, then the limb closest to its path.
+            if (!result || along < result->second
+                || (along == result->second && distanceSquared < bestDistanceSquared))
+            {
+                result = std::make_pair(center, along);
+                bestDistanceSquared = distanceSquared;
+            }
+        }
+        return result;
+    }
+
     void Ragdoll::strike(const osg::Vec3f& point, const osg::Vec3f& impulse)
     {
+        const auto finiteVec = [](const osg::Vec3f& v) {
+            return std::isfinite(v.x()) && std::isfinite(v.y()) && std::isfinite(v.z());
+        };
+        if (!finiteVec(point) || !finiteVec(impulse))
+            return;
         Part* nearest = nullptr;
         float nearestDistance = std::numeric_limits<float>::max();
         for (const auto& part : mParts)
         {
             btTransform bodyWorld;
             part->mMotionState->getWorldTransform(bodyWorld);
-            const float distance = (Misc::Convert::toOsg(bodyWorld.getOrigin()) - point).length2();
+            // Choose the part whose *collision surface* is closest to the hit,
+            // not the part with the closest centre. Long upper arms and legs
+            // otherwise absorb hits meant for the head or torso.
+            const btVector3 local = bodyWorld.invXform(Misc::Convert::toBullet(point));
+            btScalar distance = (local).length2();
+            switch (part->mShape->getShapeType())
+            {
+                case CAPSULE_SHAPE_PROXYTYPE:
+                {
+                    const auto& capsule = *static_cast<const btCapsuleShape*>(part->mShape.get());
+                    btVector3 axis(0, 0, 0);
+                    axis[capsule.getUpAxis()] = btClamped(
+                        local[capsule.getUpAxis()], -capsule.getHalfHeight(), capsule.getHalfHeight());
+                    const btScalar surfaceDistance = btMax(btScalar(0),
+                        (local - axis).length() - capsule.getRadius());
+                    distance = surfaceDistance * surfaceDistance;
+                    break;
+                }
+                case BOX_SHAPE_PROXYTYPE:
+                {
+                    const btVector3 half = static_cast<const btBoxShape*>(part->mShape.get())
+                                               ->getHalfExtentsWithMargin();
+                    const btVector3 closest(btClamped(local.x(), -half.x(), half.x()),
+                        btClamped(local.y(), -half.y(), half.y()), btClamped(local.z(), -half.z(), half.z()));
+                    distance = (local - closest).length2();
+                    break;
+                }
+                case SPHERE_SHAPE_PROXYTYPE:
+                {
+                    const btScalar surfaceDistance = btMax(btScalar(0),
+                        local.length() - static_cast<const btSphereShape*>(part->mShape.get())->getRadius());
+                    distance = surfaceDistance * surfaceDistance;
+                    break;
+                }
+                default:
+                    break;
+            }
             if (distance < nearestDistance)
             {
                 nearestDistance = distance;
@@ -909,7 +1046,7 @@ namespace MWPhysics
             }
         }
         if (nearest != nullptr)
-            mTaskScheduler->applyImpulse(
+            mTaskScheduler->applyRagdollImpulse(
                 nearest->mBody, Misc::Convert::toBullet(impulse), Misc::Convert::toBullet(point));
     }
 
