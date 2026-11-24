@@ -857,7 +857,9 @@ namespace MWPhysics
         // damage and the original dynamic-object hit handling untouched.
         const osg::Vec3f ray = to - from;
         const float lengthSquared = ray.length2();
-        if (!(lengthSquared > 1e-4f) || !(radius > 0.f))
+        if (!(lengthSquared > 1e-4f) || !std::isfinite(lengthSquared) || !(radius > 0.f)
+            || !std::isfinite(radius) || !std::isfinite(knockVelocity.x())
+            || !std::isfinite(knockVelocity.y()) || !std::isfinite(knockVelocity.z()))
             return false;
 
         Ragdoll* nearest = nullptr;
