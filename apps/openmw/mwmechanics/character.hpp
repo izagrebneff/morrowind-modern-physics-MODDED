@@ -2,6 +2,7 @@
 #define GAME_MWMECHANICS_CHARACTER_HPP
 
 #include <deque>
+#include <optional>
 
 #include <components/esm3/loadweap.hpp>
 
@@ -181,6 +182,7 @@ namespace MWMechanics
         MWWorld::Ptr mAttackVictim;
         osg::Vec3f mAttackHitPos;
         bool mAttackSuccess{ false };
+        std::optional<float> mAttackHandStartRight; // attacking hand x relative to actor when wind-up began
 
         bool mSkipAnim{ false };
 
@@ -259,6 +261,8 @@ namespace MWMechanics
         std::string_view getDesiredAttackType() const;
 
         void prepareHit();
+        std::optional<float> getAttackHandRight() const;
+        void performMeleeHit(int attackType);
 
         void unpersistAnimationState();
 

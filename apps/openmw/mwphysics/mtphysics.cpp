@@ -1,4 +1,7 @@
 #include "mtphysics.hpp"
+#include "ragdollkick.hpp"
+#include "brutalragdollstep.hpp"
+#include "ragdollstep.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -836,9 +839,37 @@ namespace MWPhysics
         mDynamicsWorld->addAction(action);
     }
 
+    void PhysicsTaskScheduler::configureBrutalRagdollAction(
+        BrutalRagdollStep* action, bool neutralPose, bool selfCollision, bool enabled)
+    {
+        MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
+        RagdollControlConfig config;
+        config.enabled = enabled;
+        config.softStops = true;
+        config.neutralPose = neutralPose;
+        // The procedural creature skeleton does not use Brutal's authored
+        // humanoid limb index map (3/5/7/9). Keep anatomical responses for
+        // eleven-part NPCs only; creature soft stops remain fully enabled.
+        config.limbResponse = neutralPose;
+        config.selfCollision = selfCollision;
+        // Original fork's existing buoyancy controller remains authoritative.
+        config.waterEnabled = false;
+        static_cast<RagdollStepAction*>(action)->configure(config, mCollisionWorld);
+    }
+
+    void PhysicsTaskScheduler::addBrutalRagdollAction(BrutalRagdollStep* action)
+    {
+        MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
+        mBrutalRagdollActions.push_back(action);
+        mDynamicsWorld->addAction(action);
+    }
+
     void PhysicsTaskScheduler::removeAction(btActionInterface* action)
     {
         MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
+        std::erase_if(mBrutalRagdollActions, [action](const BrutalRagdollStep* controller) {
+            return controller == action;
+        });
         mDynamicsWorld->removeAction(action);
     }
 
@@ -954,6 +985,51 @@ namespace MWPhysics
         const btVector3 angular = body->getAngularVelocity();
         if (angular.length2() > maxAngularSpeed * maxAngularSpeed)
             body->setAngularVelocity(angular * (maxAngularSpeed / angular.length()));
+    }
+
+    bool PhysicsTaskScheduler::applyBrutalRagdollKick(BrutalRagdollStep* controller,
+        const std::vector<btRigidBody*>& bodies, size_t hitPart,
+        const btVector3& point, const btVector3& impulse)
+    {
+        MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
+        if (!controller || hitPart >= bodies.size()
+            || !RagdollEnhancement::finite(point) || !RagdollEnhancement::finite(impulse))
+            return false;
+        btScalar totalMass = 0;
+        for (const btRigidBody* part : bodies)
+        {
+            if (!part || part->getInvMass() <= 0 || !std::isfinite(part->getInvMass()))
+                return false; // Keep frozen corpse parts anchored.
+            totalMass += btScalar(1) / part->getInvMass();
+        }
+        if (!(totalMass > 0) || !std::isfinite(totalMass))
+            return false;
+        constexpr btScalar maxImpulse = 30000.f;
+        btVector3 bounded = impulse;
+        if (bounded.length2() > maxImpulse * maxImpulse)
+            bounded *= maxImpulse / bounded.length();
+
+        // Use the ORIGINAL Brutal RagdollControl::kick transaction, which
+        // calls RagdollKick::prepare AND registers the impact with the
+        // anatomical controller (bounded limb response, duplicate guard).
+        static std::atomic<std::uint64_t> serial{ 0 };
+        const std::uint64_t eventId = ++serial;
+        if (!static_cast<RagdollStepAction*>(controller)->kick(
+                hitPart, point, bounded / totalMass, eventId))
+            return false;
+
+        constexpr btScalar maxSpeed = 2000.f;
+        constexpr btScalar maxAngularSpeed = 40.f;
+        for (btRigidBody* part : bodies)
+        {
+            const btVector3 velocity = part->getLinearVelocity();
+            if (velocity.length2() > maxSpeed * maxSpeed)
+                part->setLinearVelocity(velocity * (maxSpeed / velocity.length()));
+            const btVector3 angular = part->getAngularVelocity();
+            if (angular.length2() > maxAngularSpeed * maxAngularSpeed)
+                part->setAngularVelocity(angular * (maxAngularSpeed / angular.length()));
+        }
+        return true;
     }
 
     bool PhysicsTaskScheduler::applyBrutalObjectImpulse(
@@ -1364,6 +1440,12 @@ namespace MWPhysics
 
         if (mHasWater)
             applyWaterForces(mWaterHeight);
+
+        // Brutal's soft-stop moments must be applied BEFORE each simulation
+        // step. updateAction() happens after the solver and Bullet clears
+        // accumulated forces; a post-step torque is otherwise effectively inert.
+        for (BrutalRagdollStep* action : mBrutalRagdollActions)
+            action->beforeBrutalStep(mPhysicsDt);
 
         // We are already called once per fixed physics step, so no substepping.
         mDynamicsWorld->stepSimulation(mPhysicsDt, 0);

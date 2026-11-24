@@ -1,6 +1,8 @@
 #ifndef GAME_MWMECHANICS_CREATURESTATS_H
 #define GAME_MWMECHANICS_CREATURESTATS_H
 
+#include <algorithm>
+#include <deque>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -67,6 +69,10 @@ namespace MWMechanics
         bool mBlock = false;
         osg::Vec3f mDeathKick; // how the killing blow throws the body
         bool mMagicDeathKick = false; // transient; use a whole-body launch for fatal spells
+        float mMeleeSwingSide = 0.f; // transient: -1 left, +1 right, 0 unknown
+        // The Lua Hit event is queued: preserve one side PER queued melee
+        // event, keyed by attacker, until damage is actually applied.
+        std::deque<std::pair<ESM::RefNum, float>> mPendingMeleeSwingSides;
         std::vector<std::pair<std::string, osg::Matrixf>> mRagdollPose;
         std::vector<StuckProjectile> mStuckProjectiles;
         std::map<ESM::RefId, int> mEmbeddedAmmo;
@@ -250,6 +256,31 @@ namespace MWMechanics
         }
         const osg::Vec3f& getDeathKick() const { return mDeathKick; }
         bool hasMagicDeathKick() const { return mMagicDeathKick; }
+
+        /// Temporary direction of the current attacking animation, valid only
+        /// while the synchronous melee-hit event is being dispatched.
+        void setMeleeSwingSide(float side) { mMeleeSwingSide = std::clamp(side, -1.f, 1.f); }
+        float getMeleeSwingSide() const { return mMeleeSwingSide; }
+
+        void queueMeleeSwingSide(const ESM::RefNum& attackerId, float side)
+        {
+            // Bound history for hits prevented/consumed by Lua scripts.
+            constexpr size_t maxPending = 16;
+            if (mPendingMeleeSwingSides.size() >= maxPending)
+                mPendingMeleeSwingSides.pop_front();
+            mPendingMeleeSwingSides.emplace_back(attackerId, std::clamp(side, -1.f, 1.f));
+        }
+
+        float consumeMeleeSwingSide(const ESM::RefNum& attackerId)
+        {
+            const auto found = std::find_if(mPendingMeleeSwingSides.begin(), mPendingMeleeSwingSides.end(),
+                [&](const auto& event) { return event.first == attackerId; });
+            if (found == mPendingMeleeSwingSides.end())
+                return 0.f;
+            const float side = found->second;
+            mPendingMeleeSwingSides.erase(found);
+            return side;
+        }
 
         /// Where a dead body's ragdoll bones lie (world matrices; so it lies the same after loading, or coming back
         /// to it). Parents first.

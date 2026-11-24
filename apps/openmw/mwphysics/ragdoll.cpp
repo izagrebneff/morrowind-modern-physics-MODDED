@@ -23,6 +23,9 @@
 #include "../mwworld/class.hpp"
 
 #include "collisiontype.hpp"
+#include "ragdollenhancement.hpp"
+#include "ragdollcontrol.hpp"
+#include "ragdollneutral.hpp"
 #include "mtphysics.hpp"
 
 namespace MWPhysics
@@ -64,37 +67,9 @@ namespace MWPhysics
         btTransform mPreviousTransform;
     };
 
-    // Friction in the joints: each step, some of the way jointed parts turn relative to each other is taken out.
-    // Without it a body collapses like a sack of liquid; with it, limbs still flop but settle instead of sloshing.
-    class JointFriction final : public btActionInterface
-    {
-    public:
-        std::vector<std::pair<btRigidBody*, btRigidBody*>> mPairs;
-
-        void updateAction(btCollisionWorld*, btScalar timeStep) override
-        {
-            constexpr btScalar rate = 14; // per second: about a fifth of the turning gone each step at 60 Hz
-            const btScalar fraction = 1 - std::exp(-rate * timeStep);
-            for (const auto& [a, b] : mPairs)
-            {
-                if (!a->isActive() && !b->isActive())
-                    continue;
-                const btVector3 relative = b->getAngularVelocity() - a->getAngularVelocity();
-                if (relative.length2() < 1e-4f)
-                    continue;
-                // The lighter part gives more.
-                const btScalar massA = a->getInvMass() > 0 ? 1 / a->getInvMass() : 0;
-                const btScalar massB = b->getInvMass() > 0 ? 1 / b->getInvMass() : 0;
-                if (massA + massB <= 0)
-                    continue;
-                const btVector3 change = relative * fraction;
-                a->setAngularVelocity(a->getAngularVelocity() + change * (massB / (massA + massB)));
-                b->setAngularVelocity(b->getAngularVelocity() - change * (massA / (massA + massB)));
-            }
-        }
-
-        void debugDraw(btIDebugDraw*) override {}
-    };
+    // JointFriction is now the complete original Brutal Morrowind controller
+    // from ragdollcontrol.hpp, with anatomical torque, soft stops, joint
+    // collision gating and impact response. No fork-local duplicate remains.
 
     // Restrict the descent of dead flyers, never living creatures. In the
     // previous working build this was the profile used for netches/cliff racers.
@@ -261,7 +236,7 @@ namespace MWPhysics
         : mTaskScheduler(scheduler)
     {
         const auto position = [&](std::string_view bone) { return bones.find(bone)->second.getTrans(); };
-        const FatalImpact impact(actor, velocity, kick, true);
+        const FatalImpact impact(actor, velocity, osg::Vec3f(), true);
         const btVector3 pivot = Misc::Convert::toBullet(position("Bip01 Pelvis"));
 
         for (const PartDef& def : sPartDefs)
@@ -315,6 +290,16 @@ namespace MWPhysics
                 addJoint(def.mParent, i, position(def.mBone), def.mSwing1, def.mSwing2, def.mTwist);
         }
         addJointFriction();
+
+        // The lethal hit now uses the ORIGINAL Brutal mass-balanced contact
+        // kick, not the fork's independent per-limb starting velocities.
+        // Motion from walking/falling and animation remains inherited above.
+        if (kick.length2() > 1.f)
+        {
+            const bool magic = actor.getClass().getCreatureStats(actor).hasMagicDeathKick();
+            const float share = magic ? 1.f : 0.62f;
+            strike(position("Bip01 Spine1"), kick * (getMass() * share));
+        }
     }
 
     Ragdoll::Ragdoll(const MWWorld::Ptr& actor, const btTransform& bodyWorld, const osg::Vec3f& halfExtents,
@@ -427,7 +412,7 @@ namespace MWPhysics
         for (size_t i = 0; i < chosen.size(); ++i)
             if (parentPart(chosen[i]) < 0 && bones[chosen[i]].mRadius > bones[chosen[root]].mRadius)
                 root = static_cast<int>(i);
-        const FatalImpact impact(actor, velocity, kick, false);
+        const FatalImpact impact(actor, velocity, osg::Vec3f(), false);
         const btVector3 pivot = ragdoll->mParts[static_cast<size_t>(root)]->mBody->getWorldTransform().getOrigin();
         for (const auto& part : ragdoll->mParts)
             impact.apply(*part->mBody, pivot);
@@ -443,6 +428,8 @@ namespace MWPhysics
         }
         ragdoll->mMainPartIndex = static_cast<size_t>(root);
         ragdoll->addJointFriction();
+        if (kick.length2() > 1.f)
+            ragdoll->strike(Misc::Convert::toOsg(pivot), kick * (ragdoll->getMass() * 0.62f));
 
         // Bind every original skinned bone to the nearest simulated ancestor.
         // Skipping tiny wing bones caused insect skins to stretch away from
@@ -672,7 +659,7 @@ namespace MWPhysics
         btVector3 childAxis = childWorld.getBasis() * btVector3(0, 1, 0);
         const btTransform jointWorld(
             shortestArcQuat(btVector3(1, 0, 0), childAxis), Misc::Convert::toBullet(position));
-        auto joint = std::make_unique<btConeTwistConstraint>(
+        auto joint = std::make_unique<RagdollEnhancement::ConeTwist>(
             parent, child, parent.getWorldTransform().inverse() * jointWorld, childWorld.inverse() * jointWorld);
         // Firm limits (little give, quickly corrected), so joints don't stretch.
         const float flyingScale = mFlyingCorpse ? 1.4f : 1.f;
@@ -690,15 +677,96 @@ namespace MWPhysics
         joint->setOverrideNumSolverIterations(jointSolverIterations);
         mTaskScheduler->addConstraint(joint.get());
         mJoints.push_back(std::move(joint));
+        mJointParentChildren.emplace_back(parentIndex, childIndex);
     }
 
     void Ragdoll::addJointFriction()
     {
-        auto friction = std::make_unique<JointFriction>();
-        for (const auto& joint : mJoints)
-            friction->mPairs.emplace_back(&joint->getRigidBodyA(), &joint->getRigidBodyB());
-        mJointFriction = std::move(friction);
-        mTaskScheduler->addAction(mJointFriction.get());
+        auto controller = std::make_unique<JointFriction>();
+        const bool anatomical = mParts.size() == 11
+            && mParts.front()->mBone == "Bip01 Pelvis"
+            && mParts[1]->mBone == "Bip01 Spine1";
+
+        for (const auto& part : mParts)
+        {
+            controller->mBodies.push_back(part->mBody);
+            controller->mWaterBodies.emplace_back(part->mBody, part->mRelativeDensity);
+        }
+
+        const RagdollNeutralProfile authoredPose;
+        constexpr btScalar gradientBounds[] = { 0, 13, 12, 13, 20, 13, 20, 14, 20, 14, 20 };
+        for (size_t i = 0; i < mJoints.size() && i < mJointParentChildren.size(); ++i)
+        {
+            auto* joint = static_cast<RagdollEnhancement::ConeTwist*>(mJoints[i].get());
+            const auto [parentIndex, childIndex] = mJointParentChildren[i];
+            // btTypedConstraint exposes const bodies in this Bullet version.
+            // The ragdoll owns the mutable bodies through its Part objects.
+            if (parentIndex >= mParts.size() || childIndex >= mParts.size())
+                continue;
+            btRigidBody& parent = *mParts[parentIndex]->mBody;
+            btRigidBody& child = *mParts[childIndex]->mBody;
+            controller->mPairs.emplace_back(&parent, &child);
+            if (parentIndex >= mParts.size() || childIndex >= mParts.size()
+                || parent.getInvMass() <= 0 || child.getInvMass() <= 0)
+                continue;
+
+            RagdollJointControl control;
+            control.joint = joint;
+            control.parent = parentIndex;
+            control.child = childIndex;
+            control.baselineA = joint->getAFrame();
+            control.baselineB = joint->getBFrame();
+            control.enhancedA = control.baselineA;
+            control.enhancedB = control.baselineB;
+            control.baselineSpans = btVector3(joint->getSwingSpan1(),
+                joint->getSwingSpan2(), joint->getTwistSpan());
+            control.enhancedSpans = control.baselineSpans;
+            control.neutral = btQuaternion(0, 0, 0, 1);
+
+            if (anatomical)
+            {
+                if (childIndex == 3 || childIndex == 5)
+                    control.enhancedSpans.setY(btRadians(55));
+                const btQuaternion boneParent = mParts[parentIndex]->mBoneFromBody.getRotation();
+                const btQuaternion boneChild = mParts[childIndex]->mBoneFromBody.getRotation();
+                const btQuaternion neutralParent = authoredPose.neutral[parentIndex] * boneParent.inverse();
+                control.enhancedA = btTransform(
+                    neutralParent.inverse() * authoredPose.limitCenter[childIndex],
+                    control.baselineA.getOrigin());
+                control.enhancedB = btTransform(boneChild, control.baselineB.getOrigin());
+                control.neutral = authoredPose.limitCenter[childIndex].inverse()
+                    * authoredPose.neutral[childIndex];
+            }
+
+            const btVector3 axis = child.getWorldTransform().getBasis().getColumn(2);
+            const btScalar inertia = RagdollEnhancement::effectiveInertia(parent, child, axis);
+            const btScalar mass = 1 / child.getInvMass();
+            const btScalar lever = btMax(btScalar(8),
+                (child.getWorldTransform().getBasis() * control.baselineB.getOrigin()).length());
+            const btScalar gravityTorque = mass * btScalar(627.2) * lever;
+            const btScalar gradient = anatomical ? gradientBounds[childIndex] : btScalar(20);
+            control.soft = { btRadians(12), gravityTorque * btScalar(.5) / gradient,
+                inertia * btScalar(60), gravityTorque, false };
+            const btScalar frequency = btScalar(.55) * SIMD_2_PI;
+            control.tone = { inertia * frequency * frequency, 4 * inertia * frequency,
+                gravityTorque * btScalar(.06), gravityTorque * btScalar(.30) };
+            controller->mLinks.push_back(control);
+        }
+
+        // The full controller changes the collision filters and joint limits
+        // while the scheduler holds its physics-world mutex. If a modded rig
+        // violates anatomical limits, use Brutal's baseline fallback safely.
+        try
+        {
+            mTaskScheduler->configureBrutalRagdollAction(controller.get(), anatomical,
+                !mDisableInternalCollision && !mFlyingCorpse, true);
+        }
+        catch (...)
+        {
+            mTaskScheduler->configureBrutalRagdollAction(controller.get(), false, false, false);
+        }
+        mJointFriction = std::move(controller);
+        mTaskScheduler->addBrutalRagdollAction(static_cast<BrutalRagdollStep*>(mJointFriction.get()));
     }
 
     std::optional<osg::Vec3f> Ragdoll::getActorPosition(const osg::Vec3f& actorPosition)
@@ -997,9 +1065,11 @@ namespace MWPhysics
         if (!finiteVec(point) || !finiteVec(impulse))
             return;
         Part* nearest = nullptr;
+        size_t nearestIndex = 0;
         float nearestDistance = std::numeric_limits<float>::max();
-        for (const auto& part : mParts)
+        for (size_t i = 0; i < mParts.size(); ++i)
         {
+            const auto& part = mParts[i];
             btTransform bodyWorld;
             part->mMotionState->getWorldTransform(bodyWorld);
             // Choose the part whose *collision surface* is closest to the hit,
@@ -1043,11 +1113,31 @@ namespace MWPhysics
             {
                 nearestDistance = distance;
                 nearest = part.get();
+                nearestIndex = i;
             }
         }
         if (nearest != nullptr)
+        {
+            // Brutal Morrowind's native whole-body kick, not the old fork's
+            // single-limb impulse. Give every connected limb its share of the
+            // common momentum; keep one small local hit for articulation.
+            if (!mJoints.empty())
+            {
+                std::vector<btRigidBody*> bodies;
+                bodies.reserve(mParts.size());
+                for (const auto& part : mParts)
+                    bodies.push_back(part->mBody);
+                if (mTaskScheduler->applyBrutalRagdollKick(
+                        static_cast<BrutalRagdollStep*>(mJointFriction.get()),
+                        bodies, nearestIndex, Misc::Convert::toBullet(point),
+                        Misc::Convert::toBullet(impulse)))
+                    return;
+            }
+            // Unjointed bodies and bodies awaiting physics activation retain
+            // the original safe local impulse path.
             mTaskScheduler->applyRagdollImpulse(
                 nearest->mBody, Misc::Convert::toBullet(impulse), Misc::Convert::toBullet(point));
+        }
     }
 
     std::vector<std::shared_ptr<PtrHolder>> Ragdoll::getParts() const

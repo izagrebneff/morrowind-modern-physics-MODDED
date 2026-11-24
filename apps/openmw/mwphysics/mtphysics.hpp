@@ -78,6 +78,9 @@ namespace MWPhysics
         void removeConstraint(btTypedConstraint* constraint);
         /// Something run every simulation step (inside it, with the world locked).
         void addAction(btActionInterface* action);
+        void addBrutalRagdollAction(class BrutalRagdollStep* action);
+        void configureBrutalRagdollAction(class BrutalRagdollStep* action,
+            bool neutralPose, bool selfCollision, bool enabled);
         void removeAction(btActionInterface* action);
         /// Stop a body and put it to sleep.
         void setAtRest(btRigidBody* body);
@@ -94,6 +97,10 @@ namespace MWPhysics
         /// Apply a corpse hit at its world-space contact and bound pathological speeds.
         /// Keeps the physics-world lock around both the impulse and the velocity guard.
         void applyRagdollImpulse(btRigidBody* body, const btVector3& impulse, const btVector3& point);
+        /// Brutal Morrowind distributes each hit through the articulated body.
+        bool applyBrutalRagdollKick(class BrutalRagdollStep* controller,
+            const std::vector<btRigidBody*>& bodies, size_t hitPart,
+            const btVector3& point, const btVector3& impulse);
 
         // Brutal Morrowind: apply additive, speed-limited central impulse to a
         // dynamic prop. Do not disturb held or embedded objects.
@@ -209,6 +216,7 @@ namespace MWPhysics
         float mTimeAccum;
         btCollisionWorld* mCollisionWorld;
         btDiscreteDynamicsWorld* mDynamicsWorld; // same object as mCollisionWorld
+        std::vector<class BrutalRagdollStep*> mBrutalRagdollActions;
         int mNumRigidBodies = 0;
         std::atomic<bool> mHasWater{ false };
         std::atomic<float> mWaterHeight{ 0.f };

@@ -601,7 +601,8 @@ namespace MWClass
         float damage = 0.0f;
         if (!success)
         {
-            MWBase::Environment::get().getLuaManager()->onHit(ptr, victim, weapon, MWWorld::Ptr(), type, attackStrength,
+            MWMechanics::queueMeleeSwingForHit(ptr, victim);
+        MWBase::Environment::get().getLuaManager()->onHit(ptr, victim, weapon, MWWorld::Ptr(), type, attackStrength,
                 attackWindUp, damage, false, hitPosition, false, MWMechanics::DamageSourceType::Melee);
             MWMechanics::reduceWeaponCondition(damage, false, weapon, ptr);
             MWMechanics::resistNormalWeapon(victim, ptr, weapon, damage);
@@ -675,7 +676,8 @@ namespace MWClass
 
         MWMechanics::diseaseContact(victim, ptr);
 
-        MWBase::Environment::get().getLuaManager()->onHit(ptr, victim, weapon, MWWorld::Ptr(), type, attackStrength,
+        MWMechanics::queueMeleeSwingForHit(ptr, victim);
+            MWBase::Environment::get().getLuaManager()->onHit(ptr, victim, weapon, MWWorld::Ptr(), type, attackStrength,
             attackWindUp, damage, healthdmg, hitPosition, true, MWMechanics::DamageSourceType::Melee);
     }
 
@@ -683,6 +685,9 @@ namespace MWClass
         const MWWorld::Ptr& attacker, bool successful, const MWMechanics::DamageSourceType sourceType) const
     {
         MWMechanics::CreatureStats& stats = getCreatureStats(ptr);
+        const float lethalSwingSide
+            = sourceType == MWMechanics::DamageSourceType::Melee && !attacker.isEmpty()
+            ? stats.consumeMeleeSwingSide(attacker.getCellRef().getRefNum()) : 0.f;
         bool wasDead = stats.isDead();
 
         bool setOnPcHitMe = true;
@@ -791,14 +796,11 @@ namespace MWClass
             // within reason.
             if (!attacker.isEmpty() && hasHealthDamage)
             {
-                osg::Vec3f away
-                    = ptr.getRefData().getPosition().asVec3() - attacker.getRefData().getPosition().asVec3();
-                away.z() = 0;
-                if (away.normalize() > 0)
-                {
-                    // Horizontal fatal impact; tipping is produced by the ragdoll, not an upward kick.
-                    stats.setDeathKick(away * std::clamp(120.f + healthDamage * 4.f, 140.f, 280.f));
-                }
+                const osg::Vec3f direction = MWMechanics::getDeathKnockDirection(
+                    attacker, ptr, sourceType == MWMechanics::DamageSourceType::Melee, lethalSwingSide);
+                // The lethal melee impulse follows the attacker's real left
+                // or right hand swing; spells/ranged impacts keep radial push.
+                stats.setDeathKick(direction * std::clamp(120.f + healthDamage * 4.f, 140.f, 280.f));
             }
 
             // NPC was killed

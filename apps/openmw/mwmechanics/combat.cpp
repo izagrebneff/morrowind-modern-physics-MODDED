@@ -2,6 +2,7 @@
 #include "combat.hpp"
 
 #include <array>
+#include <cmath>
 
 #include <components/misc/rng.hpp>
 #include <components/settings/values.hpp>
@@ -46,6 +47,44 @@ namespace
 
 namespace MWMechanics
 {
+    void queueMeleeSwingForHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim)
+    {
+        if (attacker.isEmpty() || victim.isEmpty())
+            return;
+        const float side = attacker.getClass().getCreatureStats(attacker).getMeleeSwingSide();
+        victim.getClass().getCreatureStats(victim).queueMeleeSwingSide(
+            attacker.getCellRef().getRefNum(), side);
+    }
+
+    osg::Vec3f getDeathKnockDirection(
+        const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, bool melee, float swingSide)
+    {
+        osg::Vec3f away = victim.getRefData().getPosition().asVec3()
+            - attacker.getRefData().getPosition().asVec3();
+        away.z() = 0.f;
+        if (away.normalize() <= 1e-4f)
+        {
+            const float yaw = attacker.getRefData().getPosition().rot[2];
+            away.set(std::sin(yaw), std::cos(yaw), 0.f);
+        }
+        if (!melee)
+            return away;
+
+        const float side = swingSide;
+        if (!std::isfinite(side) || std::abs(side) <= 0.1f)
+            return away;
+
+        const float yaw = attacker.getRefData().getPosition().rot[2];
+        const osg::Vec3f right(std::cos(yaw), -std::sin(yaw), 0.f);
+        // The lateral component deliberately dominates a side slash:
+        // left-to-right sends the body right and vice versa. Retain a
+        // smaller forward component so the corpse doesn't fly into the blade.
+        osg::Vec3f direction = away * 0.35f + right * (side * 0.94f);
+        direction.z() = 0.f;
+        if (direction.normalize() <= 1e-4f)
+            return away;
+        return direction;
+    }
 
     bool applyOnStrikeEnchantment(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, const MWWorld::Ptr& object,
         const osg::Vec3f& hitPosition, const bool fromProjectile)
