@@ -440,12 +440,9 @@ namespace MWClass
         const auto health = damages.find("health");
         if (wasAlive && stats.isDead() && !attacker.isEmpty() && health != damages.end() && health->second >= 0.001f)
         {
-            osg::Vec3f away = ptr.getRefData().getPosition().asVec3() - attacker.getRefData().getPosition().asVec3();
-            away.z() = 0;
-            if (away.normalize() > 0)
-            {
-                stats.setDeathKick(away * std::clamp(120.f + health->second * 4.f, 140.f, 280.f));
-            }
+            const osg::Vec3f direction = MWMechanics::getDeathKnockDirection(
+                attacker, ptr, sourceType == MWMechanics::DamageSourceType::Melee);
+            stats.setDeathKick(direction * std::clamp(120.f + health->second * 4.f, 140.f, 280.f));
         }
     }
 
