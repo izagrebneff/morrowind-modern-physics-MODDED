@@ -313,7 +313,7 @@ namespace MWPhysics
         : mTaskScheduler(scheduler)
     {
         const auto position = [&](std::string_view bone) { return bones.find(bone)->second.getTrans(); };
-        const FatalImpact impact(actor, velocity, kick, true);
+        const FatalImpact impact(actor, velocity, osg::Vec3f(), true);
         const btVector3 pivot = Misc::Convert::toBullet(position("Bip01 Pelvis"));
 
         for (const PartDef& def : sPartDefs)
@@ -367,6 +367,16 @@ namespace MWPhysics
                 addJoint(def.mParent, i, position(def.mBone), def.mSwing1, def.mSwing2, def.mTwist);
         }
         addJointFriction();
+
+        // The lethal hit now uses the ORIGINAL Brutal mass-balanced contact
+        // kick, not the fork's independent per-limb starting velocities.
+        // Motion from walking/falling and animation remains inherited above.
+        if (kick.length2() > 1.f)
+        {
+            const bool magic = actor.getClass().getCreatureStats(actor).hasMagicDeathKick();
+            const float share = magic ? 1.f : 0.62f;
+            strike(position("Bip01 Spine1"), kick * (getMass() * share));
+        }
     }
 
     Ragdoll::Ragdoll(const MWWorld::Ptr& actor, const btTransform& bodyWorld, const osg::Vec3f& halfExtents,
@@ -479,7 +489,7 @@ namespace MWPhysics
         for (size_t i = 0; i < chosen.size(); ++i)
             if (parentPart(chosen[i]) < 0 && bones[chosen[i]].mRadius > bones[chosen[root]].mRadius)
                 root = static_cast<int>(i);
-        const FatalImpact impact(actor, velocity, kick, false);
+        const FatalImpact impact(actor, velocity, osg::Vec3f(), false);
         const btVector3 pivot = ragdoll->mParts[static_cast<size_t>(root)]->mBody->getWorldTransform().getOrigin();
         for (const auto& part : ragdoll->mParts)
             impact.apply(*part->mBody, pivot);
@@ -495,6 +505,8 @@ namespace MWPhysics
         }
         ragdoll->mMainPartIndex = static_cast<size_t>(root);
         ragdoll->addJointFriction();
+        if (kick.length2() > 1.f)
+            ragdoll->strike(Misc::Convert::toOsg(pivot), kick * (ragdoll->getMass() * 0.62f));
 
         // Bind every original skinned bone to the nearest simulated ancestor.
         // Skipping tiny wing bones caused insect skins to stretch away from
