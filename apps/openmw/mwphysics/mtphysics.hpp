@@ -79,6 +79,8 @@ namespace MWPhysics
         /// Something run every simulation step (inside it, with the world locked).
         void addAction(btActionInterface* action);
         void addBrutalRagdollAction(class BrutalRagdollStep* action);
+        void configureBrutalRagdollAction(class BrutalRagdollStep* action,
+            bool neutralPose, bool selfCollision, bool enabled);
         void removeAction(btActionInterface* action);
         /// Stop a body and put it to sleep.
         void setAtRest(btRigidBody* body);
