@@ -699,8 +699,12 @@ namespace MWPhysics
         {
             auto* joint = static_cast<RagdollEnhancement::ConeTwist*>(mJoints[i].get());
             const auto [parentIndex, childIndex] = mJointParentChildren[i];
-            btRigidBody& parent = joint->getRigidBodyA();
-            btRigidBody& child = joint->getRigidBodyB();
+            // btTypedConstraint exposes const bodies in this Bullet version.
+            // The ragdoll owns the mutable bodies through its Part objects.
+            if (parentIndex >= mParts.size() || childIndex >= mParts.size())
+                continue;
+            btRigidBody& parent = *mParts[parentIndex]->mBody;
+            btRigidBody& child = *mParts[childIndex]->mBody;
             controller->mPairs.emplace_back(&parent, &child);
             if (parentIndex >= mParts.size() || childIndex >= mParts.size()
                 || parent.getInvMass() <= 0 || child.getInvMass() <= 0)
