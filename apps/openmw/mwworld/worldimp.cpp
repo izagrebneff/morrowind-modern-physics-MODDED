@@ -1705,9 +1705,15 @@ namespace MWWorld
             ++knocked;
         }
 
-        // Nothing loose in the way either: maybe the swing meets a wall, the ground or furniture. A sound only.
-        if (knocked == 0)
-            meleeHitWorld(attacker, weapon, isPlayer ? view : forward, eye, reach + bodyRadius, attackStrength);
+        // Give simulated corpses physical melee knockback, without changing
+        // damage, animations, or the original prop strike handling.
+        const osg::Vec3f swingDirection = isPlayer ? view : forward;
+        const bool ragdollHit = mPhysics->strikeRagdollAlongSwing(
+            eye, eye + swingDirection * (reach + bodyRadius), 38.f, knock * swingSpeed);
+
+        // Nothing loose or simulated in the way: sound for a wall or furniture.
+        if (knocked == 0 && !ragdollHit)
+            meleeHitWorld(attacker, weapon, swingDirection, eye, reach + bodyRadius, attackStrength);
     }
 
     void World::meleeHitWorld(const MWWorld::Ptr& attacker, const MWWorld::Ptr& weapon, osg::Vec3f direction,
