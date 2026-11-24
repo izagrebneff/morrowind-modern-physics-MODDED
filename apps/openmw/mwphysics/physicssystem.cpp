@@ -841,6 +841,26 @@ namespace MWPhysics
         return mRagdolls.find(actor.mRef) != mRagdolls.end();
     }
 
+    bool PhysicsSystem::detachNpcRagdollHead(
+        const MWWorld::Ptr& actor, const osg::Vec3f& cutVelocity)
+    {
+        if (actor.isEmpty() || !actor.getClass().isNpc()
+            || !actor.getClass().getCreatureStats(actor).isDead())
+            return false;
+        const auto found = mRagdolls.find(actor.mRef);
+        return found != mRagdolls.end() && found->second->detachHead(cutVelocity);
+    }
+
+    bool PhysicsSystem::detachNpcRagdollLimbs(
+        const MWWorld::Ptr& actor, unsigned mask, const osg::Vec3f& cutVelocity)
+    {
+        if (actor.isEmpty() || !actor.getClass().isNpc()
+            || !actor.getClass().getCreatureStats(actor).isDead())
+            return false;
+        const auto found = mRagdolls.find(actor.mRef);
+        return found != mRagdolls.end() && found->second->detachLimbs(mask, cutVelocity);
+    }
+
     bool PhysicsSystem::strikeRagdoll(const MWWorld::ConstPtr& actor, const osg::Vec3f& point, const osg::Vec3f& impulse)
     {
         const auto found = mRagdolls.find(actor.mRef);
