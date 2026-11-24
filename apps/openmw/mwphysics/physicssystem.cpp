@@ -1158,6 +1158,16 @@ namespace MWPhysics
             // Bodies centered on an explosion still need a well-defined push.
             if (distance < 1e-3f)
                 away.set(0.f, 0.f, 1.f);
+
+            // Only the terrain, static world and doors can shield a corpse.
+            // Filtering out actors, loose props and the corpse's own parts
+            // avoids incorrectly blocking otherwise exposed bodies.
+            constexpr int explosionOccluders
+                = CollisionType_World | CollisionType_Door | CollisionType_HeightMap;
+            if (distance > 1e-3f
+                && castRay(center, *target, {}, {}, explosionOccluders, CollisionType_Actor).mHit)
+                continue;
+
             away.z() += 0.5f;
             away.normalize();
             const float falloff = 1.f - distance / radius;
