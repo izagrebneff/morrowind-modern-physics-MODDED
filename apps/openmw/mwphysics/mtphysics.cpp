@@ -2,6 +2,7 @@
 #include "ragdollkick.hpp"
 #include "brutalragdollstep.hpp"
 #include "ragdollstep.hpp"
+#include "ragdollcontrol.hpp"
 
 #include <algorithm>
 #include <cassert>
