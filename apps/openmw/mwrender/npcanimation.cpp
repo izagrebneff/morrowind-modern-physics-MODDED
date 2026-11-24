@@ -330,6 +330,12 @@ namespace MWRender
                 return false;
             }
 
+            // Shader/material compilation is necessary for procedural meshes
+            // in OpenMW 0.52, especially when the original skin uses custom
+            // shaders. Do it before altering visibility or touching Bullet.
+            mResourceSystem->getSceneManager()->recreateShaders(cut->lower);
+            mResourceSystem->getSceneManager()->recreateShaders(cut->upper);
+
             // All geometry allocation and validation precedes any mutation.
             if (!neckNode->second->addChild(cut->lower))
                 return false;
