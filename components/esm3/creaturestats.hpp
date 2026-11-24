@@ -97,6 +97,9 @@ namespace ESM
             std::array<float, 8> mPose;
         };
         std::vector<RagdollBone> mRagdoll;
+        // Serialized once after the visual+physical head cut commits.
+        // Distinct from transient rolls to prevent rerolls on loading.
+        bool mBrutalHeadSevered = false;
 
         /// A projectile stuck in the body, as shown: what it is, the bone it is in and where on that bone (a 4x4
         /// matrix, row by row).
