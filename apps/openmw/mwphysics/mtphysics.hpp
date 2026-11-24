@@ -78,6 +78,7 @@ namespace MWPhysics
         void removeConstraint(btTypedConstraint* constraint);
         /// Something run every simulation step (inside it, with the world locked).
         void addAction(btActionInterface* action);
+        void addBrutalRagdollAction(class BrutalRagdollStep* action);
         void removeAction(btActionInterface* action);
         /// Stop a body and put it to sleep.
         void setAtRest(btRigidBody* body);
@@ -212,6 +213,7 @@ namespace MWPhysics
         float mTimeAccum;
         btCollisionWorld* mCollisionWorld;
         btDiscreteDynamicsWorld* mDynamicsWorld; // same object as mCollisionWorld
+        std::vector<class BrutalRagdollStep*> mBrutalRagdollActions;
         int mNumRigidBodies = 0;
         std::atomic<bool> mHasWater{ false };
         std::atomic<float> mWaterHeight{ 0.f };
