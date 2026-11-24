@@ -207,6 +207,11 @@ namespace ESM
 
         mBrutalHeadSevered = false;
         esm.getHNOT(mBrutalHeadSevered, "BHD1");
+        mBrutalSeveredLimbsMask = 0;
+        esm.getHNOT(mBrutalSeveredLimbsMask, "BLM1");
+        if (mBrutalSeveredLimbsMask != 1u && mBrutalSeveredLimbsMask != 2u
+            && mBrutalSeveredLimbsMask != 4u && mBrutalSeveredLimbsMask != 8u)
+            mBrutalSeveredLimbsMask = 0;
 
         mStuckProjectiles.clear();
         while (esm.isNextSub("STKA"))
@@ -340,6 +345,8 @@ namespace ESM
 
         if (mBrutalHeadSevered)
             esm.writeHNT("BHD1", mBrutalHeadSevered);
+        if (mBrutalSeveredLimbsMask)
+            esm.writeHNT("BLM1", mBrutalSeveredLimbsMask);
 
         for (const StuckProjectile& projectile : mStuckProjectiles)
         {
@@ -379,6 +386,7 @@ namespace ESM
         mDrawState = 0;
         mRagdoll.clear();
         mBrutalHeadSevered = false;
+        mBrutalSeveredLimbsMask = 0;
         mStuckProjectiles.clear();
         mEmbeddedAmmo.clear();
         mDeathAnimation = -1;
