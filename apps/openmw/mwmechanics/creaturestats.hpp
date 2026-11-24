@@ -67,6 +67,7 @@ namespace MWMechanics
         bool mBlock = false;
         osg::Vec3f mDeathKick; // how the killing blow throws the body
         bool mMagicDeathKick = false; // transient; use a whole-body launch for fatal spells
+        float mMeleeSwingSide = 0.f; // transient: -1 left, +1 right, 0 unknown
         std::vector<std::pair<std::string, osg::Matrixf>> mRagdollPose;
         std::vector<StuckProjectile> mStuckProjectiles;
         std::map<ESM::RefId, int> mEmbeddedAmmo;
@@ -250,6 +251,11 @@ namespace MWMechanics
         }
         const osg::Vec3f& getDeathKick() const { return mDeathKick; }
         bool hasMagicDeathKick() const { return mMagicDeathKick; }
+
+        /// Temporary direction of the current attacking animation, valid only
+        /// while the synchronous melee-hit event is being dispatched.
+        void setMeleeSwingSide(float side) { mMeleeSwingSide = std::clamp(side, -1.f, 1.f); }
+        float getMeleeSwingSide() const { return mMeleeSwingSide; }
 
         /// Where a dead body's ragdoll bones lie (world matrices; so it lies the same after loading, or coming back
         /// to it). Parents first.
