@@ -798,6 +798,7 @@ namespace MWClass
             // crossbows and thrown weapons. Unarmed/creature natural attacks
             // and non-weapon scripts are excluded as well.
             stats.setEligibleLethalMeleeDismemberment(false);
+            stats.setBrutalPendingLimbMask(0);
             if (ptr != MWMechanics::getPlayer() && !attacker.isEmpty() && hasHealthDamage
                 && healthDamage > 0.f && sourceType == MWMechanics::DamageSourceType::Melee
                 && !object.empty())
@@ -813,8 +814,17 @@ namespace MWClass
                         if (weaponType && weaponType->mWeaponClass == ESM::WeaponType::Melee)
                         {
                             auto& rng = MWBase::Environment::get().getWorld()->getPrng();
-                            stats.setEligibleLethalMeleeDismemberment(
-                                Misc::Rng::roll0to99(rng) < chance);
+                            if (Misc::Rng::roll0to99(rng) < chance)
+                            {
+                                // Select exactly one cut for this killing blow.
+                                // 0=head, remaining four values are single limbs;
+                                // no random selection is repeated during ragdoll
+                                // construction, equipment changes or save reloads.
+                                constexpr unsigned outcomes[5] = { 0u, 4u, 8u, 1u, 2u };
+                                const unsigned index = Misc::Rng::roll0to99(rng) % 5;
+                                stats.setBrutalPendingLimbMask(outcomes[index]);
+                                stats.setEligibleLethalMeleeDismemberment(true);
+                            }
                         }
                     }
                 }
