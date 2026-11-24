@@ -20,6 +20,7 @@
 #include "character.hpp"
 
 #include <array>
+#include <cmath>
 #include <unordered_set>
 
 #include <components/esm/records.hpp>
@@ -1123,8 +1124,7 @@ namespace MWMechanics
             // and processing multiple hit keys for a single attack
             if (mReadyToHit)
             {
-                charClass.hit(
-                    mPtr, mAttackStrength, mAttackWindUp, attackType, mAttackVictim, mAttackHitPos, mAttackSuccess);
+                performMeleeHit(attackType);
                 mReadyToHit = false;
             }
         }
@@ -1156,14 +1156,11 @@ namespace MWMechanics
                 prepareHit();
 
                 if (groupname == "attack1" || groupname == "swimattack1")
-                    charClass.hit(mPtr, mAttackStrength, mAttackWindUp, ESM::Weapon::AT_Chop, mAttackVictim,
-                        mAttackHitPos, mAttackSuccess);
+                    performMeleeHit(ESM::Weapon::AT_Chop);
                 else if (groupname == "attack2" || groupname == "swimattack2")
-                    charClass.hit(mPtr, mAttackStrength, mAttackWindUp, ESM::Weapon::AT_Slash, mAttackVictim,
-                        mAttackHitPos, mAttackSuccess);
+                    performMeleeHit(ESM::Weapon::AT_Slash);
                 else if (groupname == "attack3" || groupname == "swimattack3")
-                    charClass.hit(mPtr, mAttackStrength, mAttackWindUp, ESM::Weapon::AT_Thrust, mAttackVictim,
-                        mAttackHitPos, mAttackSuccess);
+                    performMeleeHit(ESM::Weapon::AT_Thrust);
             }
         }
         else if (action == "shoot attach")
@@ -1261,6 +1258,50 @@ namespace MWMechanics
 
         return std::clamp(
             (mAnimation->getCurrentTime(mCurrentWeapon) - minAttackTime) / (maxAttackTime - minAttackTime), 0.f, 1.f);
+    }
+
+    std::optional<float> CharacterController::getAttackHandRight() const
+    {
+        if (!mAnimation)
+            return std::nullopt;
+        // A weapon's actual right-hand sweep gives the movement direction;
+        // the start and hit samples are taken relative to the moving actor.
+        auto hand = mAnimation->getBoneWorldMatrix("Bip01 R Hand");
+        if (!hand)
+            hand = mAnimation->getBoneWorldMatrix("Bip01 R Forearm");
+        if (!hand)
+            return std::nullopt;
+
+        const float yaw = mPtr.getRefData().getPosition().rot[2];
+        const osg::Vec3f right(std::cos(yaw), -std::sin(yaw), 0.f);
+        const osg::Vec3f relative = hand->getTrans() - mPtr.getRefData().getPosition().asVec3();
+        if (!std::isfinite(relative.x()) || !std::isfinite(relative.y()))
+            return std::nullopt;
+        return relative * right;
+    }
+
+    void CharacterController::performMeleeHit(int attackType)
+    {
+        // The onHit/death-ragdoll path executes synchronously from hit().
+        // Only publish swing direction for that event; never retain a stale
+        // side for a later spell, projectile, or unrelated incoming hit.
+        auto& stats = mPtr.getClass().getCreatureStats(mPtr);
+        float side = 0.f;
+        if (mAttackHandStartRight)
+            if (const auto current = getAttackHandRight())
+            {
+                const float lateral = *current - *mAttackHandStartRight;
+                if (std::isfinite(lateral) && std::abs(lateral) > 5.f)
+                    side = lateral > 0.f ? 1.f : -1.f;
+            }
+        // Vanilla/modded attack animations without a resolvable hand
+        // trajectory default to the normal right-to-left slash.
+        if (side == 0.f && attackType == ESM::Weapon::AT_Slash)
+            side = -1.f;
+        stats.setMeleeSwingSide(side);
+        mPtr.getClass().hit(mPtr, mAttackStrength, mAttackWindUp, attackType,
+            mAttackVictim, mAttackHitPos, mAttackSuccess);
+        stats.setMeleeSwingSide(0.f);
     }
 
     void CharacterController::prepareHit()
@@ -1726,6 +1767,9 @@ namespace MWMechanics
                     }
 
                     mUpperBodyState = UpperBodyState::AttackWindUp;
+                    // Observe real left/right hand travel throughout this
+                    // animation, for both player and NPC attack controllers.
+                    mAttackHandStartRight = getAttackHandRight();
 
                     // Reset the attack results when the attack starts.
                     // Strictly speaking this should probably be done when the attack ends,
