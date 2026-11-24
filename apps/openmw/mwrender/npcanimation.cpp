@@ -1,4 +1,7 @@
 #include "npcanimation.hpp"
+#include "decapitation.hpp"
+#include <osg/Material>
+#include <cmath>
 
 #include <osg/Depth>
 #include <osg/MatrixTransform>
@@ -262,7 +265,95 @@ namespace MWRender
 
     NpcAnimation::~NpcAnimation()
     {
+        mBrutalHeadCut.reset();
         mAmmunition.reset();
+    }
+
+    bool NpcAnimation::setBrutalHeadSevered(bool severed)
+    {
+        if (!severed)
+        {
+            mBrutalHeadCut.reset();
+            return true;
+        }
+        if (mBrutalHeadCut)
+            return true;
+        if (mViewMode != VM_Normal || mNpcType == Type_Werewolf
+            || mPtr == MWMechanics::getPlayer())
+            return false;
+
+        const auto neck = getBoneWorldMatrix("Bip01 Neck");
+        const auto head = getBoneWorldMatrix("Bip01 Head");
+        const auto& nodes = getNodeMap();
+        const auto neckNode = nodes.find("Bip01 Neck");
+        const auto headNode = nodes.find("Bip01 Head");
+        if (!neck || !head || neckNode == nodes.end() || headNode == nodes.end()
+            || !mObjectParts[ESM::PRT_Neck] || !mObjectParts[ESM::PRT_Head])
+            return false;
+        osg::Vec3f axis = head->getTrans() - neck->getTrans();
+        const float distance = axis.normalize();
+        if (!std::isfinite(distance) || distance <= 0.1f)
+            return false;
+
+        try
+        {
+            const std::function<std::optional<osg::Matrixf>(std::string_view)> pose =
+                [this](std::string_view name) { return getBoneWorldMatrix(name); };
+            std::vector<DecapitationGeometry::Snapshot> snapshots;
+            for (const auto part : { ESM::PRT_Head, ESM::PRT_Hair, ESM::PRT_Neck })
+                if (mObjectParts[part])
+                {
+                    const bool whole = part == ESM::PRT_Hair
+                        || mPartslots[part] == MWWorld::InventoryStore::Slot_Helmet;
+                    DecapitationGeometry::SnapshotVisitor visitor(snapshots, pose,
+                        osg::Matrixf::identity(), whole,
+                        mPartslots[part] == MWWorld::InventoryStore::Slot_Helmet);
+                    visitor.snapshot(mObjectParts[part]->getNode());
+                    if (visitor.failed)
+                        return false;
+                }
+            if (snapshots.empty())
+                return false;
+
+            // Texture-free cap fallback: user-owned Dark Messiah assets are
+            // optional and must never be embedded in a public executable.
+            osg::ref_ptr<osg::Material> material = new osg::Material;
+            material->setDiffuse(osg::Material::FRONT_AND_BACK,
+                osg::Vec4f(.42f, .055f, .045f, 1.f));
+            osg::ref_ptr<osg::StateSet> capState = new osg::StateSet;
+            capState->setAttributeAndModes(material, osg::StateAttribute::ON);
+            auto cut = std::make_unique<DecapitationGeometry>();
+            if (!cut->build(snapshots, *neck, *head, capState, distance * .5f, axis, capState))
+            {
+                Log(Debug::Warning) << "Brutal head cut declined: no valid closed geometry (stage "
+                    << cut->failure << ")";
+                return false;
+            }
+
+            // All geometry allocation and validation precedes any mutation.
+            if (!neckNode->second->addChild(cut->lower))
+                return false;
+            if (!headNode->second->addChild(cut->upper))
+            {
+                neckNode->second->removeChild(cut->lower);
+                return false;
+            }
+            for (const auto part : { ESM::PRT_Head, ESM::PRT_Hair, ESM::PRT_Neck })
+                if (mObjectParts[part])
+                {
+                    auto node = mObjectParts[part]->getNode();
+                    cut->originals.emplace_back(node, node->getNodeMask());
+                    node->setNodeMask(0);
+                }
+            cut->committed = true;
+            mBrutalHeadCut = std::move(cut);
+            return true;
+        }
+        catch (const std::exception& error)
+        {
+            Log(Debug::Warning) << "Brutal head cut rejected without physics detach: " << error.what();
+            return false;
+        }
     }
 
     NpcAnimation::NpcAnimation(const MWWorld::Ptr& ptr, osg::ref_ptr<osg::Group> parentNode,
