@@ -35,6 +35,7 @@
 #include <components/sceneutil/positionattitudetransform.hpp>
 
 #include "../mwrender/animation.hpp"
+#include "../mwrender/npcanimation.hpp"
 
 #include "../mwbase/environment.hpp"
 #include "../mwbase/luamanager.hpp"
@@ -2913,6 +2914,8 @@ namespace MWMechanics
         mPtr.getClass().getCreatureStats(mPtr).setRagdollPose({});
         mPtr.getClass().getCreatureStats(mPtr).setBrutalHeadSevered(false);
         mPtr.getClass().getCreatureStats(mPtr).setEligibleLethalMeleeDismemberment(false);
+        if (auto* npc = dynamic_cast<MWRender::NpcAnimation*>(mAnimation))
+            npc->setBrutalHeadSevered(false);
 
         if (mDeathState == CharState_None)
             return;
