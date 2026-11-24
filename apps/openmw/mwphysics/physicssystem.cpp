@@ -865,24 +865,21 @@ namespace MWPhysics
         float nearestAlong = std::numeric_limits<float>::max();
         for (const auto& [_, ragdoll] : mRagdolls)
         {
-            const auto target = ragdoll->getImpactCenter();
+            const auto target = ragdoll->getMeleeImpactPoint(from, to, radius);
             if (!target || ragdoll->getMass() <= 0.f)
                 continue;
-            const float along = std::clamp(((*target - from) * ray) / lengthSquared, 0.f, 1.f);
-            const osg::Vec3f closest = from + ray * along;
-            if ((*target - closest).length2() > radius * radius)
-                continue;
+            const float along = target->second;
 
             // Static walls, doors and terrain shield the corpse from melee.
             constexpr int meleeOccluders
                 = CollisionType_World | CollisionType_Door | CollisionType_HeightMap;
-            if (castRay(from, *target, {}, {}, meleeOccluders, CollisionType_Actor).mHit)
+            if (castRay(from, target->first, {}, {}, meleeOccluders, CollisionType_Actor).mHit)
                 continue;
             if (along < nearestAlong)
             {
                 nearestAlong = along;
                 nearest = ragdoll.get();
-                hitPoint = closest;
+                hitPoint = target->first;
             }
         }
         if (!nearest)
