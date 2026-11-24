@@ -82,7 +82,11 @@ namespace MWMechanics
     /// Horizontal fatal blow direction. Melee hits follow the attacking
     /// hand's left/right swing; other damage keeps its original radial push.
     osg::Vec3f getDeathKnockDirection(
-        const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, bool melee);
+        const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, bool melee, float swingSide);
+
+    /// Queue a melee animation's side immediately before the Lua Hit event,
+    /// so a deferred onHit callback consumes the correct attacking direction.
+    void queueMeleeSwingForHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim);
 }
 
 #endif
