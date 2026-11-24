@@ -509,8 +509,18 @@ namespace MWPhysics
             if (loose[i])
                 continue;
             bool carried = false;
-            for (int parent = pieces[i].mParent; parent >= 0 && !carried; parent = pieces[parent].mParent)
-                carried = loose[parent];
+            int parent = pieces[i].mParent;
+            // Modded rigid-piece hierarchies can contain invalid indices or
+            // cycles. Bound traversal by the number of pieces and use a valid
+            // parent only; otherwise release this piece as a safe fallback.
+            for (size_t depth = 0; depth < pieces.size() && !carried; ++depth)
+            {
+                if (parent < 0 || static_cast<size_t>(parent) >= pieces.size())
+                    break;
+                const size_t parentIndex = static_cast<size_t>(parent);
+                carried = loose[parentIndex];
+                parent = pieces[parentIndex].mParent;
+            }
             if (!carried)
                 loose[i] = true;
         }
