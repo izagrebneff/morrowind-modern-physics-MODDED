@@ -79,25 +79,48 @@ namespace MWPhysics
         };
         std::vector<EnhancedLink> mEnhanced;
 
-        void beforeBrutalStep(btScalar) override
+        void beforeBrutalStep(btScalar dt) override
         {
-            // Real Brutal Morrowind soft-stop torque, applied before Bullet
-            // steps so the forces affect the current integration and solver.
-            // before Bullet's hard cone/twist constraint reaches its limit.
-            // The joints and settings originate from Brutal's ConeTwist model,
-            // not from the old fork's purely viscous joint friction.
+            if (!std::isfinite(dt) || dt <= btScalar(0))
+                return;
+            // Original Brutal approach: evaluate every link from the same
+            // pre-step velocities, bound damping energy, and integrate once.
+            struct Moment
+            {
+                btRigidBody* body;
+                btVector3 torque;
+            };
+            std::vector<Moment> moments;
+            const auto accumulate = [&moments](btRigidBody* body, const btVector3& torque) {
+                for (Moment& moment : moments)
+                    if (moment.body == body)
+                    {
+                        moment.torque += torque;
+                        return;
+                    }
+                moments.push_back({ body, torque });
+            };
             for (const EnhancedLink& link : mEnhanced)
             {
                 auto& a = link.mJoint->getRigidBodyA();
                 auto& b = link.mJoint->getRigidBodyB();
                 if (!a.isActive() && !b.isActive())
                     continue;
-                const btVector3 torque = link.mJoint->softStopTorqueWorld(link.mSoft);
+                RagdollEnhancement::TorqueComponents components;
+                link.mJoint->softStopTorqueWorld(link.mSoft, &components);
+                const btVector3 damping = RagdollEnhancement::boundedDampingTorqueWorld(
+                    components.damping, b.getAngularVelocity() - a.getAngularVelocity(),
+                    a.getInvInertiaTensorWorld() + b.getInvInertiaTensorWorld(), dt);
+                const btVector3 torque = components.spring + damping;
                 if (!RagdollEnhancement::finite(torque))
                     continue;
-                a.applyTorque(-torque);
-                b.applyTorque(torque);
+                accumulate(&a, -torque);
+                accumulate(&b, torque);
             }
+            // Bullet contact rows need these bounded torque impulses before
+            // the solver, not deferred applyTorque() after the simulation.
+            for (const Moment& moment : moments)
+                moment.body->applyTorqueImpulse(moment.torque * dt);
         }
 
         void updateAction(btCollisionWorld*, btScalar timeStep) override
