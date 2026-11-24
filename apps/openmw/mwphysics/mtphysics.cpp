@@ -1,6 +1,7 @@
 #include "mtphysics.hpp"
 #include "ragdollkick.hpp"
 #include "brutalragdollstep.hpp"
+#include "ragdollstep.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -836,6 +837,21 @@ namespace MWPhysics
     {
         MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
         mDynamicsWorld->addAction(action);
+    }
+
+    void PhysicsTaskScheduler::configureBrutalRagdollAction(
+        BrutalRagdollStep* action, bool neutralPose, bool selfCollision, bool enabled)
+    {
+        MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
+        RagdollControlConfig config;
+        config.enabled = enabled;
+        config.softStops = true;
+        config.neutralPose = neutralPose;
+        config.limbResponse = true;
+        config.selfCollision = selfCollision;
+        // Original fork's existing buoyancy controller remains authoritative.
+        config.waterEnabled = false;
+        static_cast<RagdollStepAction*>(action)->configure(config, mCollisionWorld);
     }
 
     void PhysicsTaskScheduler::addBrutalRagdollAction(BrutalRagdollStep* action)
