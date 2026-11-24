@@ -47,8 +47,17 @@ namespace
 
 namespace MWMechanics
 {
+    void queueMeleeSwingForHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim)
+    {
+        if (attacker.isEmpty() || victim.isEmpty())
+            return;
+        const float side = attacker.getClass().getCreatureStats(attacker).getMeleeSwingSide();
+        victim.getClass().getCreatureStats(victim).queueMeleeSwingSide(
+            attacker.getCellRef().getRefNum(), side);
+    }
+
     osg::Vec3f getDeathKnockDirection(
-        const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, bool melee)
+        const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, bool melee, float swingSide)
     {
         osg::Vec3f away = victim.getRefData().getPosition().asVec3()
             - attacker.getRefData().getPosition().asVec3();
@@ -61,7 +70,7 @@ namespace MWMechanics
         if (!melee)
             return away;
 
-        const float side = attacker.getClass().getCreatureStats(attacker).getMeleeSwingSide();
+        const float side = swingSide;
         if (!std::isfinite(side) || std::abs(side) <= 0.1f)
             return away;
 
