@@ -2911,6 +2911,8 @@ namespace MWMechanics
             mRagdoll = false;
         }
         mPtr.getClass().getCreatureStats(mPtr).setRagdollPose({});
+        mPtr.getClass().getCreatureStats(mPtr).setBrutalHeadSevered(false);
+        mPtr.getClass().getCreatureStats(mPtr).setEligibleLethalMeleeDismemberment(false);
 
         if (mDeathState == CharState_None)
             return;
