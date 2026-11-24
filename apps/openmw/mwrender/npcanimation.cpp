@@ -667,6 +667,13 @@ namespace MWRender
         if (!mObjectRoot.get())
             return;
 
+        // The cut owns the hidden originals. Restore their masks before
+        // replacing clothing/armor nodes; otherwise an old cap can outlive
+        // the part it was built from and produce orphaned geometry.
+        const bool rebuildHeadCut = static_cast<bool>(mBrutalHeadCut);
+        if (rebuildHeadCut)
+            mBrutalHeadCut.reset();
+
         NpcType curType = getNpcType();
         if (curType != mNpcType)
         {
@@ -783,6 +790,10 @@ namespace MWRender
 
         if (wasArrowAttached)
             attachArrow();
+
+        if (rebuildHeadCut && !setBrutalHeadSevered(true))
+            Log(Debug::Warning)
+                << "Brutal head cut could not be rebuilt after NPC equipment changed";
     }
 
     PartHolderPtr NpcAnimation::insertBoundedPart(VFS::Path::NormalizedView model, std::string_view bonename,
