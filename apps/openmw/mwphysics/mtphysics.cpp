@@ -984,32 +984,37 @@ namespace MWPhysics
             body->setAngularVelocity(angular * (maxAngularSpeed / angular.length()));
     }
 
-    bool PhysicsTaskScheduler::applyBrutalRagdollKick(const std::vector<btRigidBody*>& bodies,
-        btRigidBody* hit, const btVector3& point, const btVector3& impulse)
+    bool PhysicsTaskScheduler::applyBrutalRagdollKick(BrutalRagdollStep* controller,
+        const std::vector<btRigidBody*>& bodies, size_t hitPart,
+        const btVector3& point, const btVector3& impulse)
     {
         MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
-        if (bodies.empty() || !hit || !RagdollEnhancement::finite(point)
-            || !RagdollEnhancement::finite(impulse))
+        if (!controller || hitPart >= bodies.size()
+            || !RagdollEnhancement::finite(point) || !RagdollEnhancement::finite(impulse))
             return false;
         btScalar totalMass = 0;
         for (const btRigidBody* part : bodies)
         {
             if (!part || part->getInvMass() <= 0 || !std::isfinite(part->getInvMass()))
-                return false; // Preserve frozen-corpse behavior.
+                return false; // Keep frozen corpse parts anchored.
             totalMass += btScalar(1) / part->getInvMass();
         }
         if (!(totalMass > 0) || !std::isfinite(totalMass))
             return false;
-        // This is the original Brutal RagdollKick::prepare distribution,
-        // retaining its 15% local articulation and bounded angular impulse.
         constexpr btScalar maxImpulse = 30000.f;
         btVector3 bounded = impulse;
         if (bounded.length2() > maxImpulse * maxImpulse)
             bounded *= maxImpulse / bounded.length();
-        const auto plan = RagdollKick::prepare(bodies, hit, point, bounded / totalMass);
-        if (!plan)
+
+        // Use the ORIGINAL Brutal RagdollControl::kick transaction, which
+        // calls RagdollKick::prepare AND registers the impact with the
+        // anatomical controller (bounded limb response, duplicate guard).
+        static std::atomic<std::uint64_t> serial{ 0 };
+        const std::uint64_t eventId = ++serial;
+        if (!static_cast<RagdollStepAction*>(controller)->kick(
+                hitPart, point, bounded / totalMass, eventId))
             return false;
-        plan->apply();
+
         constexpr btScalar maxSpeed = 2000.f;
         constexpr btScalar maxAngularSpeed = 40.f;
         for (btRigidBody* part : bodies)
