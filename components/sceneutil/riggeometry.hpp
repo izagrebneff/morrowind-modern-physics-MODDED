@@ -75,7 +75,7 @@ namespace SceneUtil
             bool positionsOnly = false, bool dynamicArraysOnly = false,
             const std::optional<osg::Vec3d>& referenceOrigin = {});
         std::vector<std::string> getInfluencingBoneNames() const;
-        std::vector<unsigned short> getVerticesInfluencedBy(std::string_view bone);
+        std::vector<unsigned short> getVerticesInfluencedBy(std::string_view bone) const;
 
         void accept(osg::NodeVisitor& nv) override;
         bool supports(const osg::PrimitiveFunctor&) const override { return true; }
