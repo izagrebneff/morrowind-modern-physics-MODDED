@@ -5,6 +5,9 @@
 #include <osg/Matrixf>
 
 #include <string_view>
+#include <functional>
+#include <optional>
+#include <osg/Vec3d>
 
 namespace SceneUtil
 {
@@ -63,6 +66,16 @@ namespace SceneUtil
         void setRootBone(std::string_view name);
 
         osg::ref_ptr<osg::Geometry> getSourceGeometry() const;
+
+        // Original Brutal Morrowind snapshot interface, adapted to the
+        // OpenMW 0.52 skinner without replacing its unrelated render code.
+        // Returns an instance-local CPU snapshot of the already posed mesh.
+        osg::ref_ptr<osg::Geometry> snapshotWorldGeometry(const osg::NodePath& path,
+            const std::function<std::optional<osg::Matrixf>(std::string_view)>& boneWorld,
+            bool positionsOnly = false, bool dynamicArraysOnly = false,
+            const std::optional<osg::Vec3d>& referenceOrigin = {});
+        std::vector<std::string> getInfluencingBoneNames() const;
+        std::vector<unsigned short> getVerticesInfluencedBy(std::string_view bone);
 
         void accept(osg::NodeVisitor& nv) override;
         bool supports(const osg::PrimitiveFunctor&) const override { return true; }
