@@ -98,7 +98,8 @@ namespace MWPhysics
         /// Keeps the physics-world lock around both the impulse and the velocity guard.
         void applyRagdollImpulse(btRigidBody* body, const btVector3& impulse, const btVector3& point);
         /// Brutal Morrowind distributes each hit through the articulated body.
-        bool applyBrutalRagdollKick(const std::vector<btRigidBody*>& bodies, btRigidBody* hit,
+        bool applyBrutalRagdollKick(class BrutalRagdollStep* controller,
+            const std::vector<btRigidBody*>& bodies, size_t hitPart,
             const btVector3& point, const btVector3& impulse);
 
         // Brutal Morrowind: apply additive, speed-limited central impulse to a
