@@ -137,6 +137,11 @@ namespace MWPhysics
         /// Current physics-thread snapshot of the principal simulated body for explosion falloff.
         std::optional<osg::Vec3f> getImpactCenter() const;
 
+        /// Find a simulated limb along a melee swing, including the limb's collision radius.
+        /// Returns the physics-space hit position and distance along the segment [0,1].
+        std::optional<std::pair<osg::Vec3f, float>> getMeleeImpactPoint(
+            const osg::Vec3f& from, const osg::Vec3f& to, float padding) const;
+
         /// Where the actor (whose position is at its feet, actorPosition now) should be for its body to be where
         /// the ragdoll is: following the main part (the pelvis, say) along the ground, at its height. Empty
         /// before the bones were first posed.
