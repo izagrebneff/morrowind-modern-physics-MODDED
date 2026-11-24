@@ -478,7 +478,9 @@ namespace MWRender
                 if (!mObjectParts[part] || part == ESM::PRT_Head || part == ESM::PRT_Hair
                     || part == ESM::PRT_Shield || part == ESM::PRT_Weapon)
                     continue;
-                auto* node = mObjectParts[part]->getNode();
+                auto* node = mObjectParts[part]->getNode().get();
+                if (!node)
+                    continue;
                 bool relevant = false;
                 DecapitationGeometry::RetainedRigVisitor retained;
                 retained.setNodeMaskOverride(~0u);
