@@ -154,6 +154,32 @@
                 </Widget>
             </Widget>
             <Widget type="TabItem">
+                <Property key="Caption" value=" #{OMWEngine:BrutalPhysicsTab} "/>
+                <Widget type="TextBox" skin="NormalText" position="4 8 352 20" align="Left Top">
+                    <Property key="Caption" value="#{OMWEngine:BrutalDismembermentFrequency}"/>
+                </Widget>
+                <Widget type="ScrollBar" skin="MW_HScroll" position="4 36 352 18" align="Left Top HStretch">
+                    <Property key="Range" value="101"/>
+                    <Property key="Page" value="1"/>
+                    <Property key="WheelPage" value="5"/>
+                    <UserString key="SettingType" value="Slider"/>
+                    <UserString key="SettingCategory" value="Game"/>
+                    <UserString key="SettingName" value="brutal dismemberment frequency"/>
+                    <UserString key="SettingValueType" value="Integer"/>
+                    <UserString key="SettingMin" value="0"/>
+                    <UserString key="SettingMax" value="100"/>
+                    <UserString key="SettingLabelWidget" value="BrutalDismembermentValue"/>
+                    <UserString key="SettingLabelCaption" value="BrutalDismembermentValue"/>
+                </Widget>
+                <Widget type="TextBox" skin="SandText" position="4 61 352 20" align="Left Top" name="BrutalDismembermentValue">
+                    <Property key="Caption" value="#{OMWEngine:BrutalDismembermentValue}"/>
+                </Widget>
+                <Widget type="TextBox" skin="SandText" position="4 94 352 80" align="Left Top" >
+                    <Property key="Caption" value="#{OMWEngine:BrutalDismembermentMeleeOnly}"/>
+                    <Property key="WordWrap" value="true"/>
+                </Widget>
+            </Widget>
+            <Widget type="TabItem">
                 <Property key="Caption" value=" #{OMWEngine:Audio} "/>
                 <Widget type="TextBox" skin="NormalText" position="4 4 352 18" align="Left Top">
                     <Property key="Caption" value="#{OMWEngine:AudioMaster}"/>
