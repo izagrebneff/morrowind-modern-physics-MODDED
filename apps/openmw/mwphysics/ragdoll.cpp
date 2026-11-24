@@ -23,6 +23,7 @@
 #include "../mwworld/class.hpp"
 
 #include "collisiontype.hpp"
+#include "ragdollenhancement.hpp"
 #include "mtphysics.hpp"
 
 namespace MWPhysics
@@ -70,9 +71,31 @@ namespace MWPhysics
     {
     public:
         std::vector<std::pair<btRigidBody*, btRigidBody*>> mPairs;
+        struct EnhancedLink
+        {
+            RagdollEnhancement::ConeTwist* mJoint;
+            RagdollEnhancement::SoftStopSettings mSoft;
+        };
+        std::vector<EnhancedLink> mEnhanced;
 
         void updateAction(btCollisionWorld*, btScalar timeStep) override
         {
+            // Real Brutal Morrowind soft-stop torque: spring back smoothly
+            // before Bullet's hard cone/twist constraint reaches its limit.
+            // The joints and settings originate from Brutal's ConeTwist model,
+            // not from the old fork's purely viscous joint friction.
+            for (const EnhancedLink& link : mEnhanced)
+            {
+                auto& a = link.mJoint->getRigidBodyA();
+                auto& b = link.mJoint->getRigidBodyB();
+                if (!a.isActive() && !b.isActive())
+                    continue;
+                const btVector3 torque = link.mJoint->softStopTorqueWorld(link.mSoft);
+                if (!RagdollEnhancement::finite(torque))
+                    continue;
+                a.applyTorque(-torque);
+                b.applyTorque(torque);
+            }
             constexpr btScalar rate = 14; // per second: about a fifth of the turning gone each step at 60 Hz
             const btScalar fraction = 1 - std::exp(-rate * timeStep);
             for (const auto& [a, b] : mPairs)
@@ -672,7 +695,7 @@ namespace MWPhysics
         btVector3 childAxis = childWorld.getBasis() * btVector3(0, 1, 0);
         const btTransform jointWorld(
             shortestArcQuat(btVector3(1, 0, 0), childAxis), Misc::Convert::toBullet(position));
-        auto joint = std::make_unique<btConeTwistConstraint>(
+        auto joint = std::make_unique<RagdollEnhancement::ConeTwist>(
             parent, child, parent.getWorldTransform().inverse() * jointWorld, childWorld.inverse() * jointWorld);
         // Firm limits (little give, quickly corrected), so joints don't stretch.
         const float flyingScale = mFlyingCorpse ? 1.4f : 1.f;
@@ -696,7 +719,26 @@ namespace MWPhysics
     {
         auto friction = std::make_unique<JointFriction>();
         for (const auto& joint : mJoints)
+        {
             friction->mPairs.emplace_back(&joint->getRigidBodyA(), &joint->getRigidBodyB());
+            auto* enhanced = static_cast<RagdollEnhancement::ConeTwist*>(joint.get());
+            btRigidBody& parent = enhanced->getRigidBodyA();
+            btRigidBody& child = enhanced->getRigidBodyB();
+            if (parent.getInvMass() <= 0 || child.getInvMass() <= 0)
+                continue;
+            const btVector3 axis = child.getWorldTransform().getBasis().getColumn(2);
+            const btScalar inertia = RagdollEnhancement::effectiveInertia(parent, child, axis);
+            const btScalar mass = 1 / child.getInvMass();
+            const btScalar lever = btMax(btScalar(8),
+                (child.getWorldTransform().getBasis() * enhanced->getBFrame().getOrigin()).length());
+            const btScalar gravityTorque = mass * btScalar(627.2) * lever;
+            // Same soft-stop width/torque approach as Brutal Morrowind;
+            // conservative bound for mixed humanoid and creature rigs.
+            RagdollEnhancement::SoftStopSettings settings{
+                btRadians(12), gravityTorque * btScalar(.5) / btScalar(20),
+                inertia * btScalar(60), gravityTorque, false };
+            friction->mEnhanced.push_back({ enhanced, settings });
+        }
         mJointFriction = std::move(friction);
         mTaskScheduler->addAction(mJointFriction.get());
     }
