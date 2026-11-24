@@ -6,6 +6,7 @@
 
 #include <string_view>
 #include <functional>
+#include <map>
 #include <optional>
 #include <osg/Vec3d>
 
@@ -77,6 +78,18 @@ namespace SceneUtil
         std::vector<std::string> getInfluencingBoneNames() const;
         std::vector<unsigned short> getVerticesInfluencedBy(std::string_view bone) const;
 
+        // Brutal separates meshes without mutating the shared skeleton:
+        // each fragment owns a mapping from its original bones to its anchor.
+        struct BonePoseOverride
+        {
+            std::string anchor;
+            osg::Matrixf relative;
+            Bone* anchorNode = nullptr;
+        };
+        using BonePoseOverrides = std::map<std::string, BonePoseOverride>;
+        void setBonePoseOverrides(BonePoseOverrides overrides);
+        void clearBonePoseOverrides();
+
         void accept(osg::NodeVisitor& nv) override;
         bool supports(const osg::PrimitiveFunctor&) const override { return true; }
         void accept(osg::PrimitiveFunctor&) const override;
@@ -118,6 +131,8 @@ namespace SceneUtil
         };
         osg::ref_ptr<InfluenceData> mData;
         std::vector<Bone*> mNodes;
+        BonePoseOverrides mBonePoseOverrides;
+        osg::Matrixf getBoneMatrix(std::size_t index) const;
 
         unsigned int mLastFrameNumber{ 0 };
         bool mBoundsFirstFrame{ true };
