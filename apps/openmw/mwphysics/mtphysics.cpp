@@ -1,5 +1,6 @@
 #include "mtphysics.hpp"
 #include "ragdollkick.hpp"
+#include "brutalragdollstep.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -837,9 +838,19 @@ namespace MWPhysics
         mDynamicsWorld->addAction(action);
     }
 
+    void PhysicsTaskScheduler::addBrutalRagdollAction(BrutalRagdollStep* action)
+    {
+        MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
+        mBrutalRagdollActions.push_back(action);
+        mDynamicsWorld->addAction(action);
+    }
+
     void PhysicsTaskScheduler::removeAction(btActionInterface* action)
     {
         MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
+        std::erase_if(mBrutalRagdollActions, [action](const BrutalRagdollStep* controller) {
+            return controller == action;
+        });
         mDynamicsWorld->removeAction(action);
     }
 
@@ -1405,6 +1416,12 @@ namespace MWPhysics
 
         if (mHasWater)
             applyWaterForces(mWaterHeight);
+
+        // Brutal's soft-stop moments must be applied BEFORE each simulation
+        // step. updateAction() happens after the solver and Bullet clears
+        // accumulated forces; a post-step torque is otherwise effectively inert.
+        for (BrutalRagdollStep* action : mBrutalRagdollActions)
+            action->beforeBrutalStep(mPhysicsDt);
 
         // We are already called once per fixed physics step, so no substepping.
         mDynamicsWorld->stepSimulation(mPhysicsDt, 0);
