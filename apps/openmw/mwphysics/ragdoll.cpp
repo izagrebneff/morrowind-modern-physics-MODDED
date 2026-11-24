@@ -1088,8 +1088,26 @@ namespace MWPhysics
             }
         }
         if (nearest != nullptr)
+        {
+            // Brutal Morrowind's native whole-body kick, not the old fork's
+            // single-limb impulse. Give every connected limb its share of the
+            // common momentum; keep one small local hit for articulation.
+            if (!mJoints.empty())
+            {
+                std::vector<btRigidBody*> bodies;
+                bodies.reserve(mParts.size());
+                for (const auto& part : mParts)
+                    bodies.push_back(part->mBody);
+                if (mTaskScheduler->applyBrutalRagdollKick(
+                        bodies, nearest->mBody, Misc::Convert::toBullet(point),
+                        Misc::Convert::toBullet(impulse)))
+                    return;
+            }
+            // Unjointed bodies and bodies awaiting physics activation retain
+            // the original safe local impulse path.
             mTaskScheduler->applyRagdollImpulse(
                 nearest->mBody, Misc::Convert::toBullet(impulse), Misc::Convert::toBullet(point));
+        }
     }
 
     std::vector<std::shared_ptr<PtrHolder>> Ragdoll::getParts() const
