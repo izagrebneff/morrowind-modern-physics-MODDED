@@ -194,6 +194,7 @@ namespace MWPhysics
         PhysicsTaskScheduler* mTaskScheduler;
         std::vector<std::shared_ptr<Part>> mParts; // shared: a part can be held (see PhysicsTaskScheduler)
         std::vector<std::unique_ptr<btTypedConstraint>> mJoints;
+        std::vector<std::pair<size_t, size_t>> mJointParentChildren; // for anatomical controller links
     };
 }
 
