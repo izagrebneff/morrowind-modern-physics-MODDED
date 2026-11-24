@@ -25,6 +25,9 @@ namespace Settings
         SettingValue<bool> mShowEnchantChance{ mIndex, "Game", "show enchant chance" };
         SettingValue<bool> mBestAttack{ mIndex, "Game", "best attack" };
         SettingValue<int> mDifficulty{ mIndex, "Game", "difficulty", makeClampSanitizerInt(-500, 500) };
+        // Only eligible fatal melee weapon hits can sever a body. 0 disables it.
+        SettingValue<int> mBrutalDismembermentFrequency{ mIndex, "Game",
+            "brutal dismemberment frequency", makeClampSanitizerInt(0, 100) };
         // We have to cap it since using high values (larger than 7168) will make some quests harder or impossible to
         // complete (bug #1876)
         SettingValue<int> mActorsProcessingRange{ mIndex, "Game", "actors processing range",
