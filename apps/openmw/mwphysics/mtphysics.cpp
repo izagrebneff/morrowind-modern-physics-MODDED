@@ -888,10 +888,16 @@ namespace MWPhysics
             return false;
         for (auto* joint : removed)
         {
-            if (!joint || std::find_if(mDynamicsWorld->getConstraintArray().begin(),
-                    mDynamicsWorld->getConstraintArray().end(), [joint](const btTypedConstraint* entry) {
-                        return entry == joint;
-                    }) == mDynamicsWorld->getConstraintArray().end())
+            if (!joint)
+                return false;
+            bool registered = false;
+            for (int index = 0; index < mDynamicsWorld->getNumConstraints(); ++index)
+                if (mDynamicsWorld->getConstraint(index) == joint)
+                {
+                    registered = true;
+                    break;
+                }
+            if (!registered)
                 return false;
         }
         for (auto* body : detached)
