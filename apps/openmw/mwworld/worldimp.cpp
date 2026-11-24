@@ -1505,9 +1505,10 @@ namespace MWWorld
     {
         if (!makeRagdollBody(actor, kick, allowOnePiece))
             return false;
-        if (!atRest && actor.getClass().isNpc()
-            && actor.getClass().getCreatureStats(actor).isDead()
-            && actor.getClass().getCreatureStats(actor).hasEligibleLethalMeleeDismemberment())
+        auto& creatureStats = actor.getClass().getCreatureStats(actor);
+        if (actor.getClass().isNpc() && creatureStats.isDead()
+            && (creatureStats.hasEligibleLethalMeleeDismemberment()
+                || creatureStats.isBrutalHeadSevered()))
         {
             // The magic/ranged guard and frequency roll were already applied
             // exactly once in Npc::onHit. Never reroll geometry retries.
@@ -1517,8 +1518,11 @@ namespace MWWorld
                 osg::Vec3f separation = kick;
                 if (separation.normalize() <= 1e-4f)
                     separation.set(0.f, 1.f, 0.f);
-                if (!mPhysics->detachNpcRagdollHead(actor, separation * 40.f))
+                const osg::Vec3f velocity = atRest ? osg::Vec3f() : separation * 40.f;
+                if (!mPhysics->detachNpcRagdollHead(actor, velocity))
                     npc->setBrutalHeadSevered(false);
+                else
+                    creatureStats.setBrutalHeadSevered(true);
             }
         }
         if (atRest)
