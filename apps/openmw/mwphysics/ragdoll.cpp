@@ -509,8 +509,18 @@ namespace MWPhysics
             if (loose[i])
                 continue;
             bool carried = false;
-            for (int parent = pieces[i].mParent; parent >= 0 && !carried; parent = pieces[parent].mParent)
-                carried = loose[parent];
+            int parent = pieces[i].mParent;
+            // Modded rigid-piece hierarchies can contain invalid indices or
+            // cycles. Bound traversal by the number of pieces and use a valid
+            // parent only; otherwise release this piece as a safe fallback.
+            for (size_t depth = 0; depth < pieces.size() && !carried; ++depth)
+            {
+                if (parent < 0 || static_cast<size_t>(parent) >= pieces.size())
+                    break;
+                const size_t parentIndex = static_cast<size_t>(parent);
+                carried = loose[parentIndex];
+                parent = pieces[parentIndex].mParent;
+            }
             if (!carried)
                 loose[i] = true;
         }
@@ -955,6 +965,8 @@ namespace MWPhysics
             btVector3 localCenter;
             btScalar boundingRadius = 0.f;
             part->mShape->getBoundingSphere(localCenter, boundingRadius);
+            if (!std::isfinite(boundingRadius) || boundingRadius < btScalar(0))
+                continue;
             const osg::Vec3f center = Misc::Convert::toOsg(transform * localCenter);
             if (!std::isfinite(center.x()) || !std::isfinite(center.y()) || !std::isfinite(center.z()))
                 continue;
@@ -979,6 +991,11 @@ namespace MWPhysics
 
     void Ragdoll::strike(const osg::Vec3f& point, const osg::Vec3f& impulse)
     {
+        const auto finiteVec = [](const osg::Vec3f& v) {
+            return std::isfinite(v.x()) && std::isfinite(v.y()) && std::isfinite(v.z());
+        };
+        if (!finiteVec(point) || !finiteVec(impulse))
+            return;
         Part* nearest = nullptr;
         float nearestDistance = std::numeric_limits<float>::max();
         for (const auto& part : mParts)
