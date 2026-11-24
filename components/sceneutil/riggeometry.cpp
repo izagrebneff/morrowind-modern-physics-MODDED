@@ -222,6 +222,34 @@ namespace SceneUtil
     }
 
 
+    void RigGeometry::setBonePoseOverrides(BonePoseOverrides overrides)
+    {
+        mBonePoseOverrides = std::move(overrides);
+        mSkeleton = nullptr;
+        mNodes.clear();
+        mBoundsFirstFrame = true;
+        mLastFrameNumber = ~0u;
+    }
+
+    void RigGeometry::clearBonePoseOverrides()
+    {
+        if (mBonePoseOverrides.empty())
+            return;
+        mBonePoseOverrides.clear();
+        mSkeleton = nullptr;
+        mNodes.clear();
+        mBoundsFirstFrame = true;
+        mLastFrameNumber = ~0u;
+    }
+
+    osg::Matrixf RigGeometry::getBoneMatrix(std::size_t index) const
+    {
+        const auto found = mBonePoseOverrides.find(mData->mBones[index].mName);
+        if (found != mBonePoseOverrides.end() && found->second.anchorNode)
+            return found->second.relative * found->second.anchorNode->mMatrixInSkeletonSpace;
+        return mNodes[index] ? mNodes[index]->mMatrixInSkeletonSpace : osg::Matrixf::identity();
+    }
+
     bool RigGeometry::initFromParentSkeleton(osg::NodeVisitor* nv)
     {
         const osg::NodePath& path = nv->getNodePath();
@@ -256,6 +284,9 @@ namespace SceneUtil
             if (!mNodes.back())
                 Log(Debug::Error) << "Error: RigGeometry did not find bone " << info.mName;
         }
+
+        for (auto& [name, pose] : mBonePoseOverrides)
+            pose.anchorNode = mSkeleton->getBone(pose.anchor);
 
         return true;
     }
@@ -300,7 +331,7 @@ namespace SceneUtil
         for (osg::Matrixf& boneMat : boneMatrices)
         {
             if (*bone != nullptr)
-                boneMat = boneInfo->mInvBindMatrix * (*bone)->mMatrixInSkeletonSpace;
+                boneMat = boneInfo->mInvBindMatrix * getBoneMatrix(std::distance(mNodes.cbegin(), bone));
             ++bone;
             ++boneInfo;
         }
@@ -388,7 +419,7 @@ namespace SceneUtil
                 continue;
 
             osg::BoundingSpheref bs = info.mBoundSphere;
-            transformBoundingSphere(bone->mMatrixInSkeletonSpace * transform, bs);
+            transformBoundingSphere(getBoneMatrix(index - 1) * transform, bs);
             box.expandBy(bs);
         }
 
