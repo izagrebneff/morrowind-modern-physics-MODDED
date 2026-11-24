@@ -849,6 +849,49 @@ namespace MWPhysics
         return true;
     }
 
+    bool PhysicsSystem::strikeRagdollAlongSwing(const osg::Vec3f& from, const osg::Vec3f& to,
+        float radius, const osg::Vec3f& knockVelocity)
+    {
+        // Select one target using physics-space snapshots, leaving living-actor
+        // damage and the original dynamic-object hit handling untouched.
+        const osg::Vec3f ray = to - from;
+        const float lengthSquared = ray.length2();
+        if (!(lengthSquared > 1e-4f) || !(radius > 0.f))
+            return false;
+
+        Ragdoll* nearest = nullptr;
+        osg::Vec3f hitPoint;
+        float nearestAlong = std::numeric_limits<float>::max();
+        for (const auto& [_, ragdoll] : mRagdolls)
+        {
+            const auto target = ragdoll->getImpactCenter();
+            if (!target || ragdoll->getMass() <= 0.f)
+                continue;
+            const float along = std::clamp(((*target - from) * ray) / lengthSquared, 0.f, 1.f);
+            const osg::Vec3f closest = from + ray * along;
+            if ((*target - closest).length2() > radius * radius)
+                continue;
+
+            // Static walls, doors and terrain shield the corpse from melee.
+            constexpr int meleeOccluders
+                = CollisionType_World | CollisionType_Door | CollisionType_HeightMap;
+            if (castRay(from, *target, {}, {}, meleeOccluders, CollisionType_Actor).mHit)
+                continue;
+            if (along < nearestAlong)
+            {
+                nearestAlong = along;
+                nearest = ragdoll.get();
+                hitPoint = closest;
+            }
+        }
+        if (!nearest)
+            return false;
+
+        constexpr float ragdollMeleeScale = 0.12f;
+        nearest->strike(hitPoint, knockVelocity * (nearest->getMass() * ragdollMeleeScale));
+        return true;
+    }
+
     void PhysicsSystem::wakeNewObject(const MWWorld::Ptr& ptr)
     {
         const auto found = mObjects.find(ptr.mRef);
