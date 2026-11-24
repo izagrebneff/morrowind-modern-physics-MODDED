@@ -955,6 +955,8 @@ namespace MWPhysics
             btVector3 localCenter;
             btScalar boundingRadius = 0.f;
             part->mShape->getBoundingSphere(localCenter, boundingRadius);
+            if (!std::isfinite(boundingRadius) || boundingRadius < btScalar(0))
+                continue;
             const osg::Vec3f center = Misc::Convert::toOsg(transform * localCenter);
             if (!std::isfinite(center.x()) || !std::isfinite(center.y()) || !std::isfinite(center.z()))
                 continue;
@@ -979,6 +981,11 @@ namespace MWPhysics
 
     void Ragdoll::strike(const osg::Vec3f& point, const osg::Vec3f& impulse)
     {
+        const auto finiteVec = [](const osg::Vec3f& v) {
+            return std::isfinite(v.x()) && std::isfinite(v.y()) && std::isfinite(v.z());
+        };
+        if (!finiteVec(point) || !finiteVec(impulse))
+            return;
         Part* nearest = nullptr;
         float nearestDistance = std::numeric_limits<float>::max();
         for (const auto& part : mParts)
