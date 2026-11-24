@@ -1,6 +1,8 @@
 #ifndef OPENMW_COMPONENTS_NIFOSG_RIGGEOMETRY_H
 #define OPENMW_COMPONENTS_NIFOSG_RIGGEOMETRY_H
 
+#include "surfacedecals.hpp"
+
 #include <osg/Geometry>
 #include <osg/Matrixf>
 
@@ -68,6 +70,11 @@ namespace SceneUtil
 
         osg::ref_ptr<osg::Geometry> getSourceGeometry() const;
 
+        // Original Brutal per-actor decal patches stay on deformed skin.
+        SurfaceDecals* getOrCreateSurfaceDecals();
+        const SurfaceDecals* getSurfaceDecals() const { return mSurfaceDecals.get(); }
+        SurfaceDecals* getSurfaceDecals() { return mSurfaceDecals.get(); }
+
         // Original Brutal Morrowind snapshot interface, adapted to the
         // OpenMW 0.52 skinner without replacing its unrelated render code.
         // Returns an instance-local CPU snapshot of the already posed mesh.
@@ -116,6 +123,7 @@ namespace SceneUtil
         osg::Geometry* getGeometry(unsigned int frame) const;
 
         osg::ref_ptr<osg::Geometry> mSourceGeometry;
+        osg::ref_ptr<SurfaceDecals> mSurfaceDecals;
         osg::ref_ptr<const osg::Vec4Array> mSourceTangents;
         Skeleton* mSkeleton{ nullptr };
 
