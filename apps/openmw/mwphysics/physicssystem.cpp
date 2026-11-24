@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -849,6 +850,46 @@ namespace MWPhysics
         return true;
     }
 
+    bool PhysicsSystem::strikeRagdollAlongSwing(const osg::Vec3f& from, const osg::Vec3f& to,
+        float radius, const osg::Vec3f& knockVelocity)
+    {
+        // Select one target using physics-space snapshots, leaving living-actor
+        // damage and the original dynamic-object hit handling untouched.
+        const osg::Vec3f ray = to - from;
+        const float lengthSquared = ray.length2();
+        if (!(lengthSquared > 1e-4f) || !(radius > 0.f))
+            return false;
+
+        Ragdoll* nearest = nullptr;
+        osg::Vec3f hitPoint;
+        float nearestAlong = std::numeric_limits<float>::max();
+        for (const auto& [_, ragdoll] : mRagdolls)
+        {
+            const auto target = ragdoll->getMeleeImpactPoint(from, to, radius);
+            if (!target || ragdoll->getMass() <= 0.f)
+                continue;
+            const float along = target->second;
+
+            // Static walls, doors and terrain shield the corpse from melee.
+            constexpr int meleeOccluders
+                = CollisionType_World | CollisionType_Door | CollisionType_HeightMap;
+            if (castRay(from, target->first, {}, {}, meleeOccluders, CollisionType_Actor).mHit)
+                continue;
+            if (along < nearestAlong)
+            {
+                nearestAlong = along;
+                nearest = ragdoll.get();
+                hitPoint = target->first;
+            }
+        }
+        if (!nearest)
+            return false;
+
+        constexpr float ragdollMeleeScale = 0.12f;
+        nearest->strike(hitPoint, knockVelocity * (nearest->getMass() * ragdollMeleeScale));
+        return true;
+    }
+
     void PhysicsSystem::wakeNewObject(const MWWorld::Ptr& ptr)
     {
         const auto found = mObjects.find(ptr.mRef);
@@ -1141,6 +1182,41 @@ namespace MWPhysics
         }
         if (!strikes.empty())
             mTaskScheduler->strikeObjects(strikes);
+
+        // The Dark Messiah-style explosion previously affected loose props only.
+        // Transfer a single, attenuated impulse to each nearby corpse, selecting
+        // its actual physics body surface inside Ragdoll::strike.  The scheduler
+        // refuses impulses to frozen/static bodies and bounds excessive speeds.
+        for (const auto& [_, ragdoll] : mRagdolls)
+        {
+            const auto target = ragdoll->getImpactCenter();
+            if (!target)
+                continue;
+            osg::Vec3f away = *target - center;
+            const float distance = away.normalize();
+            if (!(distance < radius))
+                continue;
+            // Bodies centered on an explosion still need a well-defined push.
+            if (distance < 1e-3f)
+                away.set(0.f, 0.f, 1.f);
+
+            // Only the terrain, static world and doors can shield a corpse.
+            // Filtering out actors, loose props and the corpse's own parts
+            // avoids incorrectly blocking otherwise exposed bodies.
+            constexpr int explosionOccluders
+                = CollisionType_World | CollisionType_Door | CollisionType_HeightMap;
+            if (distance > 1e-3f
+                && castRay(center, *target, {}, {}, explosionOccluders, CollisionType_Actor).mHit)
+                continue;
+
+            away.z() += 0.5f;
+            away.normalize();
+            const float falloff = 1.f - distance / radius;
+            constexpr float ragdollImpulseScale = 0.15f;
+            const float impulse = speed * ragdoll->getMass() * falloff * ragdollImpulseScale;
+            if (std::isfinite(impulse) && impulse > 0.f)
+                ragdoll->strike(*target, away * impulse);
+        }
     }
 
     void PhysicsSystem::placeOnSurface(Object& object)
