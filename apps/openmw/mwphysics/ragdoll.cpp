@@ -1061,9 +1061,11 @@ namespace MWPhysics
         if (!finiteVec(point) || !finiteVec(impulse))
             return;
         Part* nearest = nullptr;
+        size_t nearestIndex = 0;
         float nearestDistance = std::numeric_limits<float>::max();
-        for (const auto& part : mParts)
+        for (size_t i = 0; i < mParts.size(); ++i)
         {
+            const auto& part = mParts[i];
             btTransform bodyWorld;
             part->mMotionState->getWorldTransform(bodyWorld);
             // Choose the part whose *collision surface* is closest to the hit,
@@ -1107,6 +1109,7 @@ namespace MWPhysics
             {
                 nearestDistance = distance;
                 nearest = part.get();
+                nearestIndex = i;
             }
         }
         if (nearest != nullptr)
@@ -1121,7 +1124,8 @@ namespace MWPhysics
                 for (const auto& part : mParts)
                     bodies.push_back(part->mBody);
                 if (mTaskScheduler->applyBrutalRagdollKick(
-                        bodies, nearest->mBody, Misc::Convert::toBullet(point),
+                        static_cast<BrutalRagdollStep*>(mJointFriction.get()),
+                        bodies, nearestIndex, Misc::Convert::toBullet(point),
                         Misc::Convert::toBullet(impulse)))
                     return;
             }
