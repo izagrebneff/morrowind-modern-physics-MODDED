@@ -258,3 +258,9 @@ JournalShowAll: "Показать все"
 LoadingSelectCharacter: "Выбрать персонажа"
 RechargeSelect: "Перезарядить"
 RepairTool: "Инструмент"
+
+# Настройки расчленения Brutal
+BrutalPhysicsTab: "Brutal Physics"
+BrutalDismembermentFrequency: "Частота расчленения"
+BrutalDismembermentValue: "Вероятность: {value, number, :: group-off}%"
+BrutalDismembermentMeleeOnly: "Расчленение возможно только от смертельных ударов оружием ближнего боя. Магия, стрелы, болты и метательное оружие исключены."
