@@ -290,6 +290,7 @@ namespace MWClass
 
         if (!success)
         {
+            MWMechanics::queueMeleeSwingForHit(ptr, victim);
             MWBase::Environment::get().getLuaManager()->onHit(ptr, victim, weapon, MWWorld::Ptr(), type, attackStrength,
                 attackWindUp, 0.0f, false, hitPosition, false, MWMechanics::DamageSourceType::Melee);
             MWMechanics::reduceWeaponCondition(0.f, false, weapon, ptr);
@@ -349,7 +350,8 @@ namespace MWClass
 
         MWMechanics::diseaseContact(victim, ptr);
 
-        MWBase::Environment::get().getLuaManager()->onHit(ptr, victim, weapon, MWWorld::Ptr(), type, attackStrength,
+        MWMechanics::queueMeleeSwingForHit(ptr, victim);
+            MWBase::Environment::get().getLuaManager()->onHit(ptr, victim, weapon, MWWorld::Ptr(), type, attackStrength,
             attackWindUp, damage, healthdmg, hitPosition, true, MWMechanics::DamageSourceType::Melee);
     }
 
@@ -357,6 +359,9 @@ namespace MWClass
         const MWWorld::Ptr& attacker, bool successful, const MWMechanics::DamageSourceType sourceType) const
     {
         MWMechanics::CreatureStats& stats = getCreatureStats(ptr);
+        const float lethalSwingSide
+            = sourceType == MWMechanics::DamageSourceType::Melee && !attacker.isEmpty()
+            ? stats.consumeMeleeSwingSide(attacker.getCellRef().getRefNum()) : 0.f;
 
         // Self defense
         bool setOnPcHitMe = true;
@@ -441,7 +446,7 @@ namespace MWClass
         if (wasAlive && stats.isDead() && !attacker.isEmpty() && health != damages.end() && health->second >= 0.001f)
         {
             const osg::Vec3f direction = MWMechanics::getDeathKnockDirection(
-                attacker, ptr, sourceType == MWMechanics::DamageSourceType::Melee);
+                attacker, ptr, sourceType == MWMechanics::DamageSourceType::Melee, lethalSwingSide);
             stats.setDeathKick(direction * std::clamp(120.f + health->second * 4.f, 140.f, 280.f));
         }
     }
