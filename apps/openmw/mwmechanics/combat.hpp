@@ -78,6 +78,11 @@ namespace MWMechanics
     std::pair<MWWorld::Ptr, osg::Vec3f> getHitContact(const MWWorld::Ptr& actor, float reach);
 
     bool friendlyHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& target, bool complain);
+
+    /// Horizontal fatal blow direction. Melee hits follow the attacking
+    /// hand's left/right swing; other damage keeps its original radial push.
+    osg::Vec3f getDeathKnockDirection(
+        const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, bool melee);
 }
 
 #endif
