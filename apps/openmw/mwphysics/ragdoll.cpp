@@ -935,6 +935,48 @@ namespace MWPhysics
         return center;
     }
 
+    std::optional<std::pair<osg::Vec3f, float>> Ragdoll::getMeleeImpactPoint(
+        const osg::Vec3f& from, const osg::Vec3f& to, float padding) const
+    {
+        const osg::Vec3f segment = to - from;
+        const float lengthSquared = segment.length2();
+        if (!(lengthSquared > 1e-4f) || !(padding > 0.f))
+            return std::nullopt;
+
+        std::optional<std::pair<osg::Vec3f, float>> result;
+        float bestDistanceSquared = std::numeric_limits<float>::max();
+        for (const auto& part : mParts)
+        {
+            if (!part->mBody || part->mBody->getInvMass() <= btScalar(0))
+                continue;
+            btTransform transform;
+            part->mMotionState->getWorldTransform(transform);
+
+            btVector3 localCenter;
+            btScalar boundingRadius = 0.f;
+            part->mShape->getBoundingSphere(localCenter, boundingRadius);
+            const osg::Vec3f center = Misc::Convert::toOsg(transform * localCenter);
+            if (!std::isfinite(center.x()) || !std::isfinite(center.y()) || !std::isfinite(center.z()))
+                continue;
+
+            const float along = std::clamp(((center - from) * segment) / lengthSquared, 0.f, 1.f);
+            const osg::Vec3f onSwing = from + segment * along;
+            const float distanceSquared = (center - onSwing).length2();
+            const float effectiveRadius = padding + std::min(static_cast<float>(boundingRadius), 45.f);
+            if (distanceSquared > effectiveRadius * effectiveRadius)
+                continue;
+
+            // Prefer an early hit in the swing, then the limb closest to its path.
+            if (!result || along < result->second
+                || (along == result->second && distanceSquared < bestDistanceSquared))
+            {
+                result = std::make_pair(center, along);
+                bestDistanceSquared = distanceSquared;
+            }
+        }
+        return result;
+    }
+
     void Ragdoll::strike(const osg::Vec3f& point, const osg::Vec3f& impulse)
     {
         Part* nearest = nullptr;
