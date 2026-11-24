@@ -24,6 +24,7 @@
 
 #include "collisiontype.hpp"
 #include "ragdollenhancement.hpp"
+#include "brutalragdollstep.hpp"
 #include "mtphysics.hpp"
 
 namespace MWPhysics
@@ -67,7 +68,7 @@ namespace MWPhysics
 
     // Friction in the joints: each step, some of the way jointed parts turn relative to each other is taken out.
     // Without it a body collapses like a sack of liquid; with it, limbs still flop but settle instead of sloshing.
-    class JointFriction final : public btActionInterface
+    class JointFriction final : public BrutalRagdollStep
     {
     public:
         std::vector<std::pair<btRigidBody*, btRigidBody*>> mPairs;
@@ -78,9 +79,10 @@ namespace MWPhysics
         };
         std::vector<EnhancedLink> mEnhanced;
 
-        void updateAction(btCollisionWorld*, btScalar timeStep) override
+        void beforeBrutalStep(btScalar) override
         {
-            // Real Brutal Morrowind soft-stop torque: spring back smoothly
+            // Real Brutal Morrowind soft-stop torque, applied before Bullet
+            // steps so the forces affect the current integration and solver.
             // before Bullet's hard cone/twist constraint reaches its limit.
             // The joints and settings originate from Brutal's ConeTwist model,
             // not from the old fork's purely viscous joint friction.
@@ -96,6 +98,10 @@ namespace MWPhysics
                 a.applyTorque(-torque);
                 b.applyTorque(torque);
             }
+        }
+
+        void updateAction(btCollisionWorld*, btScalar timeStep) override
+        {
             constexpr btScalar rate = 14; // per second: about a fifth of the turning gone each step at 60 Hz
             const btScalar fraction = 1 - std::exp(-rate * timeStep);
             for (const auto& [a, b] : mPairs)
@@ -740,7 +746,7 @@ namespace MWPhysics
             friction->mEnhanced.push_back({ enhanced, settings });
         }
         mJointFriction = std::move(friction);
-        mTaskScheduler->addAction(mJointFriction.get());
+        mTaskScheduler->addBrutalRagdollAction(static_cast<BrutalRagdollStep*>(mJointFriction.get()));
     }
 
     std::optional<osg::Vec3f> Ragdoll::getActorPosition(const osg::Vec3f& actorPosition)
