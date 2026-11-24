@@ -16,6 +16,7 @@
 #include <components/esm3/loadclas.hpp>
 #include <components/esm3/loadmgef.hpp>
 #include <components/esm3/loadnpc.hpp>
+#include <components/esm3/loadweap.hpp>
 #include <components/esm3/loadrace.hpp>
 #include <components/esm3/loadsoun.hpp>
 #include <components/esm3/npcstate.hpp>
@@ -792,6 +793,33 @@ namespace MWClass
 
         if (!wasDead && getCreatureStats(ptr).isDead())
         {
+            // Roll exactly once for this fatal hit. A rendered cut is never
+            // permitted for a magic or projectile source, including bows,
+            // crossbows and thrown weapons. Unarmed/creature natural attacks
+            // and non-weapon scripts are excluded as well.
+            stats.setEligibleLethalMeleeDismemberment(false);
+            if (ptr != MWMechanics::getPlayer() && !attacker.isEmpty() && hasHealthDamage
+                && healthDamage > 0.f && sourceType == MWMechanics::DamageSourceType::Melee
+                && !object.empty())
+            {
+                const int chance = Settings::game().mBrutalDismembermentFrequency;
+                if (chance > 0)
+                {
+                    const auto* record = MWBase::Environment::get().getESMStore()
+                        ->get<ESM::Weapon>().search(object);
+                    if (record)
+                    {
+                        const auto* weaponType = MWMechanics::getWeaponType(record->mData.mType);
+                        if (weaponType && weaponType->mWeaponClass == ESM::WeaponType::Melee)
+                        {
+                            auto& rng = MWBase::Environment::get().getWorld()->getPrng();
+                            stats.setEligibleLethalMeleeDismemberment(
+                                Misc::Rng::roll0to99(rng) < chance);
+                        }
+                    }
+                }
+            }
+
             // The killing blow throws the body (its ragdoll) away from the attacker, harder for heavier blows,
             // within reason.
             if (!attacker.isEmpty() && hasHealthDamage)
