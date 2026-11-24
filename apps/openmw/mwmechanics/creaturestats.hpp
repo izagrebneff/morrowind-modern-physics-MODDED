@@ -69,7 +69,8 @@ namespace MWMechanics
         bool mBlock = false;
         osg::Vec3f mDeathKick; // how the killing blow throws the body
         bool mMagicDeathKick = false; // transient; use a whole-body launch for fatal spells
-        bool mEligibleLethalMeleeDismemberment = false; // set once at lethal hit, consumed by rendering pipeline
+        bool mEligibleLethalMeleeDismemberment = false;
+        bool mBrutalHeadSevered = false; // persisted in ESM CreatureStats BHD1 // set once at lethal hit, consumed by rendering pipeline
         float mMeleeSwingSide = 0.f; // transient: -1 left, +1 right, 0 unknown
         // The Lua Hit event is queued: preserve one side PER queued melee
         // event, keyed by attacker, until damage is actually applied.
@@ -262,6 +263,9 @@ namespace MWMechanics
         /// consume the already-decided outcome without rerolling.
         void setEligibleLethalMeleeDismemberment(bool value) { mEligibleLethalMeleeDismemberment = value; }
         bool hasEligibleLethalMeleeDismemberment() const { return mEligibleLethalMeleeDismemberment; }
+
+        void setBrutalHeadSevered(bool severed) { mBrutalHeadSevered = severed; }
+        bool isBrutalHeadSevered() const { return mBrutalHeadSevered; }
 
         /// Temporary direction of the current attacking animation, valid only
         /// while the synchronous melee-hit event is being dispatched.
