@@ -851,7 +851,7 @@ namespace MWClass
             // rather than waiting for the character controller's death update.
             if (stats.hasEligibleLethalMeleeDismemberment())
             {
-                auto* world = MWBase::Environment::get().getWorld();
+                const auto world = MWBase::Environment::get().getWorld();
                 const auto kick = stats.getDeathKick();
                 if (world->makeRagdoll(ptr, kick, kick.length2() > 1.f, false))
                 {
