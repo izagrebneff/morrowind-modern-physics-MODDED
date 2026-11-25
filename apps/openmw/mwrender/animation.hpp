@@ -345,6 +345,11 @@ namespace MWRender
         /// Must be thread safe
         virtual ~Animation();
 
+        // Visual cut transaction interface. Unsupported animation types
+        // decline nonzero cuts, so physics must never detach on their behalf.
+        virtual bool setBrutalHeadSevered(bool severed) { return !severed; }
+        virtual bool setBrutalLimbsSevered(unsigned mask) { return mask == 0; }
+
         MWWorld::ConstPtr getPtr() const { return mPtr; }
 
         MWWorld::Ptr getPtr() { return mPtr; }
