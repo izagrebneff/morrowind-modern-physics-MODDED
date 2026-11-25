@@ -11,6 +11,8 @@
 #include <osg/Texture2D>
 #include <osg/Image>
 #include <osg/Material>
+#include <osg/PolygonOffset>
+#include <osg/BlendFunc>
 
 namespace MWRender
 {
@@ -37,15 +39,19 @@ namespace MWRender
         resources->getSceneManager()->applyFilterSettings(texture);
         osg::ref_ptr<osg::StateSet> state = new osg::StateSet;
         osg::ref_ptr<osg::Material> material = new osg::Material;
+        material->setColorMode(osg::Material::OFF);
+        material->setEmission(osg::Material::FRONT_AND_BACK, osg::Vec4(0,0,0,1));
         material->setDiffuse(osg::Material::FRONT_AND_BACK, osg::Vec4(.65f,.65f,.65f,1));
         material->setAmbient(osg::Material::FRONT_AND_BACK, osg::Vec4(.35f,.35f,.35f,1));
         material->setSpecular(osg::Material::FRONT_AND_BACK, osg::Vec4(0,0,0,1));
-        state->setAttributeAndModes(material, osg::StateAttribute::ON);
+        constexpr auto protect = osg::StateAttribute::OVERRIDE | osg::StateAttribute::PROTECTED;
+        state->setAttributeAndModes(material, osg::StateAttribute::ON | protect);
         state->setMode(GL_LIGHTING, osg::StateAttribute::ON);
-        state->setMode(GL_CULL_FACE, osg::StateAttribute::ON);
-        state->setMode(GL_BLEND, osg::StateAttribute::OFF);
+        state->setMode(GL_CULL_FACE, osg::StateAttribute::OFF | protect);
+        state->setMode(GL_BLEND, osg::StateAttribute::OFF | protect);
+        state->setMode(GL_ALPHA_TEST, osg::StateAttribute::OFF | protect);
         state->setAttributeAndModes(new SceneUtil::AutoDepth);
-        state->setTextureAttributeAndModes(0, texture, osg::StateAttribute::ON);
+        state->setTextureAttributeAndModes(0, texture, osg::StateAttribute::ON | protect);
         state->setTextureAttribute(0, new SceneUtil::TextureType("diffuseMap"));
         const std::vector<DecapitationGeometry::Vertex> vertices{
             {osg::Vec3f(0,0,0),osg::Vec3f(0,0,1),osg::Vec2f(0,0),osg::Vec4f(1,1,1,1)},
@@ -53,7 +59,14 @@ namespace MWRender
             {osg::Vec3f(0,1,0),osg::Vec3f(0,0,1),osg::Vec2f(0,1),osg::Vec4f(1,1,1,1)}};
         auto warm = DecapitationGeometry::makeGeometry(vertices, state, osg::Matrixf::identity());
         resources->getSceneManager()->recreateShaders(warm);
-        return warm->getStateSet();
+        osg::ref_ptr<osg::StateSet> prepared = warm->getStateSet();
+        // Keep the cap opaque and independent of the equipment material. Do not
+        // share mutable shader state between the two sides of the cut.
+        prepared->setRenderBinToInherit();
+        prepared->setRenderingHint(osg::StateSet::OPAQUE_BIN);
+        prepared->setMode(GL_BLEND, osg::StateAttribute::OFF | protect);
+        prepared->setMode(GL_ALPHA_TEST, osg::StateAttribute::OFF | protect);
+        return prepared;
     }
 }
 #endif
