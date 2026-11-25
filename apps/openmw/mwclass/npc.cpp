@@ -822,8 +822,14 @@ namespace MWClass
                                 // construction, equipment changes or save reloads.
                                 constexpr unsigned outcomes[5] = { 0u, 4u, 8u, 1u, 2u };
                                 const unsigned index = Misc::Rng::roll0to99(rng) % 5;
-                                stats.setBrutalPendingLimbMask(outcomes[index]);
-                                stats.setEligibleLethalMeleeDismemberment(true);
+                                const int chances[5] = { Settings::game().mBrutalHeadChance,
+                                    Settings::game().mBrutalLeftArmChance, Settings::game().mBrutalRightArmChance,
+                                    Settings::game().mBrutalLeftLegChance, Settings::game().mBrutalRightLegChance };
+                                if (Misc::Rng::roll0to99(rng) < chances[index])
+                                {
+                                    stats.setBrutalPendingLimbMask(outcomes[index]);
+                                    stats.setEligibleLethalMeleeDismemberment(true);
+                                }
                             }
                         }
                     }
