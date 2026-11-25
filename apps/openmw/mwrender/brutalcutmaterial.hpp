@@ -10,9 +10,7 @@
 #include <components/vfs/manager.hpp>
 #include <osg/Texture2D>
 #include <osg/Image>
-#include <osg/Material>
-#include <osg/PolygonOffset>
-#include <osg/BlendFunc>
+#include <components/sceneutil/material.hpp>
 
 namespace MWRender
 {
@@ -38,14 +36,20 @@ namespace MWRender
         texture->setResizeNonPowerOfTwoHint(false);
         resources->getSceneManager()->applyFilterSettings(texture);
         osg::ref_ptr<osg::StateSet> state = new osg::StateSet;
-        osg::ref_ptr<osg::Material> material = new osg::Material;
-        material->setColorMode(osg::Material::OFF);
-        material->setEmission(osg::Material::FRONT_AND_BACK, osg::Vec4(0,0,0,1));
-        material->setDiffuse(osg::Material::FRONT_AND_BACK, osg::Vec4(.65f,.65f,.65f,1));
-        material->setAmbient(osg::Material::FRONT_AND_BACK, osg::Vec4(.35f,.35f,.35f,1));
-        material->setSpecular(osg::Material::FRONT_AND_BACK, osg::Vec4(0,0,0,1));
+        // OpenMW 0.52 uses shader uniforms, not fixed-function osg::Material.
+        // Procedural geometry bypasses the model loader's ReplaceMaterialVisitor.
         constexpr auto protect = osg::StateAttribute::OVERRIDE | osg::StateAttribute::PROTECTED;
-        state->setAttributeAndModes(material, osg::StateAttribute::ON | protect);
+        osg::ref_ptr<SceneUtil::Material> material = new SceneUtil::Material;
+        material->setDiffuse(osg::Vec4f(.65f,.65f,.65f,1));
+        material->setAmbient(osg::Vec4f(.35f,.35f,.35f,1));
+        material->setSpecular(osg::Vec4f(0,0,0,1));
+        material->setEmission(osg::Vec4f(0,0,0,1));
+        material->setShininess(0.f);
+        material->setSpecularStrength(0.f);
+        material->setEmissiveMultiplier(0.f);
+        material->setVertexColorMode(SceneUtil::VertexColorModes::None);
+        state->setAttribute(material, osg::StateAttribute::ON | protect);
+        material->setStateSet(state, osg::StateAttribute::ON | protect);
         state->setMode(GL_LIGHTING, osg::StateAttribute::ON);
         state->setMode(GL_CULL_FACE, osg::StateAttribute::OFF | protect);
         state->setMode(GL_BLEND, osg::StateAttribute::OFF | protect);
@@ -66,6 +70,7 @@ namespace MWRender
         prepared->setRenderingHint(osg::StateSet::OPAQUE_BIN);
         prepared->setMode(GL_BLEND, osg::StateAttribute::OFF | protect);
         prepared->setMode(GL_ALPHA_TEST, osg::StateAttribute::OFF | protect);
+        material->setStateSet(prepared, osg::StateAttribute::ON | protect);
         return prepared;
     }
 }
