@@ -131,8 +131,8 @@ namespace MWRender
         // Prepare and commit a bounded procedural neck cut before the Bullet
         // joint transaction; returns false without changing visible geometry
         // if this NPC's armor/rig cannot support a closed cut.
-        bool setBrutalHeadSevered(bool severed);
-        bool setBrutalLimbsSevered(unsigned mask);
+        bool setBrutalHeadSevered(bool severed) override;
+        bool setBrutalLimbsSevered(unsigned mask) override;
 
         void enableHeadAnimation(bool enable) override;
 
