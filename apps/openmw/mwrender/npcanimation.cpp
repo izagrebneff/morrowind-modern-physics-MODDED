@@ -1,5 +1,6 @@
 #include "npcanimation.hpp"
 #include "decapitation.hpp"
+#include "brutalcutmaterial.hpp"
 #include "limbsevering.hpp"
 #include <components/misc/strings/algorithm.hpp>
 #include <osg/Material>
@@ -56,49 +57,6 @@
 
 namespace
 {
-    // Cap geometry has its own UVs and must have an explicit diffuse texture.
-    // Use an opaque procedural fallback rather than the renderer's missing-texture image.
-    osg::ref_ptr<osg::StateSet> makeBrutalCutMaterial()
-    {
-        osg::ref_ptr<osg::Image> image = new osg::Image;
-        constexpr int size = 64;
-        image->allocateImage(size, size, 1, GL_RGBA, GL_UNSIGNED_BYTE);
-        // Keep the generated image in memory; no external DDS lookup.
-        for (int y = 0; y < size; ++y)
-            for (int x = 0; x < size; ++x)
-            {
-                const unsigned hash = static_cast<unsigned>(x) * 73856093u
-                    ^ static_cast<unsigned>(y) * 19349663u;
-                const float grain = static_cast<float>((hash ^ (hash >> 13)) & 255u) / 255.f;
-                const float pattern = .5f + .5f * std::sin(x * .31f + y * .23f
-                    + 1.4f * std::sin(y * .17f));
-                const float shade = .55f + .25f * grain + .2f * pattern;
-                auto* pixel = image->data(x, y);
-                pixel[0] = static_cast<unsigned char>(75.f * shade);
-                pixel[1] = static_cast<unsigned char>(11.f * shade);
-                pixel[2] = static_cast<unsigned char>(9.f * shade);
-                pixel[3] = 255;
-            }
-        osg::ref_ptr<osg::Texture2D> texture = new osg::Texture2D(image);
-        texture->setName("diffuseMap");
-        texture->setFilter(osg::Texture::MIN_FILTER, osg::Texture::LINEAR);
-        texture->setFilter(osg::Texture::MAG_FILTER, osg::Texture::LINEAR);
-        texture->setWrap(osg::Texture::WRAP_S, osg::Texture::CLAMP_TO_EDGE);
-        texture->setWrap(osg::Texture::WRAP_T, osg::Texture::CLAMP_TO_EDGE);
-        osg::ref_ptr<osg::Material> material = new osg::Material;
-        material->setColorMode(osg::Material::OFF);
-        material->setDiffuse(osg::Material::FRONT_AND_BACK, osg::Vec4f(1.f, 1.f, 1.f, 1.f));
-        material->setAmbient(osg::Material::FRONT_AND_BACK, osg::Vec4f(.25f, .25f, .25f, 1.f));
-        osg::ref_ptr<osg::StateSet> state = new osg::StateSet;
-        state->setAttributeAndModes(material, osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE | osg::StateAttribute::PROTECTED);
-        state->setTextureAttributeAndModes(0, texture, osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE | osg::StateAttribute::PROTECTED);
-        material->setEmission(osg::Material::FRONT_AND_BACK, osg::Vec4f(0.f, 0.f, 0.f, 1.f));
-        material->setSpecular(osg::Material::FRONT_AND_BACK, osg::Vec4f(0.f, 0.f, 0.f, 1.f));
-        state->setMode(GL_BLEND, osg::StateAttribute::OFF | osg::StateAttribute::OVERRIDE | osg::StateAttribute::PROTECTED);
-        return state;
-    }
-
-
     VFS::Path::Normalized getVampireHead(ESM::RefId race, bool female)
     {
         static std::map<std::pair<ESM::RefId, bool>, const ESM::BodyPart*> sVampireMapping;
@@ -364,9 +322,10 @@ namespace MWRender
             if (snapshots.empty())
                 return false;
 
-            auto capState = makeBrutalCutMaterial();
+            auto capState = prepareBrutalCutMaterial(mResourceSystem, false);
+            auto fragmentState = prepareBrutalCutMaterial(mResourceSystem, true);
             auto cut = std::make_unique<DecapitationGeometry>();
-            if (!cut->build(snapshots, *neck, *head, capState, distance * .5f, axis, capState))
+            if (!cut->build(snapshots, *neck, *head, capState, distance * .5f, axis, fragmentState))
             {
                 Log(Debug::Warning) << "Brutal head cut declined: no valid closed geometry (stage "
                     << cut->failure << ")";
@@ -545,10 +504,11 @@ namespace MWRender
             if (snapshots.empty())
                 return false;
 
-            auto cap = makeBrutalCutMaterial();
+            auto cap = prepareBrutalCutMaterial(mResourceSystem, false);
+            auto fragmentCap = prepareBrutalCutMaterial(mResourceSystem, true);
             auto prepared = std::make_unique<LimbSeveringGeometry>();
             if (!prepared->build(snapshots, { cut }, liveBones, liveBones,
-                    region, targets, distal, cap, cap))
+                    region, targets, distal, cap, fragmentCap))
             {
                 Log(Debug::Warning) << "Brutal limb cut declined: mask=" << mask
                     << ", geometry stage=" << prepared->failure;
