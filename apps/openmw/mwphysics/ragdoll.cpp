@@ -257,6 +257,26 @@ namespace MWPhysics
                     up = osg::Vec3f(0, 0, 1);
                 end = start + up * 14.f;
             }
+            // On reconstruction, the saved calf or head may be far from
+            // its former joint. Never size the intact thigh capsule from
+            // the gap between two intentionally disconnected fragments.
+            const auto& stats = actor.getClass().getCreatureStats(actor);
+            const unsigned savedMask = stats.getBrutalSeveredLimbsMask();
+            const bool restoredThigh = (def.mBone == "Bip01 L Thigh" && (savedMask & 1u))
+                || (def.mBone == "Bip01 R Thigh" && (savedMask & 2u));
+            const bool restoredHead = def.mBone == "Bip01 Head" && stats.isBrutalHeadSevered();
+            if (restoredThigh || restoredHead)
+            {
+                osg::Vec3f scale;
+                const btTransform boneWorld = withoutScale(bones.find(def.mBone)->second, scale);
+                // The authored humanoid profile uses local +X along long bones.
+                // Use a bounded nominal segment length for a restored cut;
+                // the original endpoint no longer describes the intact segment.
+                const float segment = restoredHead ? 14.f : 28.f;
+                const float boneScale = std::clamp(std::abs(scale.x()), 0.25f, 4.f);
+                end = start + Misc::Convert::toOsg(boneWorld.getBasis() * btVector3(1, 0, 0))
+                    * (segment * boneScale);
+            }
             btVector3 axis = Misc::Convert::toBullet(end - start);
             const btScalar length = axis.length();
             axis = length > 1e-3f ? axis / length : btVector3(0, 0, 1);
