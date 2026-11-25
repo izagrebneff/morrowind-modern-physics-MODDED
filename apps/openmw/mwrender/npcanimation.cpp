@@ -325,7 +325,53 @@ namespace MWRender
             auto capState = prepareBrutalCutMaterial(mResourceSystem, false);
             auto fragmentState = prepareBrutalCutMaterial(mResourceSystem, true);
             auto cut = std::make_unique<DecapitationGeometry>();
-            if (!cut->build(snapshots, *neck, *head, capState, distance * .5f, axis, fragmentState))
+            // As in original Brutal Morrowind, retain body garment skinning
+            // but pin any head-influenced vertices to the neck frame.
+            DecapitationGeometry::RetainedRigVisitor retained;
+            for (int part = 0; part < ESM::PRT_Count; ++part)
+                if (part != ESM::PRT_Head && part != ESM::PRT_Hair && part != ESM::PRT_Neck
+                    && mObjectParts[part])
+                    retained.snapshot(mObjectParts[part]->getNode());
+            const auto neckInverse = osg::Matrixf::inverse(*neck);
+            for (const auto& [rig, path] : retained.rigs)
+            {
+                SceneUtil::RigGeometry::BonePoseOverrides overrides;
+                std::set<unsigned short> affected;
+                for (const auto& name : rig->getInfluencingBoneNames())
+                {
+                    const auto bone = nodes.find(name);
+                    if (bone == nodes.end()) continue;
+                    const auto paths = bone->second->getParentalNodePaths();
+                    if (paths.empty()) continue;
+                    const bool followsHead = std::any_of(paths.front().begin(), paths.front().end(),
+                        [](const osg::Node* node) {
+                            return Misc::StringUtils::ciEqual(node->getName(), "Bip01 Head");
+                        });
+                    if (!followsHead) continue;
+                    const auto vertices = rig->getVerticesInfluencedBy(name);
+                    if (vertices.empty()) continue;
+                    const auto world = pose(name);
+                    if (!world) return false;
+                    overrides.emplace(name, SceneUtil::RigGeometry::BonePoseOverride{
+                        "Bip01 Neck", *world * neckInverse, nullptr });
+                    affected.insert(vertices.begin(), vertices.end());
+                }
+                if (overrides.empty()) continue;
+                const auto snapshot = rig->snapshotWorldGeometry(path, pose);
+                if (!snapshot) return false;
+                const auto* vertices = dynamic_cast<const osg::Vec3Array*>(snapshot->getVertexArray());
+                if (!vertices) return false;
+                for (auto index : affected)
+                {
+                    if (index >= vertices->size()) return false;
+                    cut->retainedVertexMaximum = std::max(cut->retainedVertexMaximum,
+                        ((*vertices)[index] - neck->getTrans()) * axis);
+                }
+                cut->retainedRigs.push_back({rig, std::move(overrides)});
+            }
+            const float cutDistance = std::max(distance * .5f, cut->retainedVertexMaximum + .15f);
+            if (cutDistance >= distance * .95f) return false;
+            if (!cut->build(snapshots, *neck, *head, capState, cutDistance, axis, fragmentState))
             {
                 Log(Debug::Warning) << "Brutal head cut declined: no valid closed geometry (stage "
                     << cut->failure << ")";
@@ -354,6 +400,8 @@ namespace MWRender
                     node->setNodeMask(0);
                 }
             cut->committed = true;
+            for (auto& retainedRig : cut->retainedRigs)
+                retainedRig.geometry->setBonePoseOverrides(std::move(retainedRig.poses));
             mBrutalHeadCut = std::move(cut);
             return true;
         }
