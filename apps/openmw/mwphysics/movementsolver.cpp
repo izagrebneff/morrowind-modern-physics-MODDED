@@ -167,44 +167,6 @@ namespace MWPhysics
                            * osg::Quat(actor.mRotation.y(), osg::Vec3f(0, 0, -1)))
                 * actor.mMovement;
         }
-        else if (actor.mUseBrutalKinetics && !actor.mInert)
-        {
-            // Port of Brutal Morrowind's Source/Dark Messiah planar locomotion.
-            // Preserve the original actor collision solver and vertical gravity;
-            // only the player uses this until the ragdoll/slide integration stage.
-            osg::Vec3f wish = osg::Quat(actor.mRotation.y(), osg::Vec3f(0, 0, -1)) * actor.mMovement;
-            const float jump = wish.z();
-            wish.z() = 0.f;
-            const bool grounded = actor.mIsOnGround && !actor.mIsOnSlope;
-            osg::Vec3f& moving = actor.mBrutalLocomotionVelocity;
-            if (grounded)
-            {
-                const float speed = moving.length();
-                if (speed > 0.f)
-                {
-                    const float control = std::max(speed, PlayerKinetics::StopSpeed);
-                    const float drop = control * PlayerKinetics::Friction * time;
-                    moving *= std::max(speed - drop, 0.f) / speed;
-                }
-            }
-
-            const float wishSpeed = wish.length();
-            if (wishSpeed > 0.f)
-            {
-                const osg::Vec3f direction = wish / wishSpeed;
-                const float accelerate = grounded ? PlayerKinetics::Accelerate : PlayerKinetics::AirAccelerate;
-                const float target = grounded ? wishSpeed : std::min(wishSpeed, PlayerKinetics::AirWishCap);
-                const float add = target - moving * direction;
-                if (add > 0.f)
-                    moving += direction * std::min(accelerate * wishSpeed * time, add);
-            }
-
-            actor.mInertia.x() = actor.mInertia.y() = 0.f;
-            if (grounded && jump > 0.f)
-                actor.mInertia.z() = jump;
-            velocity = moving;
-            velocity.z() = actor.mInertia.z();
-        }
         else
         {
             // Do not retain planar momentum when swimming, flying or reverting
