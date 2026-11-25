@@ -830,7 +830,12 @@ namespace MWPhysics
         {
             if ((positions[i] - mLastPositions[i]).length() > maxSpeed * mCheckTimer)
                 return true;
-            if (isJointed()
+            // A deliberately severed fragment may travel away from the pelvis.
+            // Keep the velocity sanity check above, but do not interpret a
+            // successful cut as a broken joint and discard the entire corpse.
+            const bool detached = (mHeadDetached && i == 2)
+                || LimbSevering::fragment(i, mSeveredLimbsMask) != 0;
+            if (isJointed() && !detached
                 && (positions[i] - positions.at(mMainPartIndex)).length()
                     > mStartDistances[i] * 2.f + (mFlyingCorpse ? 250.f : 80.f))
                 return true;
