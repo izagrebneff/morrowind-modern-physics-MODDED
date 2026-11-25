@@ -62,7 +62,8 @@ namespace
     {
         osg::ref_ptr<osg::Image> image = new osg::Image;
         constexpr int size = 64;
-        image->allocateImage(size, size, 1, GL_RGB, GL_UNSIGNED_BYTE);
+        image->allocateImage(size, size, 1, GL_RGBA, GL_UNSIGNED_BYTE);
+        image->setFileName("brutal_cut_diffuse.dds");
         for (int y = 0; y < size; ++y)
             for (int x = 0; x < size; ++x)
             {
@@ -76,6 +77,7 @@ namespace
                 pixel[0] = static_cast<unsigned char>(145.f * shade);
                 pixel[1] = static_cast<unsigned char>(28.f * shade);
                 pixel[2] = static_cast<unsigned char>(23.f * shade);
+                pixel[3] = 255;
             }
         osg::ref_ptr<osg::Texture2D> texture = new osg::Texture2D(image);
         texture->setName("diffuseMap");
@@ -89,7 +91,9 @@ namespace
         material->setAmbient(osg::Material::FRONT_AND_BACK, osg::Vec4f(.5f, .5f, .5f, 1.f));
         osg::ref_ptr<osg::StateSet> state = new osg::StateSet;
         state->setAttributeAndModes(material, osg::StateAttribute::ON);
-        state->setTextureAttributeAndModes(0, texture, osg::StateAttribute::ON);
+        state->setTextureAttributeAndModes(0, texture, osg::StateAttribute::ON | osg::StateAttribute::PROTECTED);
+        material->setEmission(osg::Material::FRONT_AND_BACK, osg::Vec4f(0.f, 0.f, 0.f, 1.f));
+        material->setSpecular(osg::Material::FRONT_AND_BACK, osg::Vec4f(0.f, 0.f, 0.f, 1.f));
         return state;
     }
 
