@@ -847,6 +847,21 @@ namespace MWClass
                 stats.setDeathKick(direction * std::clamp(120.f + healthDamage * 4.f, 140.f, 280.f));
             }
 
+            // Commit the cut and its physical separation in the fatal hit action,
+            // rather than waiting for the character controller's death update.
+            if (stats.hasEligibleLethalMeleeDismemberment())
+            {
+                auto* world = MWBase::Environment::get().getWorld();
+                const auto kick = stats.getDeathKick();
+                if (world->makeRagdoll(ptr, kick, kick.length2() > 1.f, false))
+                {
+                    if (auto* animation = world->getAnimation(ptr))
+                        animation->stopAllAnimations();
+                    stats.setDeathKick(osg::Vec3f());
+                    stats.setEligibleLethalMeleeDismemberment(false);
+                }
+            }
+
             // NPC was killed
             if (!attacker.isEmpty() && attacker.getClass().isNpc()
                 && attacker.getClass().getNpcStats(attacker).isWerewolf())

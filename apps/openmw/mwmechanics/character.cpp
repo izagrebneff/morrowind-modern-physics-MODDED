@@ -2935,6 +2935,15 @@ namespace MWMechanics
         if (!mAnimation || mPtr == getPlayer())
             return false;
         CreatureStats& stats = mPtr.getClass().getCreatureStats(mPtr);
+        // A fatal melee hit may already have created and separated the ragdoll.
+        // Adopt it instead of replacing its bodies and constraints.
+        if (!MWBase::Environment::get().getWorld()->getRagdollBonePoses(mPtr).empty())
+        {
+            mRagdoll = true;
+            mAnimation->stopAllAnimations();
+            stats.setDeathKick(osg::Vec3f());
+            return true;
+        }
         const osg::Vec3f kick = stats.getDeathKick();
         // Give creatures without a usable articulated rig the same fatal impact as a single body.
         const bool madeRagdoll = MWBase::Environment::get().getWorld()->makeRagdoll(
