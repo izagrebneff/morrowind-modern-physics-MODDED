@@ -3,6 +3,8 @@
 #include "limbsevering.hpp"
 #include <components/misc/strings/algorithm.hpp>
 #include <osg/Material>
+#include <osg/Image>
+#include <osg/Texture2D>
 #include <cmath>
 
 #include <osg/Depth>
@@ -54,6 +56,43 @@
 
 namespace
 {
+    // Cap geometry has its own UVs and must have an explicit diffuse texture.
+    // Use an opaque procedural fallback rather than the renderer's missing-texture image.
+    osg::ref_ptr<osg::StateSet> makeBrutalCutMaterial()
+    {
+        osg::ref_ptr<osg::Image> image = new osg::Image;
+        constexpr int size = 64;
+        image->allocateImage(size, size, 1, GL_RGB, GL_UNSIGNED_BYTE);
+        for (int y = 0; y < size; ++y)
+            for (int x = 0; x < size; ++x)
+            {
+                const unsigned hash = static_cast<unsigned>(x) * 73856093u
+                    ^ static_cast<unsigned>(y) * 19349663u;
+                const float grain = static_cast<float>((hash ^ (hash >> 13)) & 255u) / 255.f;
+                const float pattern = .5f + .5f * std::sin(x * .31f + y * .23f
+                    + 1.4f * std::sin(y * .17f));
+                const float shade = .55f + .25f * grain + .2f * pattern;
+                auto* pixel = image->data(x, y);
+                pixel[0] = static_cast<unsigned char>(145.f * shade);
+                pixel[1] = static_cast<unsigned char>(28.f * shade);
+                pixel[2] = static_cast<unsigned char>(23.f * shade);
+            }
+        osg::ref_ptr<osg::Texture2D> texture = new osg::Texture2D(image);
+        texture->setName("diffuseMap");
+        texture->setFilter(osg::Texture::MIN_FILTER, osg::Texture::LINEAR);
+        texture->setFilter(osg::Texture::MAG_FILTER, osg::Texture::LINEAR);
+        texture->setWrap(osg::Texture::WRAP_S, osg::Texture::CLAMP_TO_EDGE);
+        texture->setWrap(osg::Texture::WRAP_T, osg::Texture::CLAMP_TO_EDGE);
+        osg::ref_ptr<osg::Material> material = new osg::Material;
+        material->setColorMode(osg::Material::OFF);
+        material->setDiffuse(osg::Material::FRONT_AND_BACK, osg::Vec4f(1.f, 1.f, 1.f, 1.f));
+        material->setAmbient(osg::Material::FRONT_AND_BACK, osg::Vec4f(.5f, .5f, .5f, 1.f));
+        osg::ref_ptr<osg::StateSet> state = new osg::StateSet;
+        state->setAttributeAndModes(material, osg::StateAttribute::ON);
+        state->setTextureAttributeAndModes(0, texture, osg::StateAttribute::ON);
+        return state;
+    }
+
 
     VFS::Path::Normalized getVampireHead(ESM::RefId race, bool female)
     {
@@ -320,13 +359,7 @@ namespace MWRender
             if (snapshots.empty())
                 return false;
 
-            // Texture-free cap fallback: user-owned Dark Messiah assets are
-            // optional and must never be embedded in a public executable.
-            osg::ref_ptr<osg::Material> material = new osg::Material;
-            material->setDiffuse(osg::Material::FRONT_AND_BACK,
-                osg::Vec4f(.42f, .055f, .045f, 1.f));
-            osg::ref_ptr<osg::StateSet> capState = new osg::StateSet;
-            capState->setAttributeAndModes(material, osg::StateAttribute::ON);
+            auto capState = makeBrutalCutMaterial();
             auto cut = std::make_unique<DecapitationGeometry>();
             if (!cut->build(snapshots, *neck, *head, capState, distance * .5f, axis, capState))
             {
@@ -507,11 +540,7 @@ namespace MWRender
             if (snapshots.empty())
                 return false;
 
-            osg::ref_ptr<osg::Material> material = new osg::Material;
-            material->setDiffuse(osg::Material::FRONT_AND_BACK,
-                osg::Vec4f(0.42f, 0.055f, 0.045f, 1.f));
-            osg::ref_ptr<osg::StateSet> cap = new osg::StateSet;
-            cap->setAttributeAndModes(material, osg::StateAttribute::ON);
+            auto cap = makeBrutalCutMaterial();
             auto prepared = std::make_unique<LimbSeveringGeometry>();
             if (!prepared->build(snapshots, { cut }, liveBones, liveBones,
                     region, targets, distal, cap, cap))
