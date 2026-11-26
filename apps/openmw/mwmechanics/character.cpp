@@ -2831,6 +2831,12 @@ namespace MWMechanics
 
     bool CharacterController::isMovementAnimationControlled() const
     {
+        // Shield blocks are upper-body actions. Their animation often has
+        // no root translation, which otherwise cancels AI locomotion.
+        // Leave genuine hit recoil, knockdown and death animation-controlled.
+        if (mHitState == CharState_Block && mPtr != getPlayer()
+            && mPtr.getClass().isNpc() && !mPtr.getClass().getCreatureStats(mPtr).isDead())
+            return false;
         if (mHitState != CharState_None || mDeathState != CharState_None)
             return true;
 
