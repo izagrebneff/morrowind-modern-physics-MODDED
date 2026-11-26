@@ -179,9 +179,8 @@ namespace MWRender
                 if (!(affected & cut.bit)) continue;
                 // A deeply bent knee can put the upper thigh in front of the
                 // calf plane. Only its joint neighbourhood may be clipped.
-                if (entirelyBody && std::all_of(body.begin(), body.end(), [&](const auto& vertex) {
-                        return (vertex.vertex.p - cut.center).length2() > cut.proximalRadius * cut.proximalRadius;
-                    })) continue;
+                // Never cut triangles owned exclusively by the retained torso.
+                if (entirelyBody) continue;
                 // A folded forearm/foot is already wholly distal to this joint.
                 // Do not let its world-space position cause a second plane cut.
                 if (protectedDistal & cut.bit)

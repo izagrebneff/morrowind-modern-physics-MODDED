@@ -328,6 +328,7 @@ namespace MWRender
             // As in original Brutal Morrowind, retain body garment skinning
             // but pin any head-influenced vertices to the neck frame.
             DecapitationGeometry::RetainedRigVisitor retained;
+            retained.setNodeMaskOverride(~0u);
             for (int part = 0; part < ESM::PRT_Count; ++part)
                 if (part != ESM::PRT_Head && part != ESM::PRT_Hair && part != ESM::PRT_Neck
                     && mObjectParts[part])
@@ -504,7 +505,8 @@ namespace MWRender
             };
         const LimbSeveringGeometry::BoneTargets targets =
             [&](std::string_view name) -> unsigned {
-                return descendant(name, request->parent) ? mask : 0u;
+                // Clavicle-only torso vertices must not be assigned to the arm.
+                return descendant(name, request->child) ? mask : 0u;
             };
         const LimbSeveringGeometry::BoneTargets distal =
             [&](std::string_view name) -> unsigned {
