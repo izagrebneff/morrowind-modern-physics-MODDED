@@ -893,9 +893,9 @@ namespace MWMechanics
 
         // The body goes limp right away: a ragdoll instead of a death animation (which is still recorded, for
         // how the corpse lies after loading a save). Only as it dies; a ragdoll already going keeps going.
-        if (mRagdoll)
-            return;
-        if (mDying && startRagdoll())
+        // The fatal-hit handler can create the ragdoll before kill() runs.
+        // Finalize death bookkeeping even if driveRagdoll already adopted it.
+        if (mRagdoll || (mDying && startRagdoll()))
         {
             mCurrentDeath = deathStateToAnimGroup(mDeathState);
             CreatureStats& stats = mPtr.getClass().getCreatureStats(mPtr);
@@ -2513,7 +2513,7 @@ namespace MWMechanics
 
             // initial start of death animation for actors that started the game as dead
             // not done in constructor since we need to give scripts a chance to set the mSkipAnim flag
-            if (!mSkipAnim && mDeathState != CharState_None && mCurrentDeath.empty())
+            if (!mRagdoll && !mSkipAnim && mDeathState != CharState_None && mCurrentDeath.empty())
             {
                 // Fast-forward death animation to end for persisting corpses or corpses after end of death animation
                 if (cls.isPersistent(mPtr) || cls.getCreatureStats(mPtr).isDeathAnimationFinished())
@@ -2523,6 +2523,13 @@ namespace MWMechanics
 
         osg::Vec3f movementFromAnimation
             = mAnimation->runAnimation(mSkipAnim && !isScriptedAnimPlaying() ? 0.f : duration);
+        // Animation callbacks may update bones after the initial physics pose.
+        // Keep the physics pose authoritative for dead articulated actors.
+        if (mRagdoll && cls.getCreatureStats(mPtr).isDead())
+        {
+            driveRagdoll();
+            movementFromAnimation = osg::Vec3f();
+        }
         if (mDeathState != CharState_None && !mRagdoll)
             mAnimation->sampleDeathRagdollMotion(duration);
 
