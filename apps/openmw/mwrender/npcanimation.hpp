@@ -10,6 +10,7 @@
 #include "../mwworld/inventorystore.hpp"
 
 #include <array>
+#include <optional>
 
 namespace ESM
 {
@@ -27,6 +28,8 @@ namespace MWRender
 
     class RotateController;
     class HeadAnimationTime;
+    struct DecapitationGeometry;
+    struct LimbSeveringGeometry;
 
     class NpcAnimation : public ActorAnimation, public WeaponAnimation, public MWWorld::InventoryStoreListener
     {
@@ -48,6 +51,9 @@ namespace MWRender
 
         // Bounded Parts
         PartHolderPtr mObjectParts[ESM::PRT_Count];
+        std::unique_ptr<DecapitationGeometry> mBrutalHeadCut;
+        std::optional<osg::Matrixf> mBrutalRebuildHeadInNeck;
+        std::unique_ptr<LimbSeveringGeometry> mBrutalLimbCut;
         std::array<MWSound::Sound*, ESM::PRT_Count> mSounds;
 
         const ESM::NPC* mNpc;
@@ -123,6 +129,12 @@ namespace MWRender
             Resource::ResourceSystem* resourceSystem, bool disableSounds = false, ViewMode viewMode = VM_Normal,
             float firstPersonFieldOfView = 55.f);
         virtual ~NpcAnimation();
+
+        // Prepare and commit a bounded procedural neck cut before the Bullet
+        // joint transaction; returns false without changing visible geometry
+        // if this NPC's armor/rig cannot support a closed cut.
+        bool setBrutalHeadSevered(bool severed) override;
+        bool setBrutalLimbsSevered(unsigned mask) override;
 
         void enableHeadAnimation(bool enable) override;
 

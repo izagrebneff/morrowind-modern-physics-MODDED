@@ -84,6 +84,15 @@ namespace MWPhysics
         /// Whether the parts are joined together (otherwise they're loose pieces).
         bool isJointed() const { return !mJoints.empty(); }
 
+        /// Brutal Morrowind's first physical cut: a detached head or an
+        /// authored humanoid limb fragment no longer shares the parent joint.
+        /// Renderer integration is a separate stage and must complete before
+        /// enabling these operations from ordinary combat.
+        bool detachHead(const osg::Vec3f& cutVelocity);
+        bool detachLimbs(unsigned mask, const osg::Vec3f& cutVelocity);
+        bool isHeadDetached() const { return mHeadDetached; }
+        unsigned getSeveredLimbsMask() const { return mSeveredLimbsMask; }
+
         /// Where the simulated bones are now (world matrices), parents first. Interpolation is how far the time
         /// since the last physics step is to the next one, for smooth movement at any frame rate.
         std::vector<std::pair<std::string, osg::Matrixf>> getBonePoses(float interpolation) const;
@@ -186,6 +195,8 @@ namespace MWPhysics
         float mStableTime = 0.f;
         float mJitterWindowTime = 0.f;
         bool mFrozen = false;
+        bool mHeadDetached = false;
+        unsigned mSeveredLimbsMask = 0;
         std::vector<btTransform> mPreviousFreezeTransforms;
         std::vector<btVector3> mJitterStartPositions;
         std::vector<float> mStartDistances;

@@ -35,6 +35,7 @@
 #include <components/sceneutil/positionattitudetransform.hpp>
 
 #include "../mwrender/animation.hpp"
+#include "../mwrender/npcanimation.hpp"
 
 #include "../mwbase/environment.hpp"
 #include "../mwbase/luamanager.hpp"
@@ -892,9 +893,9 @@ namespace MWMechanics
 
         // The body goes limp right away: a ragdoll instead of a death animation (which is still recorded, for
         // how the corpse lies after loading a save). Only as it dies; a ragdoll already going keeps going.
-        if (mRagdoll)
-            return;
-        if (mDying && startRagdoll())
+        // The fatal-hit handler can create the ragdoll before kill() runs.
+        // Finalize death bookkeeping even if driveRagdoll already adopted it.
+        if (mRagdoll || (mDying && startRagdoll()))
         {
             mCurrentDeath = deathStateToAnimGroup(mDeathState);
             CreatureStats& stats = mPtr.getClass().getCreatureStats(mPtr);
@@ -2512,7 +2513,7 @@ namespace MWMechanics
 
             // initial start of death animation for actors that started the game as dead
             // not done in constructor since we need to give scripts a chance to set the mSkipAnim flag
-            if (!mSkipAnim && mDeathState != CharState_None && mCurrentDeath.empty())
+            if (!mRagdoll && !mSkipAnim && mDeathState != CharState_None && mCurrentDeath.empty())
             {
                 // Fast-forward death animation to end for persisting corpses or corpses after end of death animation
                 if (cls.isPersistent(mPtr) || cls.getCreatureStats(mPtr).isDeathAnimationFinished())
@@ -2522,6 +2523,13 @@ namespace MWMechanics
 
         osg::Vec3f movementFromAnimation
             = mAnimation->runAnimation(mSkipAnim && !isScriptedAnimPlaying() ? 0.f : duration);
+        // Animation callbacks may update bones after the initial physics pose.
+        // Keep the physics pose authoritative for dead articulated actors.
+        if (mRagdoll && cls.getCreatureStats(mPtr).isDead())
+        {
+            driveRagdoll();
+            movementFromAnimation = osg::Vec3f();
+        }
         if (mDeathState != CharState_None && !mRagdoll)
             mAnimation->sampleDeathRagdollMotion(duration);
 
@@ -2823,6 +2831,12 @@ namespace MWMechanics
 
     bool CharacterController::isMovementAnimationControlled() const
     {
+        // Shield blocks are upper-body actions. Their animation often has
+        // no root translation, which otherwise cancels AI locomotion.
+        // Leave genuine hit recoil, knockdown and death animation-controlled.
+        if (mHitState == CharState_Block && mPtr != getPlayer()
+            && mPtr.getClass().isNpc() && !mPtr.getClass().getCreatureStats(mPtr).isDead())
+            return false;
         if (mHitState != CharState_None || mDeathState != CharState_None)
             return true;
 
@@ -2911,6 +2925,15 @@ namespace MWMechanics
             mRagdoll = false;
         }
         mPtr.getClass().getCreatureStats(mPtr).setRagdollPose({});
+        mPtr.getClass().getCreatureStats(mPtr).setBrutalHeadSevered(false);
+        mPtr.getClass().getCreatureStats(mPtr).setBrutalSeveredLimbsMask(0);
+        mPtr.getClass().getCreatureStats(mPtr).setBrutalPendingLimbMask(0);
+        mPtr.getClass().getCreatureStats(mPtr).setEligibleLethalMeleeDismemberment(false);
+        if (auto* npc = dynamic_cast<MWRender::NpcAnimation*>(mAnimation))
+        {
+            npc->setBrutalHeadSevered(false);
+            npc->setBrutalLimbsSevered(0);
+        }
 
         if (mDeathState == CharState_None)
             return;
@@ -2925,6 +2948,15 @@ namespace MWMechanics
         if (!mAnimation || mPtr == getPlayer())
             return false;
         CreatureStats& stats = mPtr.getClass().getCreatureStats(mPtr);
+        // A fatal melee hit may already have created and separated the ragdoll.
+        // Adopt it instead of replacing its bodies and constraints.
+        if (!MWBase::Environment::get().getWorld()->getRagdollBonePoses(mPtr).empty())
+        {
+            mRagdoll = true;
+            mAnimation->stopAllAnimations();
+            stats.setDeathKick(osg::Vec3f());
+            return true;
+        }
         const osg::Vec3f kick = stats.getDeathKick();
         // Give creatures without a usable articulated rig the same fatal impact as a single body.
         const bool madeRagdoll = MWBase::Environment::get().getWorld()->makeRagdoll(
@@ -2994,8 +3026,16 @@ namespace MWMechanics
         if (distanceSquared > maxDistance * maxDistance)
             return;
 
-        // Pose the body as it lay, then make the ragdoll from that pose, at rest.
+        // Reconstruct the neck cut while the original head is still attached.
+        // Saved world matrices describe separated fragments, not a valid neck mesh.
         mAnimation->stopAllAnimations();
+        const bool restoreHeadCut = mPtr.getClass().getCreatureStats(mPtr).isBrutalHeadSevered();
+        if (restoreHeadCut && !mAnimation->setBrutalHeadSevered(true))
+        {
+            // Do not generate a cut from a stretched, already detached pose.
+            return;
+        }
+        // Pose the body as it lay, then make the ragdoll from that pose, at rest.
         for (const auto& [bone, world] : pose)
         {
             if (!bone.empty())
@@ -3013,7 +3053,11 @@ namespace MWMechanics
             }
         }
         if (!MWBase::Environment::get().getWorld()->makeRagdoll(mPtr, osg::Vec3f(), true, true))
+        {
+            if (restoreHeadCut)
+                mAnimation->setBrutalHeadSevered(false);
             return; // It plays its death animation after all.
+        }
         mRagdoll = true;
         // Not the death animation, which it already played.
         if (mDeathState != CharState_None)

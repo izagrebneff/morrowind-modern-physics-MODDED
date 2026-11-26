@@ -1,10 +1,16 @@
 #ifndef OPENMW_COMPONENTS_NIFOSG_RIGGEOMETRY_H
 #define OPENMW_COMPONENTS_NIFOSG_RIGGEOMETRY_H
 
+#include "surfacedecals.hpp"
+
 #include <osg/Geometry>
 #include <osg/Matrixf>
 
 #include <string_view>
+#include <functional>
+#include <map>
+#include <optional>
+#include <osg/Vec3d>
 
 namespace SceneUtil
 {
@@ -64,6 +70,33 @@ namespace SceneUtil
 
         osg::ref_ptr<osg::Geometry> getSourceGeometry() const;
 
+        // Original Brutal per-actor decal patches stay on deformed skin.
+        SurfaceDecals* getOrCreateSurfaceDecals();
+        const SurfaceDecals* getSurfaceDecals() const { return mSurfaceDecals.get(); }
+        SurfaceDecals* getSurfaceDecals() { return mSurfaceDecals.get(); }
+
+        // Original Brutal Morrowind snapshot interface, adapted to the
+        // OpenMW 0.52 skinner without replacing its unrelated render code.
+        // Returns an instance-local CPU snapshot of the already posed mesh.
+        osg::ref_ptr<osg::Geometry> snapshotWorldGeometry(const osg::NodePath& path,
+            const std::function<std::optional<osg::Matrixf>(std::string_view)>& boneWorld,
+            bool positionsOnly = false, bool dynamicArraysOnly = false,
+            const std::optional<osg::Vec3d>& referenceOrigin = {});
+        std::vector<std::string> getInfluencingBoneNames() const;
+        std::vector<unsigned short> getVerticesInfluencedBy(std::string_view bone) const;
+
+        // Brutal separates meshes without mutating the shared skeleton:
+        // each fragment owns a mapping from its original bones to its anchor.
+        struct BonePoseOverride
+        {
+            std::string anchor;
+            osg::Matrixf relative;
+            Bone* anchorNode = nullptr;
+        };
+        using BonePoseOverrides = std::map<std::string, BonePoseOverride>;
+        void setBonePoseOverrides(BonePoseOverrides overrides);
+        void clearBonePoseOverrides();
+
         void accept(osg::NodeVisitor& nv) override;
         bool supports(const osg::PrimitiveFunctor&) const override { return true; }
         void accept(osg::PrimitiveFunctor&) const override;
@@ -90,6 +123,7 @@ namespace SceneUtil
         osg::Geometry* getGeometry(unsigned int frame) const;
 
         osg::ref_ptr<osg::Geometry> mSourceGeometry;
+        osg::ref_ptr<SurfaceDecals> mSurfaceDecals;
         osg::ref_ptr<const osg::Vec4Array> mSourceTangents;
         Skeleton* mSkeleton{ nullptr };
 
@@ -105,6 +139,8 @@ namespace SceneUtil
         };
         osg::ref_ptr<InfluenceData> mData;
         std::vector<Bone*> mNodes;
+        BonePoseOverrides mBonePoseOverrides;
+        osg::Matrixf getBoneMatrix(std::size_t index) const;
 
         unsigned int mLastFrameNumber{ 0 };
         bool mBoundsFirstFrame{ true };

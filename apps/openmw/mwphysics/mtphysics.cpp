@@ -2,6 +2,7 @@
 #include "ragdollkick.hpp"
 #include "brutalragdollstep.hpp"
 #include "ragdollstep.hpp"
+#include "ragdollcontrol.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -871,6 +872,59 @@ namespace MWPhysics
             return controller == action;
         });
         mDynamicsWorld->removeAction(action);
+    }
+
+    bool PhysicsTaskScheduler::detachBrutalRagdoll(
+        BrutalRagdollStep* previous, BrutalRagdollStep* replacement,
+        const std::vector<btTypedConstraint*>& removed,
+        const std::vector<btRigidBody*>& detached,
+        const btVector3& separationVelocity)
+    {
+        MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
+        if (!previous || !replacement || previous == replacement || removed.empty()
+            || !RagdollEnhancement::finite(separationVelocity)
+            || separationVelocity.length2() > btScalar(500) * 500
+            || std::find(mBrutalRagdollActions.begin(), mBrutalRagdollActions.end(), previous)
+                == mBrutalRagdollActions.end())
+            return false;
+        for (auto* joint : removed)
+        {
+            if (!joint)
+                return false;
+            bool registered = false;
+            for (int index = 0; index < mDynamicsWorld->getNumConstraints(); ++index)
+                if (mDynamicsWorld->getConstraint(index) == joint)
+                {
+                    registered = true;
+                    break;
+                }
+            if (!registered)
+                return false;
+        }
+        for (auto* body : detached)
+            if (!body || body->getInvMass() <= 0)
+                return false;
+
+        // Original Brutal's replacement controller preserves its impulse and
+        // joint state, but drops all severed links and delays inter-fragment
+        // contacts until geometry is separated. No controller acts on a
+        // deleted joint after the handoff.
+        auto* controller = static_cast<JointFriction*>(replacement);
+        auto* old = static_cast<RagdollStepAction*>(previous);
+        controller->inherit(*old, removed.size() == 1 ? removed.front() : nullptr, mCollisionWorld);
+        mDynamicsWorld->removeAction(previous);
+        std::erase(mBrutalRagdollActions, previous);
+        for (auto* joint : removed)
+            mDynamicsWorld->removeConstraint(joint);
+        mDynamicsWorld->addAction(replacement);
+        mBrutalRagdollActions.push_back(replacement);
+
+        for (auto* body : detached)
+        {
+            body->activate(true);
+            body->setLinearVelocity(body->getLinearVelocity() + separationVelocity);
+        }
+        return true;
     }
 
     void PhysicsTaskScheduler::setAtRest(btRigidBody* body)

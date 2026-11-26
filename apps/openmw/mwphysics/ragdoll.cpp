@@ -26,6 +26,7 @@
 #include "ragdollenhancement.hpp"
 #include "ragdollcontrol.hpp"
 #include "ragdollneutral.hpp"
+#include "limbsevering.hpp"
 #include "mtphysics.hpp"
 
 namespace MWPhysics
@@ -255,6 +256,26 @@ namespace MWPhysics
                 if (up.normalize() < 1e-3f)
                     up = osg::Vec3f(0, 0, 1);
                 end = start + up * 14.f;
+            }
+            // On reconstruction, the saved calf or head may be far from
+            // its former joint. Never size the intact thigh capsule from
+            // the gap between two intentionally disconnected fragments.
+            const auto& stats = actor.getClass().getCreatureStats(actor);
+            const unsigned savedMask = stats.getBrutalSeveredLimbsMask();
+            const bool restoredThigh = (def.mBone == "Bip01 L Thigh" && (savedMask & 1u))
+                || (def.mBone == "Bip01 R Thigh" && (savedMask & 2u));
+            const bool restoredHead = def.mBone == "Bip01 Head" && stats.isBrutalHeadSevered();
+            if (restoredThigh || restoredHead)
+            {
+                osg::Vec3f scale;
+                const btTransform boneWorld = withoutScale(bones.find(def.mBone)->second, scale);
+                // The authored humanoid profile uses local +X along long bones.
+                // Use a bounded nominal segment length for a restored cut;
+                // the original endpoint no longer describes the intact segment.
+                const float segment = restoredHead ? 14.f : 28.f;
+                const float boneScale = std::clamp(std::abs(scale.x()), 0.25f, 4.f);
+                end = start + Misc::Convert::toOsg(boneWorld.getBasis() * btVector3(1, 0, 0))
+                    * (segment * boneScale);
             }
             btVector3 axis = Misc::Convert::toBullet(end - start);
             const btScalar length = axis.length();
@@ -829,7 +850,12 @@ namespace MWPhysics
         {
             if ((positions[i] - mLastPositions[i]).length() > maxSpeed * mCheckTimer)
                 return true;
-            if (isJointed()
+            // A deliberately severed fragment may travel away from the pelvis.
+            // Keep the velocity sanity check above, but do not interpret a
+            // successful cut as a broken joint and discard the entire corpse.
+            const bool detached = (mHeadDetached && i == 2)
+                || LimbSevering::fragment(i, mSeveredLimbsMask) != 0;
+            if (isJointed() && !detached
                 && (positions[i] - positions.at(mMainPartIndex)).length()
                     > mStartDistances[i] * 2.f + (mFlyingCorpse ? 250.f : 80.f))
                 return true;
@@ -1168,6 +1194,91 @@ namespace MWPhysics
         local.setY(std::clamp<btScalar>(local.y(), -half.y() * 0.8f, half.y() * 0.8f));
         local.setZ(std::clamp<btScalar>(local.z(), -half.z() * 0.8f, half.z() * 0.8f));
         return Misc::Convert::toOsg(bodyWorld * local);
+    }
+
+    bool Ragdoll::detachHead(const osg::Vec3f& cutVelocity)
+    {
+        if (mHeadDetached)
+            return true;
+        if (mSeveredLimbsMask || mFrozen || mParts.size() != LimbSevering::PartCount
+            || mParts[2]->mBone != "Bip01 Head" || !mJointFriction)
+            return false;
+        const btVector3 velocity = Misc::Convert::toBullet(cutVelocity);
+        if (!RagdollEnhancement::finite(velocity) || velocity.length2() > 500.f * 500.f)
+            return false;
+
+        auto it = std::find_if(mJointParentChildren.begin(), mJointParentChildren.end(),
+            [](const auto& link) { return link.second == 2; });
+        if (it == mJointParentChildren.end())
+            return false;
+        const size_t index = std::distance(mJointParentChildren.begin(), it);
+        auto* removed = mJoints[index].get();
+        auto replacement = std::make_unique<JointFriction>();
+        btRigidBody* head = mParts[2]->mBody;
+        replacement->mDetachedHead = head;
+        for (const auto& part : mParts)
+            if (part->mBody != head)
+                replacement->mHeadCollisionPending.push_back(part->mBody);
+        if (!mTaskScheduler->detachBrutalRagdoll(
+                static_cast<BrutalRagdollStep*>(mJointFriction.get()), replacement.get(),
+                { removed }, { head }, velocity))
+            return false;
+
+        // Only erase the local constraint after the locked scheduler transaction.
+        mJoints.erase(mJoints.begin() + index);
+        mJointParentChildren.erase(it);
+        mJointFriction = std::move(replacement);
+        mHeadDetached = true;
+        return true;
+    }
+
+    bool Ragdoll::detachLimbs(unsigned mask, const osg::Vec3f& cutVelocity)
+    {
+        if (!LimbSevering::validMask(mask) || mHeadDetached || mFrozen
+            || mParts.size() != LimbSevering::PartCount || !mJointFriction)
+            return false;
+        if (mSeveredLimbsMask != 0)
+            return mSeveredLimbsMask == mask;
+        const btVector3 velocity = Misc::Convert::toBullet(cutVelocity);
+        if (!RagdollEnhancement::finite(velocity) || velocity.length2() > 500.f * 500.f)
+            return false;
+
+        std::vector<btTypedConstraint*> removed;
+        std::vector<size_t> removedIndices;
+        std::vector<btRigidBody*> detached;
+        for (size_t bit = 0; bit < LimbSevering::Roots.size(); ++bit)
+        {
+            if (!(mask & (1u << bit)))
+                continue;
+            const size_t root = LimbSevering::Roots[bit];
+            const auto it = std::find_if(mJointParentChildren.begin(), mJointParentChildren.end(),
+                [root](const auto& link) { return link.second == root; });
+            if (it == mJointParentChildren.end())
+                return false;
+            const size_t index = std::distance(mJointParentChildren.begin(), it);
+            removed.push_back(mJoints[index].get());
+            removedIndices.push_back(index);
+            for (size_t i = 0; i < mParts.size(); ++i)
+                if (LimbSevering::fragment(i, mask) == bit + 1)
+                    detached.push_back(mParts[i]->mBody);
+        }
+        auto replacement = std::make_unique<JointFriction>();
+        replacement->mSeveredLimbsMask = mask;
+        replacement->mRemovedConstraints = removed;
+        if (!mTaskScheduler->detachBrutalRagdoll(
+                static_cast<BrutalRagdollStep*>(mJointFriction.get()), replacement.get(),
+                removed, detached, LimbSevering::separationVelocity(velocity)))
+            return false;
+
+        std::sort(removedIndices.rbegin(), removedIndices.rend());
+        for (size_t i : removedIndices)
+        {
+            mJoints.erase(mJoints.begin() + i);
+            mJointParentChildren.erase(mJointParentChildren.begin() + i);
+        }
+        mJointFriction = std::move(replacement);
+        mSeveredLimbsMask = mask;
+        return true;
     }
 
     Ragdoll::~Ragdoll()

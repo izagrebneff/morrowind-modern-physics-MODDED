@@ -236,6 +236,11 @@ namespace MWPhysics
         void settleRagdoll(const MWWorld::ConstPtr& actor);
         void removeRagdoll(const MWWorld::ConstPtr& actor);
         bool hasRagdoll(const MWWorld::ConstPtr& actor) const;
+        /// Physics-only dismemberment API. No live combat use until renderer
+        /// supports cap geometry, fragment ownership and save restoration.
+        bool detachNpcRagdollHead(const MWWorld::Ptr& actor, const osg::Vec3f& cutVelocity);
+        bool detachNpcRagdollLimbs(
+            const MWWorld::Ptr& actor, unsigned mask, const osg::Vec3f& cutVelocity);
         /// Push the dead actor's ragdoll where it was hit (point, world space) with impulse. False without one.
         bool strikeRagdoll(const MWWorld::ConstPtr& actor, const osg::Vec3f& point, const osg::Vec3f& impulse);
         /// Push the closest accessible corpse in a melee swing corridor; never strike live actors.

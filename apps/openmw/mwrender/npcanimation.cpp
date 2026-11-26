@@ -1,4 +1,12 @@
 #include "npcanimation.hpp"
+#include "decapitation.hpp"
+#include "brutalcutmaterial.hpp"
+#include "limbsevering.hpp"
+#include <components/misc/strings/algorithm.hpp>
+#include <osg/Material>
+#include <osg/Image>
+#include <osg/Texture2D>
+#include <cmath>
 
 #include <osg/Depth>
 #include <osg/MatrixTransform>
@@ -49,7 +57,6 @@
 
 namespace
 {
-
     VFS::Path::Normalized getVampireHead(ESM::RefId race, bool female)
     {
         static std::map<std::pair<ESM::RefId, bool>, const ESM::BodyPart*> sVampireMapping;
@@ -262,7 +269,374 @@ namespace MWRender
 
     NpcAnimation::~NpcAnimation()
     {
+        mBrutalHeadCut.reset();
+        mBrutalLimbCut.reset();
         mAmmunition.reset();
+    }
+
+    bool NpcAnimation::setBrutalHeadSevered(bool severed)
+    {
+        if (!severed)
+        {
+            mBrutalHeadCut.reset();
+            return true;
+        }
+        if (mBrutalHeadCut)
+            return true;
+        if (mBrutalLimbCut)
+            return false;
+        if (mViewMode != VM_Normal || mNpcType == Type_Werewolf
+            || mPtr == MWMechanics::getPlayer())
+            return false;
+
+        const auto neck = getBoneWorldMatrix("Bip01 Neck");
+        const auto actualHead = getBoneWorldMatrix("Bip01 Head");
+        auto head = actualHead;
+        if (neck && actualHead && mBrutalRebuildHeadInNeck)
+            head = *mBrutalRebuildHeadInNeck * *neck;
+        const auto& nodes = getNodeMap();
+        const auto neckNode = nodes.find("Bip01 Neck");
+        const auto headNode = nodes.find("Bip01 Head");
+        if (!neck || !head || neckNode == nodes.end() || headNode == nodes.end()
+            || !mObjectParts[ESM::PRT_Neck] || !mObjectParts[ESM::PRT_Head])
+            return false;
+        osg::Vec3f axis = head->getTrans() - neck->getTrans();
+        const float distance = axis.normalize();
+        if (!std::isfinite(distance) || distance <= 0.1f)
+            return false;
+
+        try
+        {
+            const osg::Matrixf correction = osg::Matrixf::inverse(*actualHead) * *head;
+            const std::function<std::optional<osg::Matrixf>(std::string_view)> pose =
+                [&](std::string_view name) -> std::optional<osg::Matrixf> {
+                    auto world = getBoneWorldMatrix(name);
+                    if (!world) return {};
+                    const auto found = nodes.find(std::string(name));
+                    if (found != nodes.end())
+                    {
+                        const auto paths = found->second->getParentalNodePaths();
+                        if (!paths.empty())
+                            for (const auto* node : paths.front())
+                                if (Misc::StringUtils::ciEqual(node->getName(), "Bip01 Head"))
+                                {
+                                    *world *= correction;
+                                    break;
+                                }
+                    }
+                    return world;
+                };
+            std::vector<DecapitationGeometry::Snapshot> snapshots;
+            for (const auto part : { ESM::PRT_Head, ESM::PRT_Hair, ESM::PRT_Neck })
+                if (mObjectParts[part])
+                {
+                    const bool whole = part == ESM::PRT_Hair
+                        || mPartslots[part] == MWWorld::InventoryStore::Slot_Helmet;
+                    DecapitationGeometry::SnapshotVisitor visitor(snapshots, pose,
+                        correction, whole,
+                        mPartslots[part] == MWWorld::InventoryStore::Slot_Helmet);
+                    visitor.snapshot(mObjectParts[part]->getNode());
+                    if (visitor.failed)
+                        return false;
+                }
+            if (snapshots.empty())
+                return false;
+
+            auto capState = prepareBrutalCutMaterial(mResourceSystem, false);
+            auto fragmentState = prepareBrutalCutMaterial(mResourceSystem, true);
+            auto cut = std::make_unique<DecapitationGeometry>();
+            // As in original Brutal Morrowind, retain body garment skinning
+            // but pin any head-influenced vertices to the neck frame.
+            DecapitationGeometry::RetainedRigVisitor retained;
+            retained.setNodeMaskOverride(~0u);
+            for (int part = 0; part < ESM::PRT_Count; ++part)
+                if (part != ESM::PRT_Head && part != ESM::PRT_Hair && part != ESM::PRT_Neck
+                    && mObjectParts[part])
+                    retained.snapshot(mObjectParts[part]->getNode());
+            const auto neckInverse = osg::Matrixf::inverse(*neck);
+            for (const auto& [rig, path] : retained.rigs)
+            {
+                SceneUtil::RigGeometry::BonePoseOverrides overrides;
+                std::set<unsigned short> affected;
+                for (const auto& name : rig->getInfluencingBoneNames())
+                {
+                    const auto bone = nodes.find(name);
+                    if (bone == nodes.end()) continue;
+                    const auto paths = bone->second->getParentalNodePaths();
+                    if (paths.empty()) continue;
+                    const bool followsHead = std::any_of(paths.front().begin(), paths.front().end(),
+                        [](const osg::Node* node) {
+                            return Misc::StringUtils::ciEqual(node->getName(), "Bip01 Head");
+                        });
+                    if (!followsHead) continue;
+                    const auto vertices = rig->getVerticesInfluencedBy(name);
+                    if (vertices.empty()) continue;
+                    const auto world = pose(name);
+                    if (!world) return false;
+                    overrides.emplace(name, SceneUtil::RigGeometry::BonePoseOverride{
+                        "Bip01 Neck", *world * neckInverse, nullptr });
+                    affected.insert(vertices.begin(), vertices.end());
+                }
+                if (overrides.empty()) continue;
+                const auto snapshot = rig->snapshotWorldGeometry(path, pose);
+                if (!snapshot) return false;
+                const auto* vertices = dynamic_cast<const osg::Vec3Array*>(snapshot->getVertexArray());
+                if (!vertices) return false;
+                for (auto index : affected)
+                {
+                    if (index >= vertices->size()) return false;
+                    cut->retainedVertexMaximum = std::max(cut->retainedVertexMaximum,
+                        ((*vertices)[index] - neck->getTrans()) * axis);
+                }
+                cut->retainedRigs.push_back({rig, std::move(overrides)});
+            }
+            const float cutDistance = std::max(distance * .5f, cut->retainedVertexMaximum + .15f);
+            if (cutDistance >= distance * .95f) return false;
+            if (!cut->build(snapshots, *neck, *head, capState, cutDistance, axis, fragmentState))
+            {
+                Log(Debug::Warning) << "Brutal head cut declined: no valid closed geometry (stage "
+                    << cut->failure << ")";
+                return false;
+            }
+
+            // Shader/material compilation is necessary for procedural meshes
+            // in OpenMW 0.52, especially when the original skin uses custom
+            // shaders. Do it before altering visibility or touching Bullet.
+            mResourceSystem->getSceneManager()->recreateShaders(cut->lower);
+            mResourceSystem->getSceneManager()->recreateShaders(cut->upper);
+
+            // All geometry allocation and validation precedes any mutation.
+            if (!neckNode->second->addChild(cut->lower))
+                return false;
+            if (!headNode->second->addChild(cut->upper))
+            {
+                neckNode->second->removeChild(cut->lower);
+                return false;
+            }
+            for (const auto part : { ESM::PRT_Head, ESM::PRT_Hair, ESM::PRT_Neck })
+                if (mObjectParts[part])
+                {
+                    auto node = mObjectParts[part]->getNode();
+                    cut->originals.emplace_back(node, node->getNodeMask());
+                    node->setNodeMask(0);
+                }
+            cut->committed = true;
+            for (auto& retainedRig : cut->retainedRigs)
+                retainedRig.geometry->setBonePoseOverrides(std::move(retainedRig.poses));
+            mBrutalHeadCut = std::move(cut);
+            return true;
+        }
+        catch (const std::exception& error)
+        {
+            Log(Debug::Warning) << "Brutal head cut rejected without physics detach: " << error.what();
+            return false;
+        }
+    }
+
+
+    bool NpcAnimation::setBrutalLimbsSevered(unsigned mask)
+    {
+        if (mask == 0)
+        {
+            mBrutalLimbCut.reset();
+            return true;
+        }
+        if (mask != 1u && mask != 2u && mask != 4u && mask != 8u)
+            return false;
+        if (mBrutalLimbCut)
+            return mBrutalLimbCut->mask == mask;
+        if (mBrutalHeadCut || mViewMode != VM_Normal || mNpcType == Type_Werewolf
+            || mPtr == MWMechanics::getPlayer())
+            return false;
+
+        // Full-length robes and skirts can bridge both legs. Until the full
+        // garment reconstruction path is ported, keep these NPCs intact.
+        if (mask & 3u)
+        {
+            const auto& inventory = mPtr.getClass().getInventoryStore(mPtr);
+            if (inventory.getSlot(MWWorld::InventoryStore::Slot_Skirt) != inventory.end()
+                || inventory.getSlot(MWWorld::InventoryStore::Slot_Robe) != inventory.end())
+                return false;
+        }
+
+        const auto& nodes = getNodeMap();
+        struct LimbRequest
+        {
+            unsigned bit;
+            const char* name;
+            const char* parent;
+            const char* child;
+            const char* next;
+        };
+        constexpr LimbRequest requests[] = {
+            { 1u, "leftLeg", "Bip01 L Thigh", "Bip01 L Calf", "Bip01 L Foot" },
+            { 2u, "rightLeg", "Bip01 R Thigh", "Bip01 R Calf", "Bip01 R Foot" },
+            { 4u, "leftArm", "Bip01 L Clavicle", "Bip01 L UpperArm", "Bip01 L Forearm" },
+            { 8u, "rightArm", "Bip01 R Clavicle", "Bip01 R UpperArm", "Bip01 R Forearm" }
+        };
+        const LimbRequest* request = nullptr;
+        for (const auto& candidate : requests)
+            if (candidate.bit == mask)
+                request = &candidate;
+        if (!request)
+            return false;
+
+        const LimbSeveringGeometry::BoneWorld liveBones =
+            [this](std::string_view name) { return getBoneWorldMatrix(name); };
+        const auto descendant = [&](std::string_view name, std::string_view ancestor) {
+            if (Misc::StringUtils::ciEqual(name, ancestor))
+                return true;
+            const auto found = nodes.find(std::string(name));
+            if (found == nodes.end())
+                return false;
+            const auto paths = found->second->getParentalNodePaths();
+            if (paths.empty())
+                return false;
+            return std::any_of(paths.front().begin(), paths.front().end(),
+                [&](const osg::Node* node) {
+                    return Misc::StringUtils::ciEqual(node->getName(), ancestor);
+                });
+        };
+        const auto parent = liveBones(request->parent);
+        const auto child = liveBones(request->child);
+        const auto next = liveBones(request->next);
+        if (!parent || !child || !next || nodes.find(request->child) == nodes.end()
+            || nodes.find(request->parent) == nodes.end()
+            || nodes.find("Bip01 Pelvis") == nodes.end())
+            return false;
+
+        LimbSeveringGeometry::Cut cut;
+        cut.bit = request->bit;
+        cut.name = request->name;
+        cut.parent = request->parent;
+        cut.child = request->child;
+        cut.parentWorld = *parent;
+        cut.childWorld = *child;
+        cut.normal = next->getTrans() - child->getTrans();
+        cut.length = cut.normal.normalize();
+        if (!std::isfinite(cut.length) || cut.length < 0.1f)
+            return false;
+        cut.distance = std::clamp(cut.length * 0.075f, 0.75f, 2.5f);
+        cut.center = child->getTrans() + cut.normal * cut.distance;
+
+        const LimbSeveringGeometry::BoneRegion region =
+            [&](std::string_view name) -> unsigned {
+                return descendant(name, request->child) ? 1u : 0u;
+            };
+        const LimbSeveringGeometry::BoneTargets targets =
+            [&](std::string_view name) -> unsigned {
+                // Clavicle-only torso vertices must not be assigned to the arm.
+                return descendant(name, request->child) ? mask : 0u;
+            };
+        const LimbSeveringGeometry::BoneTargets distal =
+            [&](std::string_view name) -> unsigned {
+                return !Misc::StringUtils::ciEqual(name, request->child)
+                    && descendant(name, request->child) ? mask : 0u;
+            };
+
+        try
+        {
+            // Collect only actual skin/armor bound to the affected limb.
+            // Rendering and Bullet remain unchanged until validation succeeds.
+            std::vector<DecapitationGeometry::Snapshot> snapshots;
+            std::array<bool, ESM::PRT_Count> replaced{};
+            for (int part = 0; part < ESM::PRT_Count; ++part)
+            {
+                if (!mObjectParts[part] || part == ESM::PRT_Head || part == ESM::PRT_Hair
+                    || part == ESM::PRT_Shield || part == ESM::PRT_Weapon)
+                    continue;
+                auto* node = mObjectParts[part]->getNode().get();
+                if (!node)
+                    continue;
+                bool relevant = false;
+                DecapitationGeometry::RetainedRigVisitor retained;
+                retained.setNodeMaskOverride(~0u);
+                retained.snapshot(node);
+                for (const auto& [rig, path] : retained.rigs)
+                    for (const auto& name : rig->getInfluencingBoneNames())
+                        if (targets(name) && !rig->getVerticesInfluencedBy(name).empty())
+                            relevant = true;
+                const auto paths = node->getParentalNodePaths();
+                if (!paths.empty())
+                    for (const auto* bone : paths.front())
+                        if (targets(bone->getName()))
+                            relevant = true;
+                if (!relevant)
+                    continue;
+                const size_t before = snapshots.size();
+                DecapitationGeometry::SnapshotVisitor visitor(
+                    snapshots, liveBones, osg::Matrixf::identity(), false);
+                visitor.snapshot(node);
+                if (visitor.failed)
+                    return false;
+                replaced[part] = snapshots.size() > before;
+            }
+            if (snapshots.empty())
+                return false;
+
+            auto cap = prepareBrutalCutMaterial(mResourceSystem, false);
+            auto fragmentCap = prepareBrutalCutMaterial(mResourceSystem, true);
+            auto prepared = std::make_unique<LimbSeveringGeometry>();
+            if (!prepared->build(snapshots, { cut }, liveBones, liveBones,
+                    region, targets, distal, cap, fragmentCap))
+            {
+                Log(Debug::Warning) << "Brutal limb cut declined: mask=" << mask
+                    << ", geometry stage=" << prepared->failure;
+                return false;
+            }
+            for (const auto& surface : prepared->regions)
+                mResourceSystem->getSceneManager()->recreateShaders(surface);
+            for (const auto& limb : prepared->cuts)
+                for (const auto& surface : limb.caps)
+                    mResourceSystem->getSceneManager()->recreateShaders(surface);
+            prepared->prepareDrawBuffers();
+
+            // Stage everything hidden. If any attachment fails, the cut
+            // destructor removes every staged node without changing NPC skin.
+            for (const auto& anchor : prepared->anchors)
+                if (nodes.find(anchor) == nodes.end())
+                    return false;
+            for (const auto& limb : prepared->cuts)
+                if (nodes.find(limb.parent) == nodes.end()
+                    || nodes.find(limb.child) == nodes.end())
+                    return false;
+            for (int part = 0; part < ESM::PRT_Count; ++part)
+                if (replaced[part] && mObjectParts[part])
+                    prepared->originals.emplace_back(mObjectParts[part]->getNode(), 0);
+            for (size_t index = 0; index < prepared->regions.size(); ++index)
+            {
+                prepared->regions[index]->setNodeMask(0);
+                if (!nodes.at(prepared->anchors[index])->addChild(prepared->regions[index]))
+                    return false;
+            }
+            for (const auto& limb : prepared->cuts)
+            {
+                for (unsigned side = 0; side < 2; ++side)
+                {
+                    limb.caps[side]->setNodeMask(0);
+                    if (!nodes.at(side ? limb.child : limb.parent)->addChild(limb.caps[side]))
+                        return false;
+                }
+            }
+            for (auto& [node, originalMask] : prepared->originals)
+            {
+                originalMask = node->getNodeMask();
+                node->setNodeMask(0);
+            }
+            for (const auto& regionNode : prepared->regions)
+                regionNode->setNodeMask(~0u);
+            for (const auto& limb : prepared->cuts)
+                for (const auto& capNode : limb.caps)
+                    capNode->setNodeMask(~0u);
+            prepared->committed = true;
+            mBrutalLimbCut = std::move(prepared);
+            return true;
+        }
+        catch (const std::exception& error)
+        {
+            Log(Debug::Warning) << "Brutal limb geometry rejected: " << error.what();
+            return false;
+        }
     }
 
     NpcAnimation::NpcAnimation(const MWWorld::Ptr& ptr, osg::ref_ptr<osg::Group> parentNode,
@@ -576,10 +950,24 @@ namespace MWRender
         if (!mObjectRoot.get())
             return;
 
+        // The cut owns the hidden originals. Restore their masks before
+        // replacing clothing/armor nodes; otherwise an old cap can outlive
+        // the part it was built from and produce orphaned geometry.
+        const bool rebuildHeadCut = static_cast<bool>(mBrutalHeadCut);
+        const unsigned rebuildLimbMask = mBrutalLimbCut ? mBrutalLimbCut->mask : 0u;
+        if (rebuildHeadCut)
+        {
+            mBrutalRebuildHeadInNeck = mBrutalHeadCut->headInNeck;
+            mBrutalHeadCut.reset();
+        }
+        if (rebuildLimbMask)
+            mBrutalLimbCut.reset();
+
         NpcType curType = getNpcType();
         if (curType != mNpcType)
         {
             mNpcType = curType;
+            mBrutalRebuildHeadInNeck.reset();
             rebuild();
             return;
         }
@@ -692,6 +1080,14 @@ namespace MWRender
 
         if (wasArrowAttached)
             attachArrow();
+
+        if (rebuildHeadCut && !setBrutalHeadSevered(true))
+            Log(Debug::Warning)
+                << "Brutal head cut could not be rebuilt after NPC equipment changed";
+        mBrutalRebuildHeadInNeck.reset();
+        if (rebuildLimbMask && !setBrutalLimbsSevered(rebuildLimbMask))
+            Log(Debug::Warning)
+                << "Brutal limb cut could not be rebuilt after NPC equipment changed";
     }
 
     PartHolderPtr NpcAnimation::insertBoundedPart(VFS::Path::NormalizedView model, std::string_view bonename,

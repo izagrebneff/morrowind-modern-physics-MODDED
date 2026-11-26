@@ -259,3 +259,15 @@ JournalShowAll: "Show All"
 LoadingSelectCharacter: "Change Character"
 RechargeSelect: "Recharge"
 RepairTool: "Tool"
+
+# Brutal dismemberment
+BrutalPhysicsTab: "Brutal Physics"
+BrutalDismembermentFrequency: "Dismemberment frequency"
+BrutalDismembermentValue: "Chance: {value, number, :: group-off}%"
+BrutalDismembermentMeleeOnly: "Only fatal melee weapon strikes can sever NPCs. Magic, arrows, bolts and thrown weapons never cause dismemberment."
+
+BrutalHeadChance: "Head"
+BrutalLeftArmChance: "Left arm"
+BrutalRightArmChance: "Right arm"
+BrutalLeftLegChance: "Left leg"
+BrutalRightLegChance: "Right leg"

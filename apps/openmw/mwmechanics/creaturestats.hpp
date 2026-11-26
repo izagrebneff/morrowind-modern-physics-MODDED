@@ -69,6 +69,10 @@ namespace MWMechanics
         bool mBlock = false;
         osg::Vec3f mDeathKick; // how the killing blow throws the body
         bool mMagicDeathKick = false; // transient; use a whole-body launch for fatal spells
+        bool mEligibleLethalMeleeDismemberment = false;
+        unsigned mBrutalPendingLimbMask = 0; // zero selects head, otherwise one of the four limbs
+        unsigned mBrutalSeveredLimbsMask = 0; // persisted committed render + physics cut
+        bool mBrutalHeadSevered = false; // persisted in ESM CreatureStats BHD1 // set once at lethal hit, consumed by rendering pipeline
         float mMeleeSwingSide = 0.f; // transient: -1 left, +1 right, 0 unknown
         // The Lua Hit event is queued: preserve one side PER queued melee
         // event, keyed by attacker, until damage is actually applied.
@@ -256,6 +260,19 @@ namespace MWMechanics
         }
         const osg::Vec3f& getDeathKick() const { return mDeathKick; }
         bool hasMagicDeathKick() const { return mMagicDeathKick; }
+
+        /// Only the fatal melee event may set this. A future renderer may
+        /// consume the already-decided outcome without rerolling.
+        void setEligibleLethalMeleeDismemberment(bool value) { mEligibleLethalMeleeDismemberment = value; }
+        bool hasEligibleLethalMeleeDismemberment() const { return mEligibleLethalMeleeDismemberment; }
+
+        void setBrutalPendingLimbMask(unsigned mask) { mBrutalPendingLimbMask = mask; }
+        unsigned getBrutalPendingLimbMask() const { return mBrutalPendingLimbMask; }
+        void setBrutalSeveredLimbsMask(unsigned mask) { mBrutalSeveredLimbsMask = mask; }
+        unsigned getBrutalSeveredLimbsMask() const { return mBrutalSeveredLimbsMask; }
+
+        void setBrutalHeadSevered(bool severed) { mBrutalHeadSevered = severed; }
+        bool isBrutalHeadSevered() const { return mBrutalHeadSevered; }
 
         /// Temporary direction of the current attacking animation, valid only
         /// while the synchronous melee-hit event is being dispatched.

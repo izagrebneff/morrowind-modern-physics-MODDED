@@ -543,6 +543,8 @@ namespace MWMechanics
         state.mLevel = mLevel;
         state.mDeathAnimation = mDeathAnimation;
         state.mTimeOfDeath = mTimeOfDeath.toEsm();
+        state.mBrutalHeadSevered = mBrutalHeadSevered;
+        state.mBrutalSeveredLimbsMask = mBrutalSeveredLimbsMask;
         state.mRagdoll.clear();
         for (const auto& [bone, matrix] : mRagdollPose)
         {
@@ -617,6 +619,10 @@ namespace MWMechanics
         mLevel = state.mLevel;
         mDeathAnimation = state.mDeathAnimation;
         mTimeOfDeath = MWWorld::TimeStamp(state.mTimeOfDeath);
+        mBrutalHeadSevered = state.mBrutalHeadSevered;
+        mBrutalSeveredLimbsMask = state.mBrutalSeveredLimbsMask;
+        mBrutalPendingLimbMask = 0;
+        mEligibleLethalMeleeDismemberment = false;
         mRagdollPose.clear();
         for (const ESM::CreatureStats::RagdollBone& bone : state.mRagdoll)
         {

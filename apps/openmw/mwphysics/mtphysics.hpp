@@ -82,6 +82,15 @@ namespace MWPhysics
         void configureBrutalRagdollAction(class BrutalRagdollStep* action,
             bool neutralPose, bool selfCollision, bool enabled);
         void removeAction(btActionInterface* action);
+
+        /// Atomically hand Brutal's joint controller to a fragment-aware
+        /// controller while removing the cut constraints, under the Bullet
+        /// physics mutex. All fragment bodies remain in the world.
+        bool detachBrutalRagdoll(
+            class BrutalRagdollStep* previous, class BrutalRagdollStep* replacement,
+            const std::vector<btTypedConstraint*>& removed,
+            const std::vector<btRigidBody*>& detached,
+            const btVector3& separationVelocity);
         /// Stop a body and put it to sleep.
         void setAtRest(btRigidBody* body);
         /// Apply a corpse-specific gravity value without altering living actors.

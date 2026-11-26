@@ -1505,6 +1505,44 @@ namespace MWWorld
     {
         if (!makeRagdollBody(actor, kick, allowOnePiece))
             return false;
+        auto& creatureStats = actor.getClass().getCreatureStats(actor);
+        if (actor.getClass().isNpc() && creatureStats.isDead()
+            && (creatureStats.hasEligibleLethalMeleeDismemberment()
+                || creatureStats.isBrutalHeadSevered()
+                || creatureStats.getBrutalSeveredLimbsMask()))
+        {
+            // The only random selection was made at the fatal MELEE event,
+            // never during ragdoll reconstruction or save-load.
+            auto* npc = dynamic_cast<MWRender::NpcAnimation*>(mRendering->getAnimation(actor));
+            if (npc)
+            {
+                osg::Vec3f separation = kick;
+                if (separation.normalize() <= 1e-4f)
+                    separation.set(0.f, 1.f, 0.f);
+                const osg::Vec3f velocity = atRest ? osg::Vec3f() : separation * 40.f;
+                const unsigned limbMask = creatureStats.getBrutalSeveredLimbsMask()
+                    ? creatureStats.getBrutalSeveredLimbsMask()
+                    : (creatureStats.isBrutalHeadSevered() ? 0u
+                        : creatureStats.getBrutalPendingLimbMask());
+                if (limbMask)
+                {
+                    if (npc->setBrutalLimbsSevered(limbMask))
+                    {
+                        if (!mPhysics->detachNpcRagdollLimbs(actor, limbMask, velocity))
+                            npc->setBrutalLimbsSevered(0);
+                        else
+                            creatureStats.setBrutalSeveredLimbsMask(limbMask);
+                    }
+                }
+                else if (npc->setBrutalHeadSevered(true))
+                {
+                    if (!mPhysics->detachNpcRagdollHead(actor, velocity))
+                        npc->setBrutalHeadSevered(false);
+                    else
+                        creatureStats.setBrutalHeadSevered(true);
+                }
+            }
+        }
         if (atRest)
             mPhysics->settleRagdoll(actor);
         return true;

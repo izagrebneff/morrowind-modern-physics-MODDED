@@ -154,6 +154,127 @@
                 </Widget>
             </Widget>
             <Widget type="TabItem">
+                <Property key="Caption" value=" #{OMWEngine:BrutalPhysicsTab} "/>
+                <Widget type="TextBox" skin="NormalText" position="4 8 352 20" align="Left Top">
+                    <Property key="Caption" value="#{OMWEngine:BrutalDismembermentFrequency}"/>
+                </Widget>
+                <Widget type="ScrollBar" skin="MW_HScroll" position="4 36 352 18" align="Left Top HStretch">
+                    <Property key="Range" value="101"/>
+                    <Property key="Page" value="1"/>
+                    <Property key="WheelPage" value="5"/>
+                    <UserString key="SettingType" value="Slider"/>
+                    <UserString key="SettingCategory" value="Game"/>
+                    <UserString key="SettingName" value="brutal dismemberment frequency"/>
+                    <UserString key="SettingValueType" value="Integer"/>
+                    <UserString key="SettingMin" value="0"/>
+                    <UserString key="SettingMax" value="100"/>
+                    <UserString key="SettingLabelWidget" value="BrutalDismembermentValue"/>
+                    <UserString key="SettingLabelCaption" value="BrutalDismembermentValue"/>
+                </Widget>
+                <Widget type="TextBox" skin="SandText" position="4 61 352 20" align="Left Top" name="BrutalDismembermentValue">
+                    <Property key="Caption" value="#{OMWEngine:BrutalDismembermentValue}"/>
+                </Widget>
+                <Widget type="TextBox" skin="NormalText" position="4 87 220 18" align="Left Top">
+                    <Property key="Caption" value="#{OMWEngine:BrutalHeadChance}"/>
+                </Widget>
+                <Widget type="TextBox" skin="SandText" position="228 87 128 18" align="Right Top" name="BrutalHeadValue">
+                    <Property key="Caption" value="#{OMWEngine:BrutalDismembermentValue}"/>
+                </Widget>
+                <Widget type="ScrollBar" skin="MW_HScroll" position="4 108 352 18" align="Left Top HStretch">
+                    <Property key="Range" value="101"/>
+                    <Property key="Page" value="1"/>
+                    <Property key="WheelPage" value="5"/>
+                    <UserString key="SettingType" value="Slider"/>
+                    <UserString key="SettingCategory" value="Game"/>
+                    <UserString key="SettingName" value="brutal head chance"/>
+                    <UserString key="SettingValueType" value="Integer"/>
+                    <UserString key="SettingMin" value="0"/>
+                    <UserString key="SettingMax" value="100"/>
+                    <UserString key="SettingLabelWidget" value="BrutalHeadValue"/>
+                    <UserString key="SettingLabelCaption" value="BrutalDismembermentValue"/>
+                </Widget>
+                <Widget type="TextBox" skin="NormalText" position="4 138 220 18" align="Left Top">
+                    <Property key="Caption" value="#{OMWEngine:BrutalLeftArmChance}"/>
+                </Widget>
+                <Widget type="TextBox" skin="SandText" position="228 138 128 18" align="Right Top" name="BrutalLeftArmValue">
+                    <Property key="Caption" value="#{OMWEngine:BrutalDismembermentValue}"/>
+                </Widget>
+                <Widget type="ScrollBar" skin="MW_HScroll" position="4 159 352 18" align="Left Top HStretch">
+                    <Property key="Range" value="101"/>
+                    <Property key="Page" value="1"/>
+                    <Property key="WheelPage" value="5"/>
+                    <UserString key="SettingType" value="Slider"/>
+                    <UserString key="SettingCategory" value="Game"/>
+                    <UserString key="SettingName" value="brutal left arm chance"/>
+                    <UserString key="SettingValueType" value="Integer"/>
+                    <UserString key="SettingMin" value="0"/>
+                    <UserString key="SettingMax" value="100"/>
+                    <UserString key="SettingLabelWidget" value="BrutalLeftArmValue"/>
+                    <UserString key="SettingLabelCaption" value="BrutalDismembermentValue"/>
+                </Widget>
+                <Widget type="TextBox" skin="NormalText" position="4 189 220 18" align="Left Top">
+                    <Property key="Caption" value="#{OMWEngine:BrutalRightArmChance}"/>
+                </Widget>
+                <Widget type="TextBox" skin="SandText" position="228 189 128 18" align="Right Top" name="BrutalRightArmValue">
+                    <Property key="Caption" value="#{OMWEngine:BrutalDismembermentValue}"/>
+                </Widget>
+                <Widget type="ScrollBar" skin="MW_HScroll" position="4 210 352 18" align="Left Top HStretch">
+                    <Property key="Range" value="101"/>
+                    <Property key="Page" value="1"/>
+                    <Property key="WheelPage" value="5"/>
+                    <UserString key="SettingType" value="Slider"/>
+                    <UserString key="SettingCategory" value="Game"/>
+                    <UserString key="SettingName" value="brutal right arm chance"/>
+                    <UserString key="SettingValueType" value="Integer"/>
+                    <UserString key="SettingMin" value="0"/>
+                    <UserString key="SettingMax" value="100"/>
+                    <UserString key="SettingLabelWidget" value="BrutalRightArmValue"/>
+                    <UserString key="SettingLabelCaption" value="BrutalDismembermentValue"/>
+                </Widget>
+                <Widget type="TextBox" skin="NormalText" position="4 240 220 18" align="Left Top">
+                    <Property key="Caption" value="#{OMWEngine:BrutalLeftLegChance}"/>
+                </Widget>
+                <Widget type="TextBox" skin="SandText" position="228 240 128 18" align="Right Top" name="BrutalLeftLegValue">
+                    <Property key="Caption" value="#{OMWEngine:BrutalDismembermentValue}"/>
+                </Widget>
+                <Widget type="ScrollBar" skin="MW_HScroll" position="4 261 352 18" align="Left Top HStretch">
+                    <Property key="Range" value="101"/>
+                    <Property key="Page" value="1"/>
+                    <Property key="WheelPage" value="5"/>
+                    <UserString key="SettingType" value="Slider"/>
+                    <UserString key="SettingCategory" value="Game"/>
+                    <UserString key="SettingName" value="brutal left leg chance"/>
+                    <UserString key="SettingValueType" value="Integer"/>
+                    <UserString key="SettingMin" value="0"/>
+                    <UserString key="SettingMax" value="100"/>
+                    <UserString key="SettingLabelWidget" value="BrutalLeftLegValue"/>
+                    <UserString key="SettingLabelCaption" value="BrutalDismembermentValue"/>
+                </Widget>
+                <Widget type="TextBox" skin="NormalText" position="4 291 220 18" align="Left Top">
+                    <Property key="Caption" value="#{OMWEngine:BrutalRightLegChance}"/>
+                </Widget>
+                <Widget type="TextBox" skin="SandText" position="228 291 128 18" align="Right Top" name="BrutalRightLegValue">
+                    <Property key="Caption" value="#{OMWEngine:BrutalDismembermentValue}"/>
+                </Widget>
+                <Widget type="ScrollBar" skin="MW_HScroll" position="4 312 352 18" align="Left Top HStretch">
+                    <Property key="Range" value="101"/>
+                    <Property key="Page" value="1"/>
+                    <Property key="WheelPage" value="5"/>
+                    <UserString key="SettingType" value="Slider"/>
+                    <UserString key="SettingCategory" value="Game"/>
+                    <UserString key="SettingName" value="brutal right leg chance"/>
+                    <UserString key="SettingValueType" value="Integer"/>
+                    <UserString key="SettingMin" value="0"/>
+                    <UserString key="SettingMax" value="100"/>
+                    <UserString key="SettingLabelWidget" value="BrutalRightLegValue"/>
+                    <UserString key="SettingLabelCaption" value="BrutalDismembermentValue"/>
+                </Widget>
+                <Widget type="TextBox" skin="SandText" position="4 344 352 48" align="Left Top" >
+                    <Property key="Caption" value="#{OMWEngine:BrutalDismembermentMeleeOnly}"/>
+                    <Property key="WordWrap" value="true"/>
+                </Widget>
+            </Widget>
+            <Widget type="TabItem">
                 <Property key="Caption" value=" #{OMWEngine:Audio} "/>
                 <Widget type="TextBox" skin="NormalText" position="4 4 352 18" align="Left Top">
                     <Property key="Caption" value="#{OMWEngine:AudioMaster}"/>

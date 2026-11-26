@@ -16,6 +16,7 @@
 #include <components/esm3/loadclas.hpp>
 #include <components/esm3/loadmgef.hpp>
 #include <components/esm3/loadnpc.hpp>
+#include <components/esm3/loadweap.hpp>
 #include <components/esm3/loadrace.hpp>
 #include <components/esm3/loadsoun.hpp>
 #include <components/esm3/npcstate.hpp>
@@ -792,6 +793,49 @@ namespace MWClass
 
         if (!wasDead && getCreatureStats(ptr).isDead())
         {
+            // Roll exactly once for this fatal hit. A rendered cut is never
+            // permitted for a magic or projectile source, including bows,
+            // crossbows and thrown weapons. Unarmed/creature natural attacks
+            // and non-weapon scripts are excluded as well.
+            stats.setEligibleLethalMeleeDismemberment(false);
+            stats.setBrutalPendingLimbMask(0);
+            if (ptr != MWMechanics::getPlayer() && !attacker.isEmpty() && hasHealthDamage
+                && healthDamage > 0.f && sourceType == MWMechanics::DamageSourceType::Melee
+                && !object.empty())
+            {
+                const int chance = Settings::game().mBrutalDismembermentFrequency;
+                if (chance > 0)
+                {
+                    const auto* record = MWBase::Environment::get().getESMStore()
+                        ->get<ESM::Weapon>().search(object);
+                    if (record)
+                    {
+                        const auto* weaponType = MWMechanics::getWeaponType(record->mData.mType);
+                        if (weaponType && weaponType->mWeaponClass == ESM::WeaponType::Melee)
+                        {
+                            auto& rng = MWBase::Environment::get().getWorld()->getPrng();
+                            if (Misc::Rng::roll0to99(rng) < chance)
+                            {
+                                // Select exactly one cut for this killing blow.
+                                // 0=head, remaining four values are single limbs;
+                                // no random selection is repeated during ragdoll
+                                // construction, equipment changes or save reloads.
+                                constexpr unsigned outcomes[5] = { 0u, 4u, 8u, 1u, 2u };
+                                const unsigned index = Misc::Rng::roll0to99(rng) % 5;
+                                const int chances[5] = { Settings::game().mBrutalHeadChance,
+                                    Settings::game().mBrutalLeftArmChance, Settings::game().mBrutalRightArmChance,
+                                    Settings::game().mBrutalLeftLegChance, Settings::game().mBrutalRightLegChance };
+                                if (Misc::Rng::roll0to99(rng) < chances[index])
+                                {
+                                    stats.setBrutalPendingLimbMask(outcomes[index]);
+                                    stats.setEligibleLethalMeleeDismemberment(true);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // The killing blow throws the body (its ragdoll) away from the attacker, harder for heavier blows,
             // within reason.
             if (!attacker.isEmpty() && hasHealthDamage)
@@ -801,6 +845,21 @@ namespace MWClass
                 // The lethal melee impulse follows the attacker's real left
                 // or right hand swing; spells/ranged impacts keep radial push.
                 stats.setDeathKick(direction * std::clamp(120.f + healthDamage * 4.f, 140.f, 280.f));
+            }
+
+            // Commit the cut and its physical separation in the fatal hit action,
+            // rather than waiting for the character controller's death update.
+            if (stats.hasEligibleLethalMeleeDismemberment())
+            {
+                const auto world = MWBase::Environment::get().getWorld();
+                const auto kick = stats.getDeathKick();
+                if (world->makeRagdoll(ptr, kick, kick.length2() > 1.f, false))
+                {
+                    if (auto* animation = world->getAnimation(ptr))
+                        animation->stopAllAnimations();
+                    stats.setDeathKick(osg::Vec3f());
+                    stats.setEligibleLethalMeleeDismemberment(false);
+                }
             }
 
             // NPC was killed
