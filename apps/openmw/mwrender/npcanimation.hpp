@@ -10,6 +10,7 @@
 #include "../mwworld/inventorystore.hpp"
 
 #include <array>
+#include <optional>
 
 namespace ESM
 {
@@ -51,6 +52,7 @@ namespace MWRender
         // Bounded Parts
         PartHolderPtr mObjectParts[ESM::PRT_Count];
         std::unique_ptr<DecapitationGeometry> mBrutalHeadCut;
+        std::optional<osg::Matrixf> mBrutalRebuildHeadInNeck;
         std::unique_ptr<LimbSeveringGeometry> mBrutalLimbCut;
         std::array<MWSound::Sound*, ESM::PRT_Count> mSounds;
 

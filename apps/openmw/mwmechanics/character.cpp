@@ -3026,8 +3026,16 @@ namespace MWMechanics
         if (distanceSquared > maxDistance * maxDistance)
             return;
 
-        // Pose the body as it lay, then make the ragdoll from that pose, at rest.
+        // Reconstruct the neck cut while the original head is still attached.
+        // Saved world matrices describe separated fragments, not a valid neck mesh.
         mAnimation->stopAllAnimations();
+        const bool restoreHeadCut = mPtr.getClass().getCreatureStats(mPtr).isBrutalHeadSevered();
+        if (restoreHeadCut && !mAnimation->setBrutalHeadSevered(true))
+        {
+            // Do not generate a cut from a stretched, already detached pose.
+            return;
+        }
+        // Pose the body as it lay, then make the ragdoll from that pose, at rest.
         for (const auto& [bone, world] : pose)
         {
             if (!bone.empty())
@@ -3045,7 +3053,11 @@ namespace MWMechanics
             }
         }
         if (!MWBase::Environment::get().getWorld()->makeRagdoll(mPtr, osg::Vec3f(), true, true))
+        {
+            if (restoreHeadCut)
+                mAnimation->setBrutalHeadSevered(false);
             return; // It plays its death animation after all.
+        }
         mRagdoll = true;
         // Not the death animation, which it already played.
         if (mDeathState != CharState_None)

@@ -290,7 +290,10 @@ namespace MWRender
             return false;
 
         const auto neck = getBoneWorldMatrix("Bip01 Neck");
-        const auto head = getBoneWorldMatrix("Bip01 Head");
+        const auto actualHead = getBoneWorldMatrix("Bip01 Head");
+        auto head = actualHead;
+        if (neck && actualHead && mBrutalRebuildHeadInNeck)
+            head = *mBrutalRebuildHeadInNeck * *neck;
         const auto& nodes = getNodeMap();
         const auto neckNode = nodes.find("Bip01 Neck");
         const auto headNode = nodes.find("Bip01 Head");
@@ -304,8 +307,25 @@ namespace MWRender
 
         try
         {
+            const osg::Matrixf correction = osg::Matrixf::inverse(*actualHead) * *head;
             const std::function<std::optional<osg::Matrixf>(std::string_view)> pose =
-                [this](std::string_view name) { return getBoneWorldMatrix(name); };
+                [&](std::string_view name) -> std::optional<osg::Matrixf> {
+                    auto world = getBoneWorldMatrix(name);
+                    if (!world) return {};
+                    const auto found = nodes.find(std::string(name));
+                    if (found != nodes.end())
+                    {
+                        const auto paths = found->second->getParentalNodePaths();
+                        if (!paths.empty())
+                            for (const auto* node : paths.front())
+                                if (Misc::StringUtils::ciEqual(node->getName(), "Bip01 Head"))
+                                {
+                                    *world *= correction;
+                                    break;
+                                }
+                    }
+                    return world;
+                };
             std::vector<DecapitationGeometry::Snapshot> snapshots;
             for (const auto part : { ESM::PRT_Head, ESM::PRT_Hair, ESM::PRT_Neck })
                 if (mObjectParts[part])
@@ -313,7 +333,7 @@ namespace MWRender
                     const bool whole = part == ESM::PRT_Hair
                         || mPartslots[part] == MWWorld::InventoryStore::Slot_Helmet;
                     DecapitationGeometry::SnapshotVisitor visitor(snapshots, pose,
-                        osg::Matrixf::identity(), whole,
+                        correction, whole,
                         mPartslots[part] == MWWorld::InventoryStore::Slot_Helmet);
                     visitor.snapshot(mObjectParts[part]->getNode());
                     if (visitor.failed)
@@ -936,7 +956,10 @@ namespace MWRender
         const bool rebuildHeadCut = static_cast<bool>(mBrutalHeadCut);
         const unsigned rebuildLimbMask = mBrutalLimbCut ? mBrutalLimbCut->mask : 0u;
         if (rebuildHeadCut)
+        {
+            mBrutalRebuildHeadInNeck = mBrutalHeadCut->headInNeck;
             mBrutalHeadCut.reset();
+        }
         if (rebuildLimbMask)
             mBrutalLimbCut.reset();
 
@@ -944,6 +967,7 @@ namespace MWRender
         if (curType != mNpcType)
         {
             mNpcType = curType;
+            mBrutalRebuildHeadInNeck.reset();
             rebuild();
             return;
         }
@@ -1060,6 +1084,7 @@ namespace MWRender
         if (rebuildHeadCut && !setBrutalHeadSevered(true))
             Log(Debug::Warning)
                 << "Brutal head cut could not be rebuilt after NPC equipment changed";
+        mBrutalRebuildHeadInNeck.reset();
         if (rebuildLimbMask && !setBrutalLimbsSevered(rebuildLimbMask))
             Log(Debug::Warning)
                 << "Brutal limb cut could not be rebuilt after NPC equipment changed";
