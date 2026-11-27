@@ -1627,7 +1627,7 @@ namespace MWRender
 
     }
 
-    osg::ref_ptr<osg::StateSet> Animation::createMeleeBloodState(osg::Image* image)
+    osg::ref_ptr<osg::StateSet> Animation::createMeleeBloodState(osg::Image* image, std::string_view color)
     {
         // Same look as the wounds on bodies: Dark Messiah's DecalModulate,
         // multiplying the already lit surface around a neutral grey.
@@ -1654,6 +1654,17 @@ namespace MWRender
         // nested bin drawn right after the held weapon.
         state->setRenderBinDetails(1, "RenderBin",
             wound ? osg::StateSet::OVERRIDE_RENDERBIN_DETAILS : osg::StateSet::PROTECTED_RENDERBIN_DETAILS);
+        osg::Vec3f tint(1.f, 0.f, 0.f);
+        bool recolor = true;
+        if (color == "tx_blood_blue.dds") tint.set(.12f, .32f, .95f);
+        else if (color == "tx_blood_green.dds") tint.set(.18f, .75f, .12f);
+        else if (color == "tx_blood_gold.dds") tint.set(.95f, .72f, .15f);
+        else if (color == "tx_blood_orange.dds") tint.set(.95f, .32f, .04f);
+        else if (color == "tx_blood_white.dds") tint.set(.95f, .95f, .95f);
+        else if (color == "tx_blood_dark.dds") tint.set(.15f, .12f, .13f);
+        else recolor = false;
+        state->addUniform(new osg::Uniform("bloodRecolor", recolor), flags);
+        state->addUniform(new osg::Uniform("bloodTint", tint), flags);
         state->addUniform(new osg::Uniform("bloodFade", 0.f), flags);
         state->addUniform(new osg::Uniform("bloodDry", 0.f), flags);
         state->addUniform(new osg::Uniform("bloodFeather", false), flags);
@@ -1681,13 +1692,14 @@ namespace MWRender
         };
         try
         {
-            auto& state = mMeleeBloodStates[style];
+            const auto& color = mPtr.getRefData().mMeleeBloodTexture;
+            auto& state = mMeleeBloodStates[{style, color}];
             if (!state)
             {
                 const VFS::Path::Normalized path(paths[style]);
                 if (!mResourceSystem->getVFS()->exists(path))
                     return false;
-                state = createMeleeBloodState(mResourceSystem->getImageManager()->getImage(path));
+                state = createMeleeBloodState(mResourceSystem->getImageManager()->getImage(path), color);
             }
             return projectMeleeBlood(position, outward, kind, power, state.get());
         }

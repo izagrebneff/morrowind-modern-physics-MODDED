@@ -523,6 +523,21 @@ namespace MWLua
                 "HitAction");
         };
 
+        actor["setMeleeBloodTexture"] = [context](const Object& object, std::string texture) {
+            if (!object.isGObject() && !object.isSelfObject())
+                throw std::runtime_error("Global script or self required");
+            if (texture != "" && texture != "none" && texture != "tx_blood_energy.dds"
+                && texture != "tx_blood_white.dds" && texture != "tx_blood_dark.dds"
+                && texture != "tx_blood_gold.dds" && texture != "tx_blood_blue.dds"
+                && texture != "tx_blood_green.dds" && texture != "tx_blood_orange.dds")
+                throw std::runtime_error("Unknown blood texture category");
+            context.mLuaManager->addAction([obj = Object(object), texture] {
+                const auto ptr = obj.ptr();
+                if (ptr.getClass().isActor())
+                    ptr.getRefData().mMeleeBloodTexture = texture;
+            }, "SetMeleeBloodTextureAction");
+        };
+
         actor["setKnockedDown"] = [context](const Object& object, bool value) {
             if (!object.isGObject() && !object.isSelfObject())
                 throw std::runtime_error("Can only be used in global scripts or in local scripts on self.");

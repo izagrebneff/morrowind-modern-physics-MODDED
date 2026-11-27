@@ -713,16 +713,24 @@ namespace MWLua
     {
         if (victim.isEmpty() || !victim.getClass().isActor())
             return false;
-        if (victim.getClass().isNpc())
-            return true;
-        std::string id = victim.getCellRef().getRefId().serializeText();
-        for (char& c : id)
-            if (c >= 'A' && c <= 'Z')
-                c = static_cast<char>(c - 'A' + 'a');
+        const auto& texture = victim.getRefData().mMeleeBloodTexture;
+        if (texture == "none" || texture == "tx_blood_energy.dds")
+            return false;
+        std::string model(victim.getClass().getModel(victim).value());
+        std::string id = victim.getClass().isNpc() ? "" : victim.getCellRef().getRefId().serializeText();
+        const auto lower = [](std::string& value) {
+            for (char& c : value)
+                if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+        };
+        lower(model);
+        lower(id);
+        const auto slash = model.find_last_of("/\\");
+        if (slash != std::string::npos) model.erase(0, slash + 1);
         for (const char* token : { "skeleton", "skel_", "skel-", "ghost", "specter", "spectre",
                  "wraith", "apparition", "spirit", "atronach", "centurion", "automaton", "robot",
-                 "golem", "dwarven", "dwemer" })
-            if (id.find(token) != std::string::npos)
+                 "golem", "dwspecter", "dwe_", "dwemer", "atro_", "monarch_frost",
+                 "monarch_flame", "storm_tyrant", "ancestor_greater", "auroran", "morphoid" })
+            if (model.find(token) != std::string::npos || id.find(token) != std::string::npos)
                 return false;
         return true;
     }

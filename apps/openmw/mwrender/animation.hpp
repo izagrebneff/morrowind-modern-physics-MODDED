@@ -235,8 +235,8 @@ namespace MWRender
             std::size_t vertices;
         };
         std::deque<MeleeBloodPatch> mMeleeBloodPatches;
-        osg::ref_ptr<osg::StateSet> mMeleeBloodStates[4];
-        osg::ref_ptr<osg::StateSet> createMeleeBloodState(osg::Image* image);
+        std::map<std::pair<unsigned, std::string>, osg::ref_ptr<osg::StateSet>> mMeleeBloodStates;
+        osg::ref_ptr<osg::StateSet> createMeleeBloodState(osg::Image* image, std::string_view color);
 
         MWWorld::Ptr mPtr;
 

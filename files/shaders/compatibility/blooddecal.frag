@@ -1,6 +1,8 @@
 #version 120
 uniform sampler2D diffuseMap;
 uniform float bloodScale;
+uniform bool bloodRecolor;
+uniform vec3 bloodTint;
 uniform bool bloodFeather;
 varying vec2 bloodUV;
 varying vec3 bloodViewPos;
@@ -23,6 +25,11 @@ void main()
         vec2 edge = min(bloodUV, vec2(1.0) - bloodUV);
         vec2 feather = smoothstep(vec2(0.0), vec2(0.22, 0.13), edge);
         stain.a *= feather.x * feather.y;
+    }
+    if (bloodRecolor)
+    {
+        float strength = clamp(contrast * 2.0, 0.0, 1.0);
+        stain.rgb = mix(vec3(128.0 / 255.0), bloodTint * 0.72, strength);
     }
     // Dried blood is darker and browner than a fresh smear.
     stain.rgb = mix(stain.rgb, stain.rgb * vec3(0.62, 0.5, 0.42), clamp(bloodParameters.g,0.0,1.0));
