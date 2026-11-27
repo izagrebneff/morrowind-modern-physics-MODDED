@@ -39,6 +39,8 @@
 #include <components/resource/animblendrulesmanager.hpp>
 #include <components/resource/keyframemanager.hpp>
 #include <components/resource/scenemanager.hpp>
+#include <components/resource/imagemanager.hpp>
+#include <components/resource/resourcesystem.hpp>
 
 #include <components/esm3/loadcont.hpp>
 #include <components/esm3/loadcrea.hpp>
@@ -350,6 +352,7 @@ namespace
     {
     public:
         std::vector<MWRender::UpdateVfxCallback*> mCallbacks;
+        std::vector<osg::MatrixTransform*> mEffectNodes;
 
         FindVfxCallbacksVisitor()
             : osg::NodeVisitor(TRAVERSE_ALL_CHILDREN)
@@ -375,6 +378,7 @@ namespace
                     if (mEffectId == "" || vfxCallback->mParams.mEffectId == mEffectId)
                     {
                         mCallbacks.push_back(vfxCallback);
+                        mEffectNodes.push_back(&node);
                     }
                 }
             }
@@ -2226,8 +2230,23 @@ namespace MWRender
                     node->getParent(0)->removeChild(node);
         }
 
-        osg::ref_ptr<osg::Texture2D> corpseParticleTexture(int kind)
+        osg::ref_ptr<osg::Texture2D> corpseParticleTexture(Resource::ResourceSystem* resources, int kind)
         {
+            const auto path = VFS::Path::toNormalized(kind == 0 ? "textures/spelldeatheffects/fire.dds"
+                : kind == 1 ? "textures/spelldeatheffects/smoke.dds" : "textures/spelldeatheffects/steam.dds");
+            if (resources->getVFS()->exists(path))
+            {
+                auto image = resources->getImageManager()->getImage(path);
+                if (image && image.get() != resources->getImageManager()->getWarningImage())
+                {
+                    osg::ref_ptr<osg::Texture2D> texture = new osg::Texture2D(image);
+                    texture->setFilter(osg::Texture::MIN_FILTER, osg::Texture::LINEAR);
+                    texture->setFilter(osg::Texture::MAG_FILTER, osg::Texture::LINEAR);
+                    texture->setWrap(osg::Texture::WRAP_S, osg::Texture::CLAMP_TO_EDGE);
+                    texture->setWrap(osg::Texture::WRAP_T, osg::Texture::CLAMP_TO_EDGE);
+                    return texture;
+                }
+            }
             constexpr int size = 64;
             osg::ref_ptr<osg::Image> image = new osg::Image;
             image->allocateImage(size, size, 1, GL_RGBA, GL_UNSIGNED_BYTE);
@@ -2286,7 +2305,27 @@ namespace MWRender
                 geode->addDrawable(shard);
                 osg::ref_ptr<osg::MatrixTransform> anchor = new osg::MatrixTransform;
                 anchor->setMatrix(osg::Matrix::translate((i - 1) * 8.f, -5.f + i * 4.f, 3.f));
-                anchor->addChild(geode);
+                const auto mesh = VFS::Path::toNormalized("meshes/spelldeatheffects/ice.nif");
+                const auto texture = VFS::Path::toNormalized("textures/spelldeatheffects/ice.dds");
+                osg::ref_ptr<osg::Node> external;
+                if (mResourceSystem->getVFS()->exists(mesh))
+                {
+                    try
+                    {
+                        external = mResourceSystem->getSceneManager()->getInstance(mesh);
+                        if (external && mResourceSystem->getVFS()->exists(texture))
+                            overrideFirstRootTexture(texture, mResourceSystem, *external);
+                    }
+                    catch (const std::exception& e)
+                    {
+                        Log(Debug::Warning) << "Corpse ice mesh: " << e.what();
+                        external = nullptr;
+                    }
+                }
+                if (external)
+                    anchor->addChild(external);
+                else
+                    anchor->addChild(geode);
                 found->second->addChild(anchor);
                 mCorpseIce.push_back(anchor);
             }
@@ -2317,7 +2356,10 @@ namespace MWRender
             detachCorpseNode(ice.get());
         mCorpseIce.clear();
         if (mDeathSpellRemaining > 0.f || mDeathSpellLight)
+        {
             removeEffect("corpse_death_vfx");
+            removeEffect("corpse_death_shock");
+        }
         if (mDeathSpellLight)
         {
             while (mDeathSpellLight->getNumParents() > 0)
@@ -2368,12 +2410,62 @@ namespace MWRender
         mDeathSpellLight->setLight(light);
         mDeathSpellLight->setRadius(radius * 3.f);
         parent->addChild(mDeathSpellLight);
-        if (!model.empty() && !fire && !frost && effect.mId != ESM::MagicEffect::Poison)
-            addEffect(model, "corpse_death_vfx", true, bone, effect.mParticle.getOriginal());
-        if (fire || shock || effect.mId == ESM::MagicEffect::Poison)
+        const auto addExternal = [&](const char* meshName, const char* textureName, std::string_view attachment) {
+            const auto mesh = VFS::Path::toNormalized(meshName);
+            if (!mResourceSystem->getVFS()->exists(mesh))
+                return false;
+            const auto texture = VFS::Path::toNormalized(textureName);
+            try
+            {
+                addEffect(mesh.value(), "corpse_death_vfx", true, attachment,
+                    mResourceSystem->getVFS()->exists(texture) ? texture.value() : std::string_view{}, true, false);
+                return true;
+            }
+            catch (const std::exception& e)
+            {
+                Log(Debug::Warning) << "Corpse VFX mesh: " << e.what();
+                return false;
+            }
+        };
+        bool externalParticles = false;
+        if (fire || effect.mId == ESM::MagicEffect::Poison || shock)
+        {
+            const char* mesh = fire ? "meshes/spelldeatheffects/fire.nif" : shock
+                ? "meshes/spelldeatheffects/smoke.nif" : "meshes/spelldeatheffects/steam.nif";
+            const char* texture = fire ? "textures/spelldeatheffects/fire.dds" : shock
+                ? "textures/spelldeatheffects/smoke.dds" : "textures/spelldeatheffects/steam.dds";
+            for (const char* name : {"bip01 spine1", "bip01 pelvis", "bip01 l upperarm", "bip01 r upperarm"})
+                if (nodes.find(name) != nodes.end())
+                    externalParticles |= addExternal(mesh, texture, name);
+        }
+        // Shock is separate from smoke. Its own effect id avoids deduplication
+        // when both models attach to the same bone.
+        bool externalShock = false;
+        if (shock)
+        {
+            const auto mesh = VFS::Path::toNormalized("meshes/spelldeatheffects/shock.nif");
+            const auto texture = VFS::Path::toNormalized("textures/spelldeatheffects/shock.dds");
+            if (mResourceSystem->getVFS()->exists(mesh))
+            {
+                try
+                {
+                    addEffect(mesh.value(), "corpse_death_shock", true, bone,
+                        mResourceSystem->getVFS()->exists(texture) ? texture.value() : std::string_view{}, true, false);
+                    externalShock = true;
+                }
+                catch (const std::exception& e)
+                {
+                    Log(Debug::Warning) << "Corpse shock mesh: " << e.what();
+                }
+            }
+        }
+        if (!model.empty() && !fire && !frost && effect.mId != ESM::MagicEffect::Poison && !externalShock)
+            addEffect(model, shock ? "corpse_death_shock" : "corpse_death_vfx", true, bone,
+                effect.mParticle.getOriginal());
+        if ((fire || shock || effect.mId == ESM::MagicEffect::Poison) && !externalParticles)
         {
             const int kind = fire ? 0 : shock ? 1 : 2;
-            auto texture = corpseParticleTexture(kind);
+            auto texture = corpseParticleTexture(mResourceSystem, kind);
             const char* bones[] = {"bip01 spine1", "bip01 pelvis", "bip01 l upperarm",
                 "bip01 r upperarm", "bip01 l thigh", "bip01 r thigh", "bip01 head"};
             for (const char* name : bones)
@@ -2419,6 +2511,7 @@ namespace MWRender
         if (mDeathSpellRemaining <= 0.f)
         {
             removeEffect("corpse_death_vfx");
+            removeEffect("corpse_death_shock");
             clearCorpseParticles();
             detachCorpseNode(mDeathSpellLight.get());
             mDeathSpellLight = nullptr;
@@ -2426,6 +2519,13 @@ namespace MWRender
         }
         const float fade = std::clamp(mDeathSpellRemaining / (mDeathSpellDuration * 0.65f), 0.f, 1.f);
         const float elapsed = mDeathSpellDuration - mDeathSpellRemaining;
+        for (const char* id : {"corpse_death_vfx", "corpse_death_shock"})
+        {
+            FindVfxCallbacksVisitor visitor(id);
+            mInsert->accept(visitor);
+            for (auto* node : visitor.mEffectNodes)
+                node->setMatrix(osg::Matrix::scale(fade, fade, fade));
+        }
         for (const auto& particle : mCorpseParticles)
         {
             auto* sprite = static_cast<osg::AutoTransform*>(particle.mNode.get());
