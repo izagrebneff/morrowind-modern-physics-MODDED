@@ -1,4 +1,7 @@
 #include "animation.hpp"
+#include <sstream>
+#include <iomanip>
+#include <locale>
 #include <components/resource/imagemanager.hpp>
 #include <components/resource/resourcesystem.hpp>
 #include <components/sceneutil/depth.hpp>
@@ -1680,33 +1683,109 @@ namespace MWRender
         return result;
     }
 
-    bool Animation::addMeleeBlood(const osg::Vec3f& position, const osg::Vec3f& outward,
-        std::string_view kind, bool power)
+    osg::StateSet* Animation::getMeleeBloodState(unsigned style, const std::string& color)
     {
-        const unsigned style = kind == "slash" || kind == "chop" ? 0 : power ? 2 : 1;
         constexpr const char* paths[] = {
             "textures/brutal_dm/model_blood_slash.png",
             "textures/brutal_dm/model_blood_small.png",
             "textures/brutal_dm/model_blood_big.png",
             "textures/brutal_dm/model_blood_tiny.png"
         };
+        if (style >= 4) return nullptr;
+        auto& state = mMeleeBloodStates[{style, color}];
+        if (!state)
+        {
+            const VFS::Path::Normalized path(paths[style]);
+            if (!mResourceSystem->getVFS()->exists(path)) return nullptr;
+            state = createMeleeBloodState(mResourceSystem->getImageManager()->getImage(path), color);
+        }
+        return state.get();
+    }
+
+    bool Animation::addMeleeBlood(const osg::Vec3f& position, const osg::Vec3f& outward,
+        std::string_view kind, bool power)
+    {
         try
         {
-            const auto& color = mPtr.getRefData().mMeleeBloodTexture;
-            auto& state = mMeleeBloodStates[{style, color}];
-            if (!state)
-            {
-                const VFS::Path::Normalized path(paths[style]);
-                if (!mResourceSystem->getVFS()->exists(path))
-                    return false;
-                state = createMeleeBloodState(mResourceSystem->getImageManager()->getImage(path), color);
-            }
-            return projectMeleeBlood(position, outward, kind, power, state.get());
+            if (!mMeleeBloodRestored && mObjectRoot) restoreMeleeBlood();
+            const unsigned style = kind == "slash" || kind == "chop" ? 0 : power ? 2 : 1;
+            return projectMeleeBlood(position, outward, kind, power,
+                getMeleeBloodState(style, mPtr.getRefData().mMeleeBloodTexture));
         }
         catch (const std::exception& error)
         {
             Log(Debug::Warning) << "Melee blood texture rejected: " << error.what();
             return false;
+        }
+    }
+
+    void Animation::restoreMeleeBlood()
+    {
+        mMeleeBloodRestored = true;
+        if (mPtr.isEmpty() || !mPtr.getClass().isActor()) return;
+        const auto& records = mPtr.getRefData().mMeleeBloodRecords;
+        if (records.empty()) return;
+        try
+        {
+            std::vector<Surface> surfaces;
+            if (const auto* npc = dynamic_cast<const NpcAnimation*>(this))
+            {
+                for (int part = 0; part < ESM::PRT_Count; ++part)
+                {
+                    if (part == ESM::PRT_Weapon || part == ESM::PRT_Shield || part == ESM::PRT_Hair) continue;
+                    if (const auto* holder = npc->getPart(static_cast<ESM::PartReferenceType>(part)))
+                    {
+                        SurfacesVisitor visitor(surfaces, part, {});
+                        visitor.collect(holder->getNode().get());
+                    }
+                }
+            }
+            else
+            {
+                SurfacesVisitor visitor(surfaces, 0, {});
+                visitor.collect(mObjectRoot.get());
+            }
+            std::size_t total = 0;
+            for (const auto& record : records)
+            {
+                std::istringstream in(record);
+                in.imbue(std::locale::classic());
+                int part;
+                unsigned ordinal, style;
+                std::uint64_t fingerprint;
+                std::size_t count;
+                std::string color;
+                if (!(in >> part >> ordinal >> fingerprint >> style >> std::quoted(color) >> count)
+                    || style >= 4 || color.size() > 64 || count == 0 || count > 3072
+                    || count % 3 || total + count > 8192) continue;
+                auto selected = std::find_if(surfaces.begin(), surfaces.end(), [&](const Surface& surface) {
+                    return surface.part == part && surface.ordinal == ordinal && surface.fingerprint == fingerprint;
+                });
+                if (selected == surfaces.end()) continue;
+                std::vector<SceneUtil::SurfaceDecals::Anchor> anchors(count);
+                bool valid = true;
+                for (auto& v : anchors)
+                {
+                    if (!(in >> v.indices[0] >> v.indices[1] >> v.indices[2]
+                        >> v.weights.x() >> v.weights.y() >> v.weights.z() >> v.uv.x() >> v.uv.y()))
+                    { valid = false; break; }
+                    for (auto index : v.indices)
+                        if (index >= selected->source->getVertexArray()->getNumElements()) valid = false;
+                }
+                if (!valid) continue;
+                auto* state = getMeleeBloodState(style, color);
+                if (!state) continue;
+                auto* decals = selected->attach();
+                if (!decals) continue;
+                const auto id = decals->addPatch(anchors, state, Mask_Effect);
+                if (!id) continue;
+                mMeleeBloodPatches.push_back({decals, id, count});
+                total += count;
+            }
+        }
+        catch (const std::exception& error)
+        {
+            Log(Debug::Warning) << "Melee blood restore rejected: " << error.what();
         }
     }
 
@@ -1764,6 +1843,20 @@ namespace MWRender
             const auto id = decals->addPatch(best.vertices, state, Mask_Effect);
             if (!id) return false;
             mMeleeBloodPatches.push_back({decals, id, best.vertices.size()});
+            auto& records = mPtr.getRefData().mMeleeBloodRecords;
+            const unsigned style = kind == "slash" || kind == "chop" ? 0 : power ? 2 : 1;
+            std::ostringstream saved;
+            saved.imbue(std::locale::classic());
+            saved << std::setprecision(std::numeric_limits<float>::max_digits10)
+                << selected->part << ' ' << selected->ordinal << ' ' << selected->fingerprint << ' '
+                << style << ' ' << std::quoted(mPtr.getRefData().mMeleeBloodTexture) << ' ' << best.vertices.size();
+            for (const auto& v : best.vertices)
+                saved << ' ' << v.indices[0] << ' ' << v.indices[1] << ' ' << v.indices[2]
+                    << ' ' << v.weights.x() << ' ' << v.weights.y() << ' ' << v.weights.z()
+                    << ' ' << v.uv.x() << ' ' << v.uv.y();
+            records.push_back(saved.str());
+            while (records.size() > 24) records.erase(records.begin());
+            mPtr.getRefData().setChanged(true);
             std::size_t total = 0;
             for (const auto& patch : mMeleeBloodPatches) total += patch.vertices;
             while (mMeleeBloodPatches.size() > 24 || total > 8192)
@@ -1773,6 +1866,7 @@ namespace MWRender
                     marks->removePatch(patch.id);
                 total -= patch.vertices;
                 mMeleeBloodPatches.pop_front();
+                if (records.size() > mMeleeBloodPatches.size()) records.erase(records.begin());
             }
             return true;
         }
@@ -2196,6 +2290,8 @@ namespace MWRender
 
     osg::Vec3f Animation::runAnimation(float duration)
     {
+        if (!mMeleeBloodRestored && mObjectRoot)
+            restoreMeleeBlood();
         osg::Vec3f movement(0.f, 0.f, 0.f);
         AnimStateMap::iterator stateiter = mStates.begin();
         while (stateiter != mStates.end())
@@ -2418,6 +2514,8 @@ namespace MWRender
             mObjectRoot->getParent(0)->removeChild(mObjectRoot);
         }
         mObjectRoot = nullptr;
+        mMeleeBloodRestored = false;
+        mMeleeBloodPatches.clear();
         mSkeleton = nullptr;
 
         mNodeMap.clear();

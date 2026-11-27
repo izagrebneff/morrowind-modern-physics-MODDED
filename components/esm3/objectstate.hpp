@@ -34,6 +34,7 @@ namespace ESM
         LuaScripts mLuaScripts;
         Position mPosition;
         AnimationState mAnimationState;
+        std::vector<std::string> mMeleeBloodRecords;
         ActorIdConverter* mActorIdConverter = nullptr;
         FormatVersion mVersion = DefaultFormatVersion;
         uint32_t mFlags = 0;

@@ -43,6 +43,8 @@ namespace MWWorld
         mFlags = refData.mFlags;
         mPhysicsPostponed = refData.mPhysicsPostponed;
         mCorpseGearPose.reset();
+        mMeleeBloodTexture = refData.mMeleeBloodTexture;
+        mMeleeBloodRecords = refData.mMeleeBloodRecords;
 
         mAnimationState = refData.mAnimationState;
 
@@ -120,6 +122,7 @@ namespace MWWorld
         , mPhysicsPostponed(false)
         , mChanged(true)
     {
+        mMeleeBloodRecords = objectState.mMeleeBloodRecords;
         // "Note that the ActivationFlag_UseEnabled is saved to the reference,
         // which will result in permanently suppressed activation if the reference script is removed.
         // This occurred when removing the animated containers mod, and the fix in MCP is to reset UseEnabled to true on
@@ -152,6 +155,7 @@ namespace MWWorld
         objectState.mFlags = mFlags;
 
         objectState.mAnimationState = mAnimationState;
+        objectState.mMeleeBloodRecords = mMeleeBloodRecords;
     }
 
     RefData& RefData::operator=(const RefData& refData)
@@ -277,7 +281,7 @@ namespace MWWorld
 
     bool RefData::hasChanged() const
     {
-        return mChanged || !mAnimationState.empty();
+        return mChanged || !mAnimationState.empty() || !mMeleeBloodRecords.empty();
     }
 
     bool RefData::activateByScript()

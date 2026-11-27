@@ -71,6 +71,7 @@ namespace MWWorld
         std::optional<CorpseGearPose> mCorpseGearPose;
         // Transient cosmetic preference supplied by Diverse Blood on activation.
         std::string mMeleeBloodTexture;
+        std::vector<std::string> mMeleeBloodRecords;
 
     private:
         bool mChanged : 1;

@@ -235,6 +235,9 @@ namespace MWRender
             std::size_t vertices;
         };
         std::deque<MeleeBloodPatch> mMeleeBloodPatches;
+        bool mMeleeBloodRestored = false;
+        void restoreMeleeBlood();
+        osg::StateSet* getMeleeBloodState(unsigned style, const std::string& color);
         std::map<std::pair<unsigned, std::string>, osg::ref_ptr<osg::StateSet>> mMeleeBloodStates;
         osg::ref_ptr<osg::StateSet> createMeleeBloodState(osg::Image* image, std::string_view color);
 

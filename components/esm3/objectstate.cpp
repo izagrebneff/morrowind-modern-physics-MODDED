@@ -50,6 +50,13 @@ namespace ESM
         esm.getHNOT(mFlags, "FLAG");
 
         mAnimationState.load(esm);
+        mMeleeBloodRecords.clear();
+        while (esm.isNextSub("MBLD"))
+        {
+            auto record = esm.getHNString("MBLD");
+            if (record.size() <= 350000 && mMeleeBloodRecords.size() < 24)
+                mMeleeBloodRecords.push_back(std::move(record));
+        }
 
         // FIXME: assuming "false" as default would make more sense, but also break compatibility with older save files
         mHasCustomState = true;
@@ -80,6 +87,9 @@ namespace ESM
             esm.writeHNT("FLAG", mFlags);
 
         mAnimationState.save(esm);
+        if (!inInventory)
+            for (const auto& record : mMeleeBloodRecords)
+                esm.writeHNString("MBLD", record);
 
         if (!mHasCustomState)
             esm.writeHNT("HCUS", false);
@@ -88,6 +98,7 @@ namespace ESM
     void ObjectState::blank()
     {
         mRef.blank();
+        mMeleeBloodRecords.clear();
         mHasLocals = 0;
         mEnabled = false;
         for (int i = 0; i < 3; ++i)
