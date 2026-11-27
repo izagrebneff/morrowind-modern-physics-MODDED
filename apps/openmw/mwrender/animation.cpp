@@ -1,4 +1,14 @@
 #include "animation.hpp"
+#include <components/resource/imagemanager.hpp>
+#include <components/resource/resourcesystem.hpp>
+#include <components/sceneutil/depth.hpp>
+#include <components/sceneutil/texturetype.hpp>
+#include <osg/ColorMask>
+#include <osg/PolygonOffset>
+#include <osg/TexMat>
+#include <osg/Texture2D>
+#include <osg/Uniform>
+#include <osgUtil/IncrementalCompileOperation>
 #include "npcanimation.hpp"
 #include <components/sceneutil/decalprojector.hpp>
 #include <components/sceneutil/morphgeometry.hpp>
@@ -1615,6 +1625,77 @@ namespace MWRender
         };
 
 
+    }
+
+    osg::ref_ptr<osg::StateSet> Animation::createMeleeBloodState(osg::Image* image)
+    {
+        // Same look as the wounds on bodies: Dark Messiah's DecalModulate,
+        // multiplying the already lit surface around a neutral grey.
+        osg::ref_ptr<osg::Texture2D> texture = new osg::Texture2D(image);
+        texture->setWrap(osg::Texture::WRAP_S, osg::Texture::CLAMP_TO_EDGE);
+        texture->setWrap(osg::Texture::WRAP_T, osg::Texture::CLAMP_TO_EDGE);
+        mResourceSystem->getSceneManager()->applyFilterSettings(texture);
+        osg::ref_ptr<osg::Geometry> geometry
+            = osg::createTexturedQuadGeometry(osg::Vec3f(), osg::Vec3f(1, 0, 0), osg::Vec3f(0, 0, 1));
+        auto* state = geometry->getOrCreateStateSet();
+        const auto flags = osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE | osg::StateAttribute::PROTECTED;
+        state->setTextureAttributeAndModes(0, texture, flags);
+        state->setTextureAttribute(0, new SceneUtil::TextureType("diffuseMap"), flags);
+        state->setTextureAttribute(0, new osg::TexMat, flags);
+        state->setAttributeAndModes(new osg::BlendFunc(GL_DST_COLOR, GL_SRC_COLOR, GL_ZERO, GL_ONE), flags);
+        state->setAttributeAndModes(new SceneUtil::AutoDepth(osg::Depth::LEQUAL, 0, 1, false), flags);
+        const bool wound = true;
+        const float offset = (SceneUtil::AutoDepth::isReversed() ? 1.f : -1.f) * (wound ? 1.f : 2.f);
+        state->setAttributeAndModes(new osg::PolygonOffset(offset, offset), flags);
+        state->setMode(
+            GL_CULL_FACE, osg::StateAttribute::OFF | osg::StateAttribute::OVERRIDE | osg::StateAttribute::PROTECTED);
+        state->setAttribute(new osg::ColorMask(true, true, true, false), flags);
+        // Protected: inside the first-person depth-clearing bin this becomes a
+        // nested bin drawn right after the held weapon.
+        state->setRenderBinDetails(1, "RenderBin",
+            wound ? osg::StateSet::OVERRIDE_RENDERBIN_DETAILS : osg::StateSet::PROTECTED_RENDERBIN_DETAILS);
+        state->addUniform(new osg::Uniform("bloodFade", 0.f), flags);
+        state->addUniform(new osg::Uniform("bloodDry", 0.f), flags);
+        state->addUniform(new osg::Uniform("bloodFeather", false), flags);
+        state->addUniform(new osg::Uniform("bloodScale", 1.f), flags);
+        state->addUniform(new osg::Uniform("bloodVertexData", false), flags);
+        mResourceSystem->getSceneManager()->setUpNormalsRTForStateSet(state, false);
+        mResourceSystem->getSceneManager()->recreateShaders(geometry, "blooddecal");
+        osg::ref_ptr<osg::StateSet> result = geometry->getStateSet();
+        if (auto* program = result->getAttribute(osg::StateAttribute::PROGRAM))
+            result->setAttributeAndModes(program, flags);
+        if (auto* compile = mResourceSystem->getSceneManager()->getIncrementalCompileOperation())
+            compile->add(geometry);
+        return result;
+    }
+
+    bool Animation::addMeleeBlood(const osg::Vec3f& position, const osg::Vec3f& outward,
+        std::string_view kind, bool power)
+    {
+        const unsigned style = kind == "slash" || kind == "chop" ? 0 : power ? 2 : 1;
+        constexpr const char* paths[] = {
+            "textures/brutal_dm/model_blood_slash.png",
+            "textures/brutal_dm/model_blood_small.png",
+            "textures/brutal_dm/model_blood_big.png",
+            "textures/brutal_dm/model_blood_tiny.png"
+        };
+        try
+        {
+            auto& state = mMeleeBloodStates[style];
+            if (!state)
+            {
+                const VFS::Path::Normalized path(paths[style]);
+                if (!mResourceSystem->getVFS()->exists(path))
+                    return false;
+                state = createMeleeBloodState(mResourceSystem->getImageManager()->getImage(path));
+            }
+            return projectMeleeBlood(position, outward, kind, power, state.get());
+        }
+        catch (const std::exception& error)
+        {
+            Log(Debug::Warning) << "Melee blood texture rejected: " << error.what();
+            return false;
+        }
     }
 
     bool Animation::projectMeleeBlood(const osg::Vec3f& position, const osg::Vec3f& outward,

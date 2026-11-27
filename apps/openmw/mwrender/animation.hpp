@@ -235,6 +235,8 @@ namespace MWRender
             std::size_t vertices;
         };
         std::deque<MeleeBloodPatch> mMeleeBloodPatches;
+        osg::ref_ptr<osg::StateSet> mMeleeBloodStates[4];
+        osg::ref_ptr<osg::StateSet> createMeleeBloodState(osg::Image* image);
 
         MWWorld::Ptr mPtr;
 
@@ -491,6 +493,8 @@ namespace MWRender
         /// For ragdolls: where a bone is (world matrix), and putting it somewhere. Only bones no animation drives
         /// stay where they're put (see stopAllAnimations).
         std::optional<osg::Matrixf> getBoneWorldMatrix(std::string_view bone) const;
+        bool addMeleeBlood(const osg::Vec3f& position, const osg::Vec3f& outward,
+            std::string_view kind, bool power);
         bool projectMeleeBlood(const osg::Vec3f& position, const osg::Vec3f& outward,
             std::string_view kind, bool power, osg::StateSet* state);
         void setBoneWorldMatrix(std::string_view bone, const osg::Matrixf& world);

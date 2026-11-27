@@ -30,6 +30,9 @@
 #include "../mwbase/world.hpp"
 
 #include "../mwrender/bonegroup.hpp"
+#include "../mwrender/animation.hpp"
+#include "../mwworld/refdata.hpp"
+#include <components/esm3/loadweap.hpp>
 #include "../mwrender/postprocessor.hpp"
 
 #include "../mwworld/class.hpp"
@@ -706,7 +709,7 @@ namespace MWLua
 
     // Filter for the upcoming surface blood decal renderer. Do not apply this to
     // vanilla Hit events: other mods still need to receive every attack.
-    [[maybe_unused]] static bool allowsMeleeBloodDecal(const MWWorld::Ptr& victim)
+    static bool allowsMeleeBloodDecal(const MWWorld::Ptr& victim)
     {
         if (victim.isEmpty() || !victim.getClass().isActor())
             return false;
@@ -728,6 +731,21 @@ namespace MWLua
         const MWWorld::Ptr& ammo, int attackType, float attackStrength, float attackWindUp, float damage, bool isHealth,
         const osg::Vec3f& hitPos, bool successful, MWMechanics::DamageSourceType sourceType)
     {
+        // Cosmetic only; never change the vanilla Lua Hit event.
+        if (sourceType == MWMechanics::DamageSourceType::Melee && successful && isHealth
+            && damage > 0.f && !weapon.isEmpty() && weapon.getType() == ESM::Weapon::sRecordId
+            && !attacker.isEmpty() && allowsMeleeBloodDecal(victim))
+        {
+            osg::Vec3f outward = attacker.getRefData().getPosition().asVec3()
+                - victim.getRefData().getPosition().asVec3();
+            if (outward.normalize() > 0.f)
+                if (auto* animation = MWBase::Environment::get().getWorld()->getAnimation(victim))
+                {
+                    const std::string_view kind = attackType == ESM::Weapon::AT_Chop ? "chop"
+                        : attackType == ESM::Weapon::AT_Slash ? "slash" : "thrust";
+                    animation->addMeleeBlood(hitPos, outward, kind, attackStrength >= 0.8f);
+                }
+        }
         mLua.protectedCall([&](LuaUtil::LuaView& view) {
             sol::table damageTable = view.newTable();
             if (isHealth)
