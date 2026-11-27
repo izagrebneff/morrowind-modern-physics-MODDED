@@ -2174,6 +2174,12 @@ namespace MWRender
         if (mTransparencyUpdater)
             mObjectRoot->addCullCallback(mTransparencyUpdater);
 
+        for (const auto& ice : mCorpseIce)
+            while (ice->getNumParents() > 0)
+                ice->getParent(0)->removeChild(ice);
+        mCorpseIce.clear();
+        if (!mPtr.isEmpty() && mPtr.getClass().isNpc())
+            restoreCorpseIce();
         // A new body: the projectiles stuck in it go back in.
         if (!mPtr.isEmpty() && mPtr.getClass().isActor())
             MWMechanics::restoreStuckProjectiles(mPtr, *this);
@@ -2259,7 +2265,8 @@ namespace MWRender
 
     void Animation::restoreCorpseIce()
     {
-        if (!mObjectRoot || !mCorpseIce.empty() || !mPtr.getClass().isNpc())
+        if (!mObjectRoot || !mCorpseIce.empty() || !mPtr.getClass().isNpc()
+            || !mPtr.getClass().getCreatureStats(mPtr).hasCorpseIce())
             return;
         const auto& nodes = getNodeMap();
         const char* bones[] = {"bip01 spine1", "bip01 pelvis", "bip01 l upperarm",
@@ -2381,6 +2388,9 @@ namespace MWRender
                     osg::ref_ptr<osg::Geode> geode = new osg::Geode;
                     osg::ref_ptr<osg::Geometry> quad = osg::createTexturedQuadGeometry(
                         osg::Vec3(-0.5f, -0.5f, 0), osg::Vec3(1, 0, 0), osg::Vec3(0, 1, 0));
+                    osg::ref_ptr<osg::Vec4Array> colors = new osg::Vec4Array;
+                    colors->push_back(osg::Vec4(1, 1, 1, 1));
+                    quad->setColorArray(colors, osg::Array::BIND_OVERALL);
                     quad->setUseDisplayList(false);
                     quad->setDataVariance(osg::Object::DYNAMIC);
                     geode->addDrawable(quad);
@@ -2425,6 +2435,11 @@ namespace MWRender
             sprite->setPosition(osg::Vec3(std::sin(particle.mPhase * 19.f + phase * 4.f) * 7.f,
                 std::cos(particle.mPhase * 11.f) * 5.f, phase * (particle.mKind == 0 ? 18.f : 35.f)));
             sprite->setScale(osg::Vec3(size, size * (particle.mKind == 0 ? 1.7f : 1.f), size));
+            auto* geode = static_cast<osg::Geode*>(sprite->getChild(0));
+            auto* quad = static_cast<osg::Geometry*>(geode->getDrawable(0));
+            auto* colors = static_cast<osg::Vec4Array*>(quad->getColorArray());
+            (*colors)[0].a() = fade * envelope;
+            colors->dirty();
         }
         if (mDeathSpellLight)
         {

@@ -689,6 +689,10 @@ namespace MWClass
             = sourceType == MWMechanics::DamageSourceType::Melee && !attacker.isEmpty()
             ? stats.consumeMeleeSwingSide(attacker.getCellRef().getRefNum()) : 0.f;
         bool wasDead = stats.isDead();
+        ESM::RefId strikeElement;
+        if ((sourceType == MWMechanics::DamageSourceType::Melee || sourceType == MWMechanics::DamageSourceType::Ranged)
+            && !attacker.isEmpty())
+            strikeElement = stats.consumeStrikeElement(object, attacker.getCellRef().getRefNum());
 
         bool setOnPcHitMe = true;
 
@@ -792,6 +796,13 @@ namespace MWClass
 
         if (!wasDead && getCreatureStats(ptr).isDead())
         {
+            if (!strikeElement.empty() && ptr != MWMechanics::getPlayer())
+            {
+                if (strikeElement == ESM::MagicEffect::FrostDamage)
+                    stats.setCorpseIce(true);
+                if (auto* animation = MWBase::Environment::get().getWorld()->getAnimation(ptr))
+                    animation->startDeathSpellEffect(strikeElement);
+            }
             // The killing blow throws the body (its ragdoll) away from the attacker, harder for heavier blows,
             // within reason.
             if (!attacker.isEmpty() && hasHealthDamage)

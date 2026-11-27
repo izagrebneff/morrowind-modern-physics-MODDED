@@ -98,7 +98,24 @@ namespace MWMechanics
             {
                 MWMechanics::CastSpell cast(attacker, victim, fromProjectile);
                 cast.mHitPosition = hitPosition;
-                cast.cast(object, false);
+                const bool castSucceeded = cast.cast(object, false);
+                if (!victim.isEmpty() && victim.getClass().isNpc() && !attacker.isEmpty())
+                {
+                    ESM::RefId element;
+                    if (castSucceeded)
+                        for (const auto& entry : enchantment->mEffects.mList)
+                        {
+                            const auto& id = entry.mData.mEffectID;
+                            if (id == ESM::MagicEffect::FireDamage || id == ESM::MagicEffect::FrostDamage
+                                || id == ESM::MagicEffect::ShockDamage || id == ESM::MagicEffect::Poison)
+                            {
+                                element = id;
+                                break;
+                            }
+                        }
+                    victim.getClass().getCreatureStats(victim).setStrikeElement(
+                        element, object.getCellRef().getRefId(), attacker.getCellRef().getRefNum());
+                }
                 // Apply magic effects directly instead of waiting a frame to allow soul trap to work on one-hit kills
                 if (!victim.isEmpty() && victim.getClass().isActor())
                     MWBase::Environment::get().getMechanicsManager()->updateMagicEffects(victim);
