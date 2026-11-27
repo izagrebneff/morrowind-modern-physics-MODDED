@@ -253,6 +253,15 @@ namespace MWRender
         float mDeathSpellRemaining = 0.f;
         float mDeathSpellDuration = 0.f;
         bool mDeathSpellFlicker = false;
+        struct CorpseParticle
+        {
+            osg::ref_ptr<osg::Node> mNode;
+            float mPhase;
+            int mKind;
+        };
+        std::vector<CorpseParticle> mCorpseParticles;
+        std::vector<osg::ref_ptr<osg::Node>> mCorpseIce;
+        void clearCorpseParticles();
         osg::ref_ptr<SceneUtil::GlowUpdater> mGlowUpdater;
         osg::ref_ptr<TransparencyUpdater> mTransparencyUpdater;
         osg::ref_ptr<SceneUtil::LightSource> mExtraLightSource;
@@ -384,6 +393,8 @@ namespace MWRender
         void startDeathSpellEffect(const ESM::MagicEffect& effect, std::string_view model, float duration);
         void updateDeathSpellEffect(float dt);
         void clearDeathSpellEffect();
+        void startDeathSpellEffect(const ESM::RefId& id);
+        void restoreCorpseIce();
         std::vector<std::string_view> getLoopingEffects() const;
 
         // Add a spell casting glow to an object. From measuring video taken from the original engine,

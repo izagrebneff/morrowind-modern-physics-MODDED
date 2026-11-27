@@ -7,7 +7,17 @@
 #include <tuple>
 #include <memory>
 
+#include <cmath>
+#include <osg/AutoTransform>
 #include <osg/BlendFunc>
+#include <osg/Depth>
+#include <osg/Geode>
+#include <osg/Geometry>
+#include <osg/Image>
+#include <osg/Texture2D>
+#include <osg/ShapeDrawable>
+#include <components/esm3/loadstat.hpp>
+#include "../mwmechanics/creaturestats.hpp"
 #include <osg/ComputeBoundsVisitor>
 #include <osg/Matrix>
 #include <osg/MatrixTransform>
@@ -2201,8 +2211,104 @@ namespace MWRender
         }
     }
 
+    namespace
+    {
+        void detachCorpseNode(osg::Node* node)
+        {
+            if (node)
+                while (node->getNumParents() > 0)
+                    node->getParent(0)->removeChild(node);
+        }
+
+        osg::ref_ptr<osg::Texture2D> corpseParticleTexture(int kind)
+        {
+            constexpr int size = 64;
+            osg::ref_ptr<osg::Image> image = new osg::Image;
+            image->allocateImage(size, size, 1, GL_RGBA, GL_UNSIGNED_BYTE);
+            for (int y = 0; y < size; ++y)
+                for (int x = 0; x < size; ++x)
+                {
+                    const float u = (x + 0.5f) / size * 2.f - 1.f;
+                    const float v = (y + 0.5f) / size * 2.f - 1.f;
+                    const float noise = 0.86f + 0.14f * std::sin(u * 17.f + v * 13.f)
+                        * std::cos(v * 21.f - u * 9.f);
+                    const float width = kind == 0 ? 0.85f - 0.55f * (v + 1.f) / 2.f : 1.f;
+                    const float r = u * u / (width * width) + v * v;
+                    const float a = std::clamp((1.f - r) * 1.5f, 0.f, 1.f) * noise;
+                    auto* pixel = image->data(x, y);
+                    pixel[0] = kind == 0 ? 255 : (kind == 1 ? 25 : 235);
+                    pixel[1] = kind == 0 ? static_cast<unsigned char>(90 + 150 * (1.f - std::abs(u))) : pixel[0];
+                    pixel[2] = kind == 0 ? 28 : pixel[0];
+                    pixel[3] = static_cast<unsigned char>(a * 255.f);
+                }
+            osg::ref_ptr<osg::Texture2D> texture = new osg::Texture2D(image);
+            texture->setFilter(osg::Texture::MIN_FILTER, osg::Texture::LINEAR);
+            texture->setFilter(osg::Texture::MAG_FILTER, osg::Texture::LINEAR);
+            texture->setWrap(osg::Texture::WRAP_S, osg::Texture::CLAMP_TO_EDGE);
+            texture->setWrap(osg::Texture::WRAP_T, osg::Texture::CLAMP_TO_EDGE);
+            return texture;
+        }
+    }
+
+    void Animation::clearCorpseParticles()
+    {
+        for (const auto& particle : mCorpseParticles)
+            detachCorpseNode(particle.mNode.get());
+        mCorpseParticles.clear();
+    }
+
+    void Animation::restoreCorpseIce()
+    {
+        if (!mObjectRoot || !mCorpseIce.empty() || !mPtr.getClass().isNpc())
+            return;
+        const auto& nodes = getNodeMap();
+        const char* bones[] = {"bip01 spine1", "bip01 pelvis", "bip01 l upperarm",
+            "bip01 r upperarm", "bip01 l thigh", "bip01 r thigh", "bip01 head"};
+        for (const char* bone : bones)
+        {
+            auto found = nodes.find(bone);
+            if (found == nodes.end())
+                continue;
+            for (int i = 0; i < 3; ++i)
+            {
+                osg::ref_ptr<osg::Geode> geode = new osg::Geode;
+                osg::ref_ptr<osg::Cone> cone = new osg::Cone(osg::Vec3(0, 0, 0), 2.8f + i, 12.f + i * 4.f);
+                cone->setRotation(osg::Quat(0.9f + i, osg::Vec3(0, 1, 0)));
+                osg::ref_ptr<osg::ShapeDrawable> shard = new osg::ShapeDrawable(cone);
+                shard->setColor(osg::Vec4(0.55f + i * 0.1f, 0.82f, 0.98f, 1.f));
+                geode->addDrawable(shard);
+                osg::ref_ptr<osg::MatrixTransform> anchor = new osg::MatrixTransform;
+                anchor->setMatrix(osg::Matrix::translate((i - 1) * 8.f, -5.f + i * 4.f, 3.f));
+                anchor->addChild(geode);
+                found->second->addChild(anchor);
+                mCorpseIce.push_back(anchor);
+            }
+        }
+    }
+
+    void Animation::startDeathSpellEffect(const ESM::RefId& id)
+    {
+        const auto& store = MWBase::Environment::get().getWorld()->getStore();
+        const auto* effect = store.get<ESM::MagicEffect>().search(id);
+        if (!effect)
+            return;
+        const auto* vfx = store.get<ESM::Static>().search(effect->mHit.empty()
+            ? ESM::RefId::stringRefId("VFX_DefaultHit") : effect->mHit);
+        const auto model = vfx ? Misc::ResourceHelpers::correctMeshPath(vfx->mModel.getNormalized())
+                               : VFS::Path::Normalized{};
+        const float duration = id == ESM::MagicEffect::FireDamage ? 12.f
+            : id == ESM::MagicEffect::FrostDamage ? 15.f
+            : id == ESM::MagicEffect::ShockDamage ? 8.f
+            : id == ESM::MagicEffect::Poison ? 10.f : 5.f;
+        startDeathSpellEffect(*effect, model.value(), duration);
+    }
+
     void Animation::clearDeathSpellEffect()
     {
+        clearCorpseParticles();
+        for (const auto& ice : mCorpseIce)
+            detachCorpseNode(ice.get());
+        mCorpseIce.clear();
         if (mDeathSpellRemaining > 0.f || mDeathSpellLight)
             removeEffect("corpse_death_vfx");
         if (mDeathSpellLight)
@@ -2231,7 +2337,10 @@ namespace MWRender
         if (effect.mId == ESM::MagicEffect::Poison) color.set(0.2f, 0.8f, 0.15f, 1.f);
         if (effect.mId == ESM::MagicEffect::AbsorbHealth) color.set(0.9f, 0.12f, 0.15f, 1.f);
         if (frost)
+        {
+            restoreCorpseIce();
             addSpellCastGlow(color, duration);
+        }
         osg::Group* parent = mInsert.get();
         std::string_view bone;
         const auto& nodes = getNodeMap();
@@ -2252,8 +2361,44 @@ namespace MWRender
         mDeathSpellLight->setLight(light);
         mDeathSpellLight->setRadius(radius * 3.f);
         parent->addChild(mDeathSpellLight);
-        if (!model.empty())
+        if (!model.empty() && !fire && !frost && effect.mId != ESM::MagicEffect::Poison)
             addEffect(model, "corpse_death_vfx", true, bone, effect.mParticle.getOriginal());
+        if (fire || shock || effect.mId == ESM::MagicEffect::Poison)
+        {
+            const int kind = fire ? 0 : shock ? 1 : 2;
+            auto texture = corpseParticleTexture(kind);
+            const char* bones[] = {"bip01 spine1", "bip01 pelvis", "bip01 l upperarm",
+                "bip01 r upperarm", "bip01 l thigh", "bip01 r thigh", "bip01 head"};
+            for (const char* name : bones)
+            {
+                const auto found = nodes.find(name);
+                if (found == nodes.end())
+                    continue;
+                for (int i = 0; i < 4; ++i)
+                {
+                    osg::ref_ptr<osg::AutoTransform> sprite = new osg::AutoTransform;
+                    sprite->setAutoRotateMode(osg::AutoTransform::ROTATE_TO_SCREEN);
+                    osg::ref_ptr<osg::Geode> geode = new osg::Geode;
+                    osg::ref_ptr<osg::Geometry> quad = osg::createTexturedQuadGeometry(
+                        osg::Vec3(-0.5f, -0.5f, 0), osg::Vec3(1, 0, 0), osg::Vec3(0, 1, 0));
+                    quad->setUseDisplayList(false);
+                    quad->setDataVariance(osg::Object::DYNAMIC);
+                    geode->addDrawable(quad);
+                    auto* state = geode->getOrCreateStateSet();
+                    state->setTextureAttributeAndModes(0, texture, osg::StateAttribute::ON);
+                    state->setMode(GL_LIGHTING, osg::StateAttribute::OFF);
+                    state->setMode(GL_BLEND, osg::StateAttribute::ON);
+                    state->setAttributeAndModes(new osg::BlendFunc(GL_SRC_ALPHA,
+                        kind == 0 ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA), osg::StateAttribute::ON);
+                    state->setAttributeAndModes(new osg::Depth(osg::Depth::LEQUAL, 0, 1, false));
+                    state->setRenderingHint(osg::StateSet::TRANSPARENT_BIN);
+                    sprite->setNodeMask(Mask_Effect);
+                    sprite->addChild(geode);
+                    found->second->addChild(sprite);
+                    mCorpseParticles.push_back({sprite, i * 0.25f + 0.13f * mCorpseParticles.size(), kind});
+                }
+            }
+        }
     }
 
     void Animation::updateDeathSpellEffect(float dt)
@@ -2263,12 +2408,26 @@ namespace MWRender
         mDeathSpellRemaining -= std::max(0.f, dt);
         if (mDeathSpellRemaining <= 0.f)
         {
-            clearDeathSpellEffect();
+            removeEffect("corpse_death_vfx");
+            clearCorpseParticles();
+            detachCorpseNode(mDeathSpellLight.get());
+            mDeathSpellLight = nullptr;
             return;
+        }
+        const float fade = std::clamp(mDeathSpellRemaining / (mDeathSpellDuration * 0.65f), 0.f, 1.f);
+        const float elapsed = mDeathSpellDuration - mDeathSpellRemaining;
+        for (const auto& particle : mCorpseParticles)
+        {
+            auto* sprite = static_cast<osg::AutoTransform*>(particle.mNode.get());
+            const float phase = std::fmod(elapsed * (particle.mKind == 0 ? 1.8f : 0.75f) + particle.mPhase, 1.f);
+            const float envelope = std::sin(phase * 3.14159265f);
+            const float size = (particle.mKind == 0 ? 22.f : 32.f) * (0.5f + phase) * fade * envelope;
+            sprite->setPosition(osg::Vec3(std::sin(particle.mPhase * 19.f + phase * 4.f) * 7.f,
+                std::cos(particle.mPhase * 11.f) * 5.f, phase * (particle.mKind == 0 ? 18.f : 35.f)));
+            sprite->setScale(osg::Vec3(size, size * (particle.mKind == 0 ? 1.7f : 1.f), size));
         }
         if (mDeathSpellLight)
         {
-            const float fade = std::min(1.f, mDeathSpellRemaining / (mDeathSpellDuration * 0.4f));
             const float flicker = mDeathSpellFlicker ? 0.85f + 0.15f * std::sin(mDeathSpellRemaining * 37.f) : 1.f;
             mDeathSpellLight->setActorFade(fade * flicker * mActorFade);
         }
