@@ -659,7 +659,7 @@ namespace MWPhysics
         // Keep their collision shapes so actors and loose items still collide with
         // buildings, furniture, rocks, etc. Even an accidental dynamic-body request
         // must not let an explosion, collision or script impulse move a static.
-        if (ptr.getType() == ESM::Static::sRecordId)
+        if (ptr.getType() == ESM::Static::sRecordId || ptr.getCellRef().hasContentFile())
         {
             addObject(ptr, mesh, rotation, CollisionType_World);
             return;
@@ -953,6 +953,8 @@ namespace MWPhysics
 
     bool PhysicsSystem::applyBrutalObjectImpulse(const MWWorld::Ptr& ptr, const osg::Vec3f& impulse)
     {
+        if (ptr.isEmpty() || ptr.getType() == ESM::Static::sRecordId || ptr.getCellRef().hasContentFile())
+            return false;
         if (!std::isfinite(impulse.x()) || !std::isfinite(impulse.y()) || !std::isfinite(impulse.z()))
             return false;
         const auto found = mObjects.find(ptr.mRef);
@@ -1135,6 +1137,8 @@ namespace MWPhysics
     bool PhysicsSystem::strikeObject(const MWWorld::Ptr& ptr, const osg::Vec3f& velocityChange,
         const osg::Vec3f& point, const osg::Vec3f& source)
     {
+        if (ptr.isEmpty() || ptr.getType() == ESM::Static::sRecordId || ptr.getCellRef().hasContentFile())
+            return false;
         const auto found = mObjects.find(ptr.mRef);
         if (found == mObjects.end() || !found->second->isDynamic())
             return false;
@@ -1149,6 +1153,8 @@ namespace MWPhysics
         std::vector<DynamicObjectInfo> result;
         for (const std::shared_ptr<Object>& object : mDynamicObjects)
         {
+            if (object->getPtr().getType() == ESM::Static::sRecordId || object->getPtr().getCellRef().hasContentFile())
+                continue;
             const osg::Vec3f position = Misc::Convert::toOsg(object->getCenterOfMassTransform().getOrigin());
             if ((position - center).length2() > radius * radius)
                 continue;
@@ -1170,6 +1176,8 @@ namespace MWPhysics
         std::vector<PhysicsTaskScheduler::Strike> strikes;
         for (const std::shared_ptr<Object>& object : mDynamicObjects)
         {
+            if (object->getPtr().getType() == ESM::Static::sRecordId || object->getPtr().getCellRef().hasContentFile())
+                continue;
             const osg::Vec3f position = Misc::Convert::toOsg(object->getCenterOfMassTransform().getOrigin());
             osg::Vec3f away = position - center;
             const float distance = away.normalize();
