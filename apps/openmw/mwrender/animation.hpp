@@ -11,6 +11,7 @@
 
 #include <components/misc/strings/algorithm.hpp>
 #include <components/sceneutil/animblendrules.hpp>
+#include <components/sceneutil/surfacedecals.hpp>
 #include <components/sceneutil/controller.hpp>
 #include <components/sceneutil/nodecallback.hpp>
 #include <components/sceneutil/textkeymap.hpp>
@@ -226,6 +227,14 @@ namespace MWRender
 
         // Stuck projectiles: the bone each is attached to, and its node.
         std::deque<std::pair<osg::observer_ptr<osg::Group>, osg::ref_ptr<osg::Node>>> mStuckProjectiles;
+
+        struct MeleeBloodPatch
+        {
+            osg::observer_ptr<SceneUtil::SurfaceDecals> decals;
+            SceneUtil::SurfaceDecals::PatchId id;
+            std::size_t vertices;
+        };
+        std::deque<MeleeBloodPatch> mMeleeBloodPatches;
 
         MWWorld::Ptr mPtr;
 
@@ -482,6 +491,8 @@ namespace MWRender
         /// For ragdolls: where a bone is (world matrix), and putting it somewhere. Only bones no animation drives
         /// stay where they're put (see stopAllAnimations).
         std::optional<osg::Matrixf> getBoneWorldMatrix(std::string_view bone) const;
+        bool projectMeleeBlood(const osg::Vec3f& position, const osg::Vec3f& outward,
+            std::string_view kind, bool power, osg::StateSet* state);
         void setBoneWorldMatrix(std::string_view bone, const osg::Matrixf& world);
         /// Stop every animation, leaving the bones as they are.
         void stopAllAnimations();

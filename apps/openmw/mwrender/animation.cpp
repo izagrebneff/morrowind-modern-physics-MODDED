@@ -1,4 +1,9 @@
 #include "animation.hpp"
+#include "npcanimation.hpp"
+#include <components/sceneutil/decalprojector.hpp>
+#include <components/sceneutil/morphgeometry.hpp>
+#include <osg/TriangleIndexFunctor>
+#include <osgUtil/CullVisitor>
 
 #include <algorithm>
 #include <set>
@@ -1427,6 +1432,262 @@ namespace MWRender
                 sphere.radius() });
         }
         return result;
+    }
+
+
+    namespace
+    {
+        class BloodMarkedGeometry final : public osg::Geometry
+        {
+        public:
+            BloodMarkedGeometry() = default;
+            explicit BloodMarkedGeometry(const osg::Geometry& source)
+                : osg::Geometry(source, osg::CopyOp::SHALLOW_COPY)
+            {
+            }
+            BloodMarkedGeometry(const BloodMarkedGeometry& source, const osg::CopyOp& op)
+                : osg::Geometry(source, op)
+            {
+            }
+            META_Object(MWRender, BloodMarkedGeometry)
+            osg::ref_ptr<SceneUtil::SurfaceDecals> decals;
+            void accept(osg::NodeVisitor& visitor) override
+            {
+                if (!visitor.validNodeMask(*this))
+                    return;
+                osg::Geometry::accept(visitor);
+                if (decals)
+                    if (auto* cull = dynamic_cast<osgUtil::CullVisitor*>(&visitor))
+                    {
+                        visitor.pushOntoNodePath(this);
+                        decals->cull(*this, *cull);
+                        visitor.popFromNodePath();
+                    }
+            }
+        };
+
+        struct Triangles
+        {
+            std::vector<SceneUtil::DecalProjector::Triangle> triangles;
+            void operator()(unsigned a, unsigned b, unsigned c) { triangles.push_back({ a, b, c }); }
+        };
+        struct Surface
+        {
+            int part = 0;
+            unsigned ordinal = 0;
+            std::string model;
+            osg::ref_ptr<osg::Drawable> drawable;
+            osg::ref_ptr<osg::Geometry> source;
+            osg::NodePath path;
+            std::vector<SceneUtil::DecalProjector::Triangle> triangles;
+            std::uint64_t fingerprint = 0;
+
+            SceneUtil::SurfaceDecals* attach()
+            {
+                if (auto* rig = dynamic_cast<SceneUtil::RigGeometry*>(drawable.get()))
+                    return rig->getOrCreateSurfaceDecals();
+                if (auto* morph = dynamic_cast<SceneUtil::MorphGeometry*>(drawable.get()))
+                    return morph->getOrCreateSurfaceDecals();
+                if (auto* plain = dynamic_cast<BloodMarkedGeometry*>(drawable.get()))
+                {
+                    if (!plain->decals)
+                        plain->decals = new SceneUtil::SurfaceDecals;
+                    return plain->decals;
+                }
+                if (path.size() < 2 || !path[path.size() - 2]->asGroup())
+                    return nullptr;
+                auto* plain = drawable->asGeometry();
+                if (!plain)
+                    return nullptr;
+                osg::ref_ptr<BloodMarkedGeometry> replacement = new BloodMarkedGeometry(*plain);
+                replacement->decals = new SceneUtil::SurfaceDecals;
+                auto* parent = path[path.size() - 2]->asGroup();
+                if (!parent->replaceChild(drawable, replacement))
+                    return nullptr;
+                drawable = replacement;
+                source = replacement;
+                path.back() = replacement;
+                return replacement->decals;
+            }
+        };
+
+        osg::ref_ptr<osg::Geometry> posed(
+            const Surface& s, const std::function<std::optional<osg::Matrixf>(std::string_view)>& bones)
+        {
+            if (auto* rig = dynamic_cast<SceneUtil::RigGeometry*>(s.drawable.get()))
+                return rig->snapshotWorldGeometry(s.path, bones, true);
+            const auto* source = dynamic_cast<const osg::Vec3Array*>(s.source->getVertexArray());
+            if (!source)
+                return {};
+            osg::ref_ptr<osg::Geometry> result = new osg::Geometry;
+            osg::ref_ptr<osg::Vec3Array> vertices = new osg::Vec3Array(*source);
+            if (auto* morph = dynamic_cast<SceneUtil::MorphGeometry*>(s.drawable.get()))
+            {
+                const auto& targets = morph->getMorphTargetList();
+                if (!targets.empty())
+                {
+                    if (targets[0].getOffsets()->size() != vertices->size())
+                        return {};
+                    *vertices = *targets[0].getOffsets();
+                    for (std::size_t i = 1; i < targets.size(); ++i)
+                    {
+                        if (targets[i].getOffsets()->size() != vertices->size())
+                            return {};
+                        for (std::size_t j = 0; j < vertices->size(); ++j)
+                            (*vertices)[j] += (*targets[i].getOffsets())[j] * targets[i].getWeight();
+                    }
+                }
+            }
+            const auto matrix = osg::computeLocalToWorld(s.path);
+            for (auto& p : *vertices)
+                p = p * matrix;
+            result->setVertexArray(vertices);
+            return result;
+        }
+
+        struct SurfacesVisitor final : osg::NodeVisitor
+        {
+            std::vector<Surface>& out;
+            int part;
+            std::string model;
+            unsigned ordinal = 0;
+            SurfacesVisitor(std::vector<Surface>& output, int p, std::string m)
+                : osg::NodeVisitor(TRAVERSE_ALL_CHILDREN)
+                , out(output)
+                , part(p)
+                , model(std::move(m))
+            {
+            }
+            void collect(osg::Node* root)
+            {
+                const auto paths = root->getParentalNodePaths();
+                if (paths.empty()) return;
+                const auto& prefix = paths.front();
+                for (std::size_t i = 0; i + 1 < prefix.size(); ++i)
+                    pushOntoNodePath(prefix[i]);
+                root->accept(*this);
+                for (std::size_t i = 0; i + 1 < prefix.size(); ++i)
+                    popFromNodePath();
+            }
+            void apply(osg::Drawable& drawable) override
+            {
+                Surface s;
+                s.part = part;
+                s.model = model;
+                s.ordinal = ordinal++;
+                s.drawable = &drawable;
+                s.path = getNodePath();
+                if (auto* rig = dynamic_cast<SceneUtil::RigGeometry*>(&drawable))
+                    s.source = rig->getSourceGeometry();
+                else if (auto* morph = dynamic_cast<SceneUtil::MorphGeometry*>(&drawable))
+                    s.source = morph->getSourceGeometry();
+                else if (typeid(drawable) == typeid(osg::Geometry) || dynamic_cast<BloodMarkedGeometry*>(&drawable))
+                    s.source = drawable.asGeometry();
+                if (!s.source)
+                    return;
+                const auto* vertices = dynamic_cast<const osg::Vec3Array*>(s.source->getVertexArray());
+                if (!vertices || vertices->empty() || vertices->size() > 65535)
+                    return;
+                osg::TriangleIndexFunctor<Triangles> functor;
+                s.source->accept(functor);
+                s.triangles = std::move(functor.triangles);
+                std::uint64_t hash = 14695981039346656037ull;
+                const auto bytes = [&](const void* data, std::size_t size) {
+                    auto* p = static_cast<const unsigned char*>(data);
+                    while (size--)
+                    {
+                        hash ^= *p++;
+                        hash *= 1099511628211ull;
+                    }
+                };
+                for (const auto& p : *vertices)
+                    for (unsigned i = 0; i < 3; ++i)
+                    {
+                        const float value = p[i];
+                        bytes(&value, sizeof(value));
+                    }
+                for (const auto& t : s.triangles)
+                    for (auto i : t)
+                        bytes(&i, sizeof(i));
+                s.fingerprint = hash;
+                out.push_back(std::move(s));
+            }
+        };
+
+
+    }
+
+    bool Animation::projectMeleeBlood(const osg::Vec3f& position, const osg::Vec3f& outward,
+        std::string_view kind, bool power, osg::StateSet* state)
+    {
+        if (!mObjectRoot || !state)
+            return false;
+        try
+        {
+            std::vector<Surface> surfaces;
+            if (const auto* npc = dynamic_cast<const NpcAnimation*>(this))
+            {
+                for (int part = 0; part < ESM::PRT_Count; ++part)
+                {
+                    if (part == ESM::PRT_Weapon || part == ESM::PRT_Shield || part == ESM::PRT_Hair)
+                        continue;
+                    if (const auto* holder = npc->getPart(static_cast<ESM::PartReferenceType>(part)))
+                    {
+                        SurfacesVisitor visitor(surfaces, part, {});
+                        visitor.collect(holder->getNode().get());
+                    }
+                }
+            }
+            else
+            {
+                SurfacesVisitor visitor(surfaces, 0, {});
+                visitor.collect(mObjectRoot.get());
+            }
+            const auto bones = [this](std::string_view name) { return getBoneWorldMatrix(name); };
+            SceneUtil::DecalProjector::Result best;
+            Surface* selected = nullptr;
+            auto tangent = osg::Vec3d(0, 0, 1) ^ osg::Vec3d(outward);
+            if (kind == "chop")
+                tangent = osg::Vec3d(0, 0, 1);
+            const double size = (kind == "slash" || kind == "chop" ? 15. : 24.) * (power ? 1.35 : 1.);
+            for (auto& surface : surfaces)
+            {
+                const auto geometry = posed(surface, bones);
+                if (!geometry) continue;
+                const auto* vertices = dynamic_cast<const osg::Vec3Array*>(geometry->getVertexArray());
+                if (!vertices) continue;
+                std::vector<osg::Vec3d> world(vertices->begin(), vertices->end());
+                auto projection = SceneUtil::DecalProjector::project(world, surface.triangles,
+                    osg::Vec3d(position), osg::Vec3d(outward), tangent, size, size);
+                if (!projection.vertices.empty() && projection.distance < best.distance)
+                {
+                    best = std::move(projection);
+                    selected = &surface;
+                }
+            }
+            if (!selected) return false;
+            auto* decals = selected->attach();
+            if (!decals) return false;
+            const auto id = decals->addPatch(best.vertices, state, Mask_Effect);
+            if (!id) return false;
+            mMeleeBloodPatches.push_back({decals, id, best.vertices.size()});
+            std::size_t total = 0;
+            for (const auto& patch : mMeleeBloodPatches) total += patch.vertices;
+            while (mMeleeBloodPatches.size() > 24 || total > 8192)
+            {
+                const auto& patch = mMeleeBloodPatches.front();
+                if (osg::ref_ptr<SceneUtil::SurfaceDecals> marks; patch.decals.lock(marks))
+                    marks->removePatch(patch.id);
+                total -= patch.vertices;
+                mMeleeBloodPatches.pop_front();
+            }
+            return true;
+        }
+        catch (const std::exception& error)
+        {
+            Log(Debug::Warning) << "Melee blood projection rejected: " << error.what();
+            return false;
+        }
     }
 
     std::optional<Animation::StuckProjectilePlacement> Animation::findStuckProjectilePlacement(
