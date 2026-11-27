@@ -2,6 +2,7 @@
 #define OPENMW_COMPONENTS_NIFOSG_RIGGEOMETRY_H
 
 #include <osg/Geometry>
+#include "surfacedecals.hpp"
 #include <osg/Matrixf>
 
 #include <string_view>
@@ -64,6 +65,10 @@ namespace SceneUtil
 
         osg::ref_ptr<osg::Geometry> getSourceGeometry() const;
 
+        SurfaceDecals* getOrCreateSurfaceDecals();
+        const SurfaceDecals* getSurfaceDecals() const { return mSurfaceDecals.get(); }
+        SurfaceDecals* getSurfaceDecals() { return mSurfaceDecals.get(); }
+
         void accept(osg::NodeVisitor& nv) override;
         bool supports(const osg::PrimitiveFunctor&) const override { return true; }
         void accept(osg::PrimitiveFunctor&) const override;
@@ -90,6 +95,8 @@ namespace SceneUtil
         osg::Geometry* getGeometry(unsigned int frame) const;
 
         osg::ref_ptr<osg::Geometry> mSourceGeometry;
+        // Instance-owned: clones never inherit another actor's wounds.
+        osg::ref_ptr<SurfaceDecals> mSurfaceDecals;
         osg::ref_ptr<const osg::Vec4Array> mSourceTangents;
         Skeleton* mSkeleton{ nullptr };
 

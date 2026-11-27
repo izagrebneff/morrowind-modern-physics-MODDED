@@ -29,6 +29,8 @@ namespace SceneUtil
 
     void RigGeometry::setSourceGeometry(osg::ref_ptr<osg::Geometry> sourceGeometry)
     {
+        if (mSurfaceDecals && mSourceGeometry != sourceGeometry)
+            mSurfaceDecals->clear();
         for (unsigned int i = 0; i < 2; ++i)
             mGeometry[i] = nullptr;
 
@@ -96,6 +98,13 @@ namespace SceneUtil
         return mSourceGeometry;
     }
 
+    SurfaceDecals* RigGeometry::getOrCreateSurfaceDecals()
+    {
+        if (!mSurfaceDecals)
+            mSurfaceDecals = new SurfaceDecals;
+        return mSurfaceDecals.get();
+    }
+
     bool RigGeometry::initFromParentSkeleton(osg::NodeVisitor* nv)
     {
         const osg::NodePath& path = nv->getNodePath();
@@ -152,6 +161,8 @@ namespace SceneUtil
             nv->pushOntoNodePath(&geom);
             nv->apply(geom);
             nv->popFromNodePath();
+            if (mSurfaceDecals)
+                mSurfaceDecals->cull(geom, *static_cast<osgUtil::CullVisitor*>(nv));
             return;
         }
         mLastFrameNumber = traversalNumber;
@@ -229,6 +240,8 @@ namespace SceneUtil
         nv->pushOntoNodePath(&geom);
         nv->apply(geom);
         nv->popFromNodePath();
+        if (mSurfaceDecals)
+            mSurfaceDecals->cull(geom, *static_cast<osgUtil::CullVisitor*>(nv));
     }
 
     void RigGeometry::updateBounds(osg::NodeVisitor* nv)
