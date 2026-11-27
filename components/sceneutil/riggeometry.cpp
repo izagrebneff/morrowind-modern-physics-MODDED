@@ -33,6 +33,7 @@ namespace SceneUtil
     {
         if (mSurfaceDecals && mSourceGeometry != sourceGeometry)
             mSurfaceDecals->clear();
+        for (auto& pose : mBloodSkinPoses) pose.reset();
         for (unsigned int i = 0; i < 2; ++i)
             mGeometry[i] = nullptr;
 
@@ -299,6 +300,27 @@ namespace SceneUtil
             transform = (*mSkinToSkelMatrix) * mData->mTransform;
         else
             transform = mData->mTransform;
+
+        auto& previousBloodPose = mBloodSkinPoses[traversalNumber % 2];
+        if (mSurfaceDecals && mSurfaceDecals->patchCount())
+        {
+            const unsigned int sourceVersion = positionSrc->getModifiedCount();
+            const unsigned int normalVersion = normalSrc ? normalSrc->getModifiedCount() : 0;
+            const unsigned int tangentVersion = tangentSrc ? tangentSrc->getModifiedCount() : 0;
+            if (previousBloodPose && previousBloodPose->bones == boneMatrices
+                && previousBloodPose->transform == transform && previousBloodPose->sourceVersion == sourceVersion
+                && previousBloodPose->normalVersion == normalVersion && previousBloodPose->tangentVersion == tangentVersion)
+            {
+                nv->pushOntoNodePath(&geom);
+                nv->apply(geom);
+                nv->popFromNodePath();
+                mSurfaceDecals->cull(geom, *static_cast<osgUtil::CullVisitor*>(nv));
+                return;
+            }
+            previousBloodPose = BloodSkinPose{boneMatrices, transform, sourceVersion, normalVersion, tangentVersion};
+        }
+        else
+            previousBloodPose.reset();
 
         for (const auto& [influences, vertices] : mData->mInfluences)
         {

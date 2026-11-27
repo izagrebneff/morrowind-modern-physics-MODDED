@@ -105,6 +105,15 @@ namespace SceneUtil
         osg::ref_ptr<osg::Geometry> mSourceGeometry;
         // Instance-owned: clones never inherit another actor's wounds.
         osg::ref_ptr<SurfaceDecals> mSurfaceDecals;
+        struct BloodSkinPose
+        {
+            std::vector<osg::Matrixf> bones;
+            osg::Matrixf transform;
+            unsigned int sourceVersion = 0;
+            unsigned int normalVersion = 0;
+            unsigned int tangentVersion = 0;
+        };
+        std::optional<BloodSkinPose> mBloodSkinPoses[2];
         osg::ref_ptr<const osg::Vec4Array> mSourceTangents;
         Skeleton* mSkeleton{ nullptr };
 

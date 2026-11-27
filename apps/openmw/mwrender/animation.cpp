@@ -1722,6 +1722,10 @@ namespace MWRender
     void Animation::restoreMeleeBlood()
     {
         mMeleeBloodRestored = true;
+        for (const auto& patch : mMeleeBloodPatches)
+            if (osg::ref_ptr<SceneUtil::SurfaceDecals> marks; patch.decals.lock(marks))
+                marks->removePatch(patch.id);
+        mMeleeBloodPatches.clear();
         if (mPtr.isEmpty() || !mPtr.getClass().isActor()) return;
         const auto& records = mPtr.getRefData().mMeleeBloodRecords;
         if (records.empty()) return;
