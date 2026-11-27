@@ -3036,7 +3036,7 @@ namespace MWMechanics
 
         for (std::string_view effectStr : effects)
         {
-            if (effectStr == "corpse_death_vfx")
+            if (effectStr == "corpse_death_vfx" || effectStr == "corpse_death_shock")
                 continue;
             auto effectId = ESM::RefId::deserializeText(effectStr);
 
