@@ -68,6 +68,10 @@ namespace MWMechanics
         bool mHitRecovery = false;
         bool mBlock = false;
         osg::Vec3f mDeathKick; // how the killing blow throws the body
+        bool mCorpseIce = false;
+        ESM::RefId mStrikeElement;
+        ESM::RefId mStrikeWeapon;
+        ESM::RefNum mStrikeAttacker;
         bool mMagicDeathKick = false; // transient; use a whole-body launch for fatal spells
         float mMeleeSwingSide = 0.f; // transient: -1 left, +1 right, 0 unknown
         // The Lua Hit event is queued: preserve one side PER queued melee
@@ -255,6 +259,22 @@ namespace MWMechanics
             mMagicDeathKick = magic;
         }
         const osg::Vec3f& getDeathKick() const { return mDeathKick; }
+        bool hasCorpseIce() const { return mCorpseIce; }
+        void setCorpseIce(bool value) { mCorpseIce = value; }
+        void setStrikeElement(const ESM::RefId& element, const ESM::RefId& weapon, ESM::RefNum attacker)
+        {
+            mStrikeElement = element;
+            mStrikeWeapon = weapon;
+            mStrikeAttacker = attacker;
+        }
+        ESM::RefId consumeStrikeElement(const ESM::RefId& weapon, ESM::RefNum attacker)
+        {
+            if (weapon != mStrikeWeapon || attacker != mStrikeAttacker)
+                return {};
+            auto result = mStrikeElement;
+            mStrikeElement = {};
+            return result;
+        }
         bool hasMagicDeathKick() const { return mMagicDeathKick; }
 
         /// Temporary direction of the current attacking animation, valid only

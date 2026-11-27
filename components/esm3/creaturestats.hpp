@@ -106,6 +106,7 @@ namespace ESM
             std::string mBone;
             std::array<float, 16> mTransform;
         };
+        bool mCorpseIce = false;
         std::vector<StuckProjectile> mStuckProjectiles;
         /// Projectiles stuck in a living actor, not yet in its inventory: they are added when it dies.
         std::map<RefId, int32_t> mEmbeddedAmmo;

@@ -2039,6 +2039,8 @@ namespace MWMechanics
 
         updateMagicEffects();
         mAnimation->updateDeathSpellEffect(duration);
+        if (cls.isNpc() && cls.getCreatureStats(mPtr).isDead())
+            mAnimation->restoreCorpseIce();
 
         bool isPlayer = mPtr == MWMechanics::getPlayer();
         bool isFirstPersonPlayer = isPlayer && MWBase::Environment::get().getWorld()->isFirstPerson();
@@ -2906,6 +2908,7 @@ namespace MWMechanics
 
     void CharacterController::resurrect()
     {
+        mPtr.getClass().getCreatureStats(mPtr).setCorpseIce(false);
         if (mAnimation)
             mAnimation->clearDeathSpellEffect();
         if (mRagdoll)

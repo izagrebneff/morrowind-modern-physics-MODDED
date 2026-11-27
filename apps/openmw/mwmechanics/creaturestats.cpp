@@ -556,6 +556,7 @@ namespace MWMechanics
                     static_cast<float>(rotation.y()), static_cast<float>(rotation.z()),
                     static_cast<float>(rotation.w()), scale.x() } });
         }
+        state.mCorpseIce = mCorpseIce;
         state.mStuckProjectiles.clear();
         for (const StuckProjectile& projectile : mStuckProjectiles)
         {
@@ -625,6 +626,7 @@ namespace MWMechanics
                 osg::Matrixf::scale(p[7], p[7], p[7]) * osg::Matrixf::rotate(osg::Quat(p[3], p[4], p[5], p[6]))
                     * osg::Matrixf::translate(p[0], p[1], p[2]));
         }
+        mCorpseIce = state.mCorpseIce;
         mStuckProjectiles.clear();
         for (const ESM::CreatureStats::StuckProjectile& projectile : state.mStuckProjectiles)
             mStuckProjectiles.push_back(
