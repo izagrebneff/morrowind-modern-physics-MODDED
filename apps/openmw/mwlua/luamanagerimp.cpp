@@ -703,6 +703,26 @@ namespace MWLua
         mEngineEvents.addToQueue(EngineEvents::OnJailTimeServed{ getId(actor), days });
     }
 
+    // Filter for the upcoming surface blood decal renderer. Do not apply this to
+    // vanilla Hit events: other mods still need to receive every attack.
+    [[maybe_unused]] static bool allowsMeleeBloodDecal(const MWWorld::Ptr& victim)
+    {
+        if (victim.isEmpty() || !victim.getClass().isActor())
+            return false;
+        if (victim.getClass().isNpc())
+            return true;
+        std::string id = victim.getCellRef().getRefId().serializeText();
+        for (char& c : id)
+            if (c >= 'A' && c <= 'Z')
+                c = static_cast<char>(c - 'A' + 'a');
+        for (const char* token : { "skeleton", "skel_", "skel-", "ghost", "specter", "spectre",
+                 "wraith", "apparition", "spirit", "atronach", "centurion", "automaton", "robot",
+                 "golem", "dwarven", "dwemer" })
+            if (id.find(token) != std::string::npos)
+                return false;
+        return true;
+    }
+
     void LuaManager::onHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, const MWWorld::Ptr& weapon,
         const MWWorld::Ptr& ammo, int attackType, float attackStrength, float attackWindUp, float damage, bool isHealth,
         const osg::Vec3f& hitPos, bool successful, MWMechanics::DamageSourceType sourceType)
