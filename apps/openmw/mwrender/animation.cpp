@@ -2201,6 +2201,79 @@ namespace MWRender
         }
     }
 
+    void Animation::clearDeathSpellEffect()
+    {
+        if (mDeathSpellRemaining > 0.f || mDeathSpellLight)
+            removeEffect("corpse_death_vfx");
+        if (mDeathSpellLight)
+        {
+            while (mDeathSpellLight->getNumParents() > 0)
+                mDeathSpellLight->getParent(0)->removeChild(mDeathSpellLight);
+            mDeathSpellLight = nullptr;
+        }
+        mDeathSpellRemaining = 0.f;
+    }
+
+    void Animation::startDeathSpellEffect(const ESM::MagicEffect& effect, std::string_view model, float duration)
+    {
+        clearDeathSpellEffect();
+        if (!mObjectRoot || duration <= 0.f)
+            return;
+        mDeathSpellDuration = mDeathSpellRemaining = duration;
+        const bool fire = effect.mId == ESM::MagicEffect::FireDamage;
+        const bool frost = effect.mId == ESM::MagicEffect::FrostDamage;
+        const bool shock = effect.mId == ESM::MagicEffect::ShockDamage;
+        mDeathSpellFlicker = fire || shock;
+        osg::Vec4f color = effect.getColor();
+        if (fire) color.set(1.f, 0.35f, 0.08f, 1.f);
+        if (frost) color.set(0.35f, 0.7f, 1.f, 1.f);
+        if (shock) color.set(0.55f, 0.7f, 1.f, 1.f);
+        if (effect.mId == ESM::MagicEffect::Poison) color.set(0.2f, 0.8f, 0.15f, 1.f);
+        if (effect.mId == ESM::MagicEffect::AbsorbHealth) color.set(0.9f, 0.12f, 0.15f, 1.f);
+        if (frost)
+            addSpellCastGlow(color, duration);
+        osg::Group* parent = mInsert.get();
+        std::string_view bone;
+        const auto& nodes = getNodeMap();
+        const auto spine = nodes.find("bip01 spine1");
+        if (spine != nodes.end())
+        {
+            parent = spine->second;
+            bone = "bip01 spine1";
+        }
+        osg::ref_ptr<SceneUtil::Light> light(new SceneUtil::Light);
+        light->setDiffuse(color);
+        light->setAmbient(osg::Vec4f(0, 0, 0, 1));
+        light->setSpecular(color);
+        const float radius = fire ? 180.f : 110.f;
+        SceneUtil::configureLight(light, radius, mPtr.isInCell() && mPtr.getCell()->getCell()->isExterior());
+        mDeathSpellLight = new SceneUtil::LightSource;
+        mDeathSpellLight->setNodeMask(Mask_Lighting);
+        mDeathSpellLight->setLight(light);
+        mDeathSpellLight->setRadius(radius * 3.f);
+        parent->addChild(mDeathSpellLight);
+        if (!model.empty())
+            addEffect(model, "corpse_death_vfx", true, bone, effect.mParticle.getOriginal());
+    }
+
+    void Animation::updateDeathSpellEffect(float dt)
+    {
+        if (mDeathSpellRemaining <= 0.f)
+            return;
+        mDeathSpellRemaining -= std::max(0.f, dt);
+        if (mDeathSpellRemaining <= 0.f)
+        {
+            clearDeathSpellEffect();
+            return;
+        }
+        if (mDeathSpellLight)
+        {
+            const float fade = std::min(1.f, mDeathSpellRemaining / (mDeathSpellDuration * 0.4f));
+            const float flicker = mDeathSpellFlicker ? 0.85f + 0.15f * std::sin(mDeathSpellRemaining * 37.f) : 1.f;
+            mDeathSpellLight->setActorFade(fade * flicker * mActorFade);
+        }
+    }
+
     void Animation::addExtraLight(osg::ref_ptr<osg::Group> parent, const SceneUtil::LightCommon& esmLight)
     {
         bool exterior = mPtr.isInCell() && mPtr.getCell()->getCell()->isExterior();
@@ -2512,6 +2585,7 @@ namespace MWRender
 
     void Animation::removeFromSceneImpl()
     {
+        clearDeathSpellEffect();
         if (mGlowLight != nullptr)
             mInsert->removeChild(mGlowLight);
 

@@ -1383,6 +1383,22 @@ namespace MWMechanics
                 const bool wasDead = stats.isDead();
                 applied |= applyActorMagicEffect(
                     target, caster, spellParams, effect, receivedMagicDamage, affectedHealth, recalculateMagicka);
+                if (!wasDead && stats.isDead() && target.getClass().isNpc() && target != getPlayer())
+                {
+                    float duration = 5.f;
+                    if (effect.mEffectId == ESM::MagicEffect::FireDamage) duration = 10.f;
+                    else if (effect.mEffectId == ESM::MagicEffect::FrostDamage) duration = 15.f;
+                    else if (effect.mEffectId == ESM::MagicEffect::Poison) duration = 8.f;
+                    if (auto* animation = world->getAnimation(target))
+                    {
+                        const auto& statics = world->getStore().get<ESM::Static>();
+                        const auto* vfx = statics.search(magicEffect->mHit.empty()
+                            ? ESM::RefId::stringRefId("VFX_DefaultHit") : magicEffect->mHit);
+                        const auto model = vfx ? Misc::ResourceHelpers::correctMeshPath(vfx->mModel.getNormalized())
+                                               : VFS::Path::Normalized{};
+                        animation->startDeathSpellEffect(*magicEffect, model.value(), duration);
+                    }
+                }
                 // Active effects can kill long after the bolt hit, and bypass physical onHit damage.
                 // Only the live-to-dead transition from hostile magical health damage launches the body.
                 if (!wasDead && stats.isDead() && receivedMagicDamage && !caster.isEmpty() && caster != target

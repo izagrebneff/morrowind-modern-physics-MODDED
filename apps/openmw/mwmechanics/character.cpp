@@ -2038,6 +2038,7 @@ namespace MWMechanics
         float speed = 0.f;
 
         updateMagicEffects();
+        mAnimation->updateDeathSpellEffect(duration);
 
         bool isPlayer = mPtr == MWMechanics::getPlayer();
         bool isFirstPersonPlayer = isPlayer && MWBase::Environment::get().getWorld()->isFirstPerson();
@@ -2905,6 +2906,8 @@ namespace MWMechanics
 
     void CharacterController::resurrect()
     {
+        if (mAnimation)
+            mAnimation->clearDeathSpellEffect();
         if (mRagdoll)
         {
             MWBase::Environment::get().getWorld()->removeRagdoll(mPtr);
@@ -3030,6 +3033,8 @@ namespace MWMechanics
 
         for (std::string_view effectStr : effects)
         {
+            if (effectStr == "corpse_death_vfx")
+                continue;
             auto effectId = ESM::RefId::deserializeText(effectStr);
 
             if (MWBase::Environment::get().getESMStore()->get<ESM::MagicEffect>().search(effectId)

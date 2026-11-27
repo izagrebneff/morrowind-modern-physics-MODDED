@@ -249,6 +249,10 @@ namespace MWRender
         bool mHasMagicEffects;
 
         osg::ref_ptr<SceneUtil::LightSource> mGlowLight;
+        osg::ref_ptr<SceneUtil::LightSource> mDeathSpellLight;
+        float mDeathSpellRemaining = 0.f;
+        float mDeathSpellDuration = 0.f;
+        bool mDeathSpellFlicker = false;
         osg::ref_ptr<SceneUtil::GlowUpdater> mGlowUpdater;
         osg::ref_ptr<TransparencyUpdater> mTransparencyUpdater;
         osg::ref_ptr<SceneUtil::LightSource> mExtraLightSource;
@@ -377,6 +381,9 @@ namespace MWRender
 
         void removeEffect(std::string_view effectId);
         void removeEffects();
+        void startDeathSpellEffect(const ESM::MagicEffect& effect, std::string_view model, float duration);
+        void updateDeathSpellEffect(float dt);
+        void clearDeathSpellEffect();
         std::vector<std::string_view> getLoopingEffects() const;
 
         // Add a spell casting glow to an object. From measuring video taken from the original engine,
