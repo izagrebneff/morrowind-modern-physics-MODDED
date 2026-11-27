@@ -6,6 +6,9 @@
 #include <osg/Matrixf>
 
 #include <string_view>
+#include <functional>
+#include <optional>
+#include <osg/Vec3d>
 
 namespace SceneUtil
 {
@@ -68,6 +71,11 @@ namespace SceneUtil
         SurfaceDecals* getOrCreateSurfaceDecals();
         const SurfaceDecals* getSurfaceDecals() const { return mSurfaceDecals.get(); }
         SurfaceDecals* getSurfaceDecals() { return mSurfaceDecals.get(); }
+
+        // Current-pose snapshot used by surface projection, independent of cull buffers.
+        osg::ref_ptr<osg::Geometry> snapshotWorldGeometry(const osg::NodePath& path,
+            const std::function<std::optional<osg::Matrixf>(std::string_view)>& boneWorld, bool positionsOnly = false,
+            bool dynamicArraysOnly = false, const std::optional<osg::Vec3d>& referenceOrigin = {});
 
         void accept(osg::NodeVisitor& nv) override;
         bool supports(const osg::PrimitiveFunctor&) const override { return true; }
