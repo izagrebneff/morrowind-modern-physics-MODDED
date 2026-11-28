@@ -67,6 +67,7 @@ namespace SceneUtil
         void setRootBone(std::string_view name);
 
         osg::ref_ptr<osg::Geometry> getSourceGeometry() const;
+        void setSharedTexCoordArray(unsigned int unit, osg::ref_ptr<osg::Array> array);
 
         SurfaceDecals* getOrCreateSurfaceDecals();
         const SurfaceDecals* getSurfaceDecals() const { return mSurfaceDecals.get(); }

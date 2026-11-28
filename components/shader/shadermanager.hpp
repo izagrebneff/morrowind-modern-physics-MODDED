@@ -54,6 +54,8 @@ namespace Shader
             osg::ref_ptr<osg::Shader> fragmentShader, const osg::Program* programTemplate = nullptr,
             const SamplerBindingMap& samplers = {});
 
+        osg::ref_ptr<osg::Program> getProgramVariant(const osg::Program* program, const DefineMap& overrides);
+
         const osg::Program* getProgramTemplate() const { return mProgramTemplate; }
         void setProgramTemplate(const osg::Program* program) { mProgramTemplate = program; }
 
@@ -85,6 +87,7 @@ namespace Shader
             OpaqueColorTexture,
             SkyTexture,
             ShadowMaps,
+            MeleeBloodTextures,
             SLOT_COUNT
         };
 
@@ -116,6 +119,16 @@ namespace Shader
         typedef std::map<std::pair<osg::ref_ptr<osg::Shader>, osg::ref_ptr<osg::Shader>>, osg::ref_ptr<osg::Program>>
             ProgramMap;
         ProgramMap mPrograms;
+        struct ProgramSource
+        {
+            std::string mTemplateName;
+            DefineMap mDefines;
+            osg::ref_ptr<const osg::Program> mProgramTemplate;
+            SamplerBindingMap mSamplers;
+        };
+        std::map<const osg::Program*, ProgramSource> mProgramSources;
+
+
 
         typedef std::vector<osg::ref_ptr<osg::Shader>> ShaderList;
         typedef std::map<osg::ref_ptr<osg::Shader>, ShaderList> LinkedShadersMap;

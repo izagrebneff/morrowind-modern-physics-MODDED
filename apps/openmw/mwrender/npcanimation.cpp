@@ -732,7 +732,7 @@ namespace MWRender
     void NpcAnimation::removeIndividualPart(ESM::PartReferenceType type)
     {
         if (type != ESM::PRT_Weapon && type != ESM::PRT_Shield && type != ESM::PRT_Hair
-            && mObjectParts[type] && !mMeleeBloodPatches.empty())
+            && mObjectParts[type] && !mMeleeBloodMaterials.empty())
             mMeleeBloodRestored = false;
         mPartPriorities[type] = 0;
         mPartslots[type] = -1;

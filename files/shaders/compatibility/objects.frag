@@ -113,6 +113,47 @@ uniform sampler2D orthoDepthMap;
 varying vec3 orthoDepthMapCoord;
 #endif
 
+#if @meleeBloodMaterial
+// Wounds are evaluated in the original mesh's bind space, in its existing material pass.
+varying vec3 meleeBloodBindPos;
+uniform int meleeBloodCount;
+uniform vec4 meleeBloodU[12];
+uniform vec4 meleeBloodV[12];
+uniform vec4 meleeBloodPlane[12];
+uniform vec4 meleeBloodColorStyle[12];
+uniform sampler2D meleeBloodTex0;
+uniform sampler2D meleeBloodTex1;
+uniform sampler2D meleeBloodTex2;
+uniform sampler2D meleeBloodTex3;
+
+vec4 sampleMeleeBlood(vec2 uv, float style)
+{
+    if (style < 0.5) return texture2D(meleeBloodTex0, uv);
+    if (style < 1.5) return texture2D(meleeBloodTex1, uv);
+    if (style < 2.5) return texture2D(meleeBloodTex2, uv);
+    return texture2D(meleeBloodTex3, uv);
+}
+
+vec3 applyMeleeBlood(vec3 base)
+{
+    vec4 p = vec4(meleeBloodBindPos, 1.0);
+    for (int i = 0; i < 12; ++i)
+    {
+        if (i >= meleeBloodCount) break;
+        vec2 uv = vec2(dot(meleeBloodU[i], p), dot(meleeBloodV[i], p));
+        float depth = abs(dot(meleeBloodPlane[i], p));
+        if (depth > 1.0 || any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) continue;
+        vec4 stain = sampleMeleeBlood(uv, meleeBloodColorStyle[i].w);
+        vec3 delta = abs(stain.rgb - vec3(128.0 / 255.0));
+        float contrast = max(max(delta.r, delta.g), delta.b);
+        float coverage = smoothstep(0.025, 0.20, contrast) * stain.a * (1.0 - smoothstep(0.65, 1.0, depth));
+        vec3 pigment = meleeBloodColorStyle[i].rgb * mix(0.65, 1.0, clamp(contrast * 2.0, 0.0, 1.0));
+        base = mix(base, pigment, clamp(coverage, 0.0, 1.0));
+    }
+    return base;
+}
+#endif
+
 void main()
 {
 #if @particleOcclusion
@@ -214,6 +255,10 @@ vec2 screenCoords = gl_FragCoord.xy / screenRes;
 #endif
 
 #endif
+
+    #if @meleeBloodMaterial
+    gl_FragData[0].rgb = applyMeleeBlood(gl_FragData[0].rgb);
+    #endif
 
     float shadowing = unshadowedLightRatio(-passViewPos.z);
     vec3 lighting, specular;

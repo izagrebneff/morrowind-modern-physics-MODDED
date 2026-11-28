@@ -86,10 +86,16 @@ uniform mat4 osg_ViewMatrixInverse;
 uniform vec2 screenRes;
 
 centroid varying vec4 passColor;
+#if @meleeBloodMaterial
+varying vec3 meleeBloodBindPos;
+#endif
 
 void main(void)
 {
     Material material = getMaterial();
+#if @meleeBloodMaterial
+    meleeBloodBindPos = gl_MultiTexCoord6.xyz;
+#endif
 
 #if @particleOcclusion
     mat4 model = osg_ViewMatrixInverse * gl_ModelViewMatrix;

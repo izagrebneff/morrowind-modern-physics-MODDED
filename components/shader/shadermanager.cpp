@@ -664,14 +664,40 @@ namespace Shader
     osg::ref_ptr<osg::Program> ShaderManager::getProgram(const std::string& templateName, const DefineMap& defines,
         const osg::Program* programTemplate, const SamplerBindingMap& samplers)
     {
-        auto vert = getShader(templateName + ".vert", defines);
-        auto frag = getShader(templateName + ".frag", defines);
+        DefineMap effective = defines;
+        effective.try_emplace("meleeBloodMaterial", "0");
+        auto vert = getShader(templateName + ".vert", effective);
+        auto frag = getShader(templateName + ".frag", effective);
 
         if (!vert || !frag)
             throw std::runtime_error("failed initializing shader: " + templateName);
 
-        return getProgram(std::move(vert), std::move(frag), programTemplate, samplers);
+        auto program = getProgram(std::move(vert), std::move(frag), programTemplate, samplers);
+        if (program)
+        {
+            std::lock_guard<std::mutex> lock(mMutex);
+            mProgramSources.try_emplace(program.get(), ProgramSource{ templateName, effective,
+                programTemplate ? programTemplate : mProgramTemplate.get(), samplers });
+        }
+        return program;
     }
+
+    osg::ref_ptr<osg::Program> ShaderManager::getProgramVariant(const osg::Program* program, const DefineMap& overrides)
+    {
+        ProgramSource source;
+        {
+            std::lock_guard<std::mutex> lock(mMutex);
+            const auto found = mProgramSources.find(program);
+            if (found == mProgramSources.end())
+                return nullptr;
+            source = found->second;
+        }
+        for (const auto& [name, value] : overrides)
+            source.mDefines[name] = value;
+        return getProgram(source.mTemplateName, source.mDefines, source.mProgramTemplate.get(), source.mSamplers);
+    }
+
+
 
     osg::ref_ptr<osg::Program> ShaderManager::getProgram(osg::ref_ptr<osg::Shader> vertexShader,
         osg::ref_ptr<osg::Shader> fragmentShader, const osg::Program* programTemplate,
@@ -828,6 +854,9 @@ namespace Shader
                 break;
             case Slot::ShadowMaps:
                 slotDescr = "shadow maps";
+                break;
+            case Slot::MeleeBloodTextures:
+                slotDescr = "melee blood textures";
                 break;
             default:
                 slotDescr = "UNKNOWN";

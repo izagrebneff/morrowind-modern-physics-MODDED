@@ -47,6 +47,9 @@
 #include <components/resource/animblendrulesmanager.hpp>
 #include <components/resource/keyframemanager.hpp>
 #include <components/resource/scenemanager.hpp>
+#include <components/shader/shadermanager.hpp>
+#include <osg/Program>
+#include <osg/BufferObject>
 
 #include <components/esm3/loadcont.hpp>
 #include <components/esm3/loadcrea.hpp>
@@ -1630,70 +1633,121 @@ namespace MWRender
 
     }
 
-    osg::ref_ptr<osg::StateSet> Animation::createMeleeBloodState(osg::Image* image, std::string_view color)
+    namespace
     {
-        // Same look as the wounds on bodies: Dark Messiah's DecalModulate,
-        // multiplying the already lit surface around a neutral grey.
-        osg::ref_ptr<osg::Texture2D> texture = new osg::Texture2D(image);
-        texture->setWrap(osg::Texture::WRAP_S, osg::Texture::CLAMP_TO_EDGE);
-        texture->setWrap(osg::Texture::WRAP_T, osg::Texture::CLAMP_TO_EDGE);
-        mResourceSystem->getSceneManager()->applyFilterSettings(texture);
-        osg::ref_ptr<osg::Geometry> geometry
-            = osg::createTexturedQuadGeometry(osg::Vec3f(), osg::Vec3f(1, 0, 0), osg::Vec3f(0, 0, 1));
-        auto* state = geometry->getOrCreateStateSet();
-        const auto flags = osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE | osg::StateAttribute::PROTECTED;
-        state->setTextureAttributeAndModes(0, texture, flags);
-        state->setTextureAttribute(0, new SceneUtil::TextureType("diffuseMap"), flags);
-        state->setTextureAttribute(0, new osg::TexMat, flags);
-        state->setAttributeAndModes(new osg::BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE), flags);
-        state->setAttributeAndModes(new SceneUtil::AutoDepth(osg::Depth::LEQUAL, 0, 1, false), flags);
-        const bool wound = true;
-        const float offset = (SceneUtil::AutoDepth::isReversed() ? 1.f : -1.f) * (wound ? 1.f : 2.f);
-        state->setAttributeAndModes(new osg::PolygonOffset(offset, offset), flags);
-        state->setMode(
-            GL_CULL_FACE, osg::StateAttribute::OFF | osg::StateAttribute::OVERRIDE | osg::StateAttribute::PROTECTED);
-        state->setAttribute(new osg::ColorMask(true, true, true, false), flags);
-        // Protected: inside the first-person depth-clearing bin this becomes a
-        // nested bin drawn right after the held weapon.
-        state->setRenderBinDetails(1, "RenderBin",
-            wound ? osg::StateSet::OVERRIDE_RENDERBIN_DETAILS : osg::StateSet::PROTECTED_RENDERBIN_DETAILS);
-        osg::Vec3f tint(.34f, .018f, .012f);
-        bool recolor = true;
-        if (color == "tx_blood_blue.dds") tint.set(.12f, .32f, .95f);
-        else if (color == "tx_blood_green.dds") tint.set(.18f, .75f, .12f);
-        else if (color == "tx_blood_gold.dds") tint.set(.95f, .72f, .15f);
-        else if (color == "tx_blood_orange.dds") tint.set(.95f, .32f, .04f);
-        else if (color == "tx_blood_white.dds") tint.set(.95f, .95f, .95f);
-        else if (color == "tx_blood_dark.dds") tint.set(.15f, .12f, .13f);
-        else recolor = true;
-        state->addUniform(new osg::Uniform("bloodRecolor", recolor), flags);
-        state->addUniform(new osg::Uniform("bloodTint", tint), flags);
-        state->addUniform(new osg::Uniform("bloodFade", 0.f), flags);
-        state->addUniform(new osg::Uniform("bloodDry", 0.f), flags);
-        state->addUniform(new osg::Uniform("bloodFeather", false), flags);
-        state->addUniform(new osg::Uniform("bloodScale", 1.f), flags);
-        state->addUniform(new osg::Uniform("bloodVertexData", false), flags);
-        mResourceSystem->getSceneManager()->setUpNormalsRTForStateSet(state, false);
-        mResourceSystem->getSceneManager()->recreateShaders(geometry, "blooddecal");
-        osg::ref_ptr<osg::StateSet> result = geometry->getStateSet();
-        if (auto* program = result->getAttribute(osg::StateAttribute::PROGRAM))
-            result->setAttributeAndModes(program, flags);
-        // Shader generation can change inherited render state. Reassert the wound pass.
-        result->setMode(GL_BLEND, flags);
-        result->addUniform(new osg::Uniform("diffuseMap", 0), flags);
-        result->addUniform(new osg::Uniform("bloodDepthBias", SceneUtil::AutoDepth::isReversed() ? 0.00003f : -0.00003f), flags);
-        result->setMode(GL_ALPHA_TEST, osg::StateAttribute::OFF | osg::StateAttribute::OVERRIDE | osg::StateAttribute::PROTECTED);
-        result->setMode(GL_DEPTH_TEST, flags);
-        result->setAttributeAndModes(new osg::BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE), flags);
-        result->setAttributeAndModes(new SceneUtil::AutoDepth(osg::Depth::LEQUAL, 0, 1, false), flags);
-        result->setAttributeAndModes(new osg::PolygonOffset(offset * 4.f, offset * 4.f), flags);
-        result->setRenderBinDetails(1, "RenderBin", osg::StateSet::OVERRIDE_PROTECTED_RENDERBIN_DETAILS);
-        if (auto* compile = mResourceSystem->getSceneManager()->getIncrementalCompileOperation())
-            compile->add(geometry);
-        return result;
+        struct MaterialBloodWound
+        {
+            osg::Vec4f u, v, plane, colorStyle;
+            bool newest = false;
+        };
+
+        osg::Vec3f meleeBloodPigment(std::string_view color)
+        {
+            if (color == "tx_blood_blue.dds") return osg::Vec3f(.09f, .24f, .78f);
+            if (color == "tx_blood_green.dds") return osg::Vec3f(.12f, .62f, .08f);
+            if (color == "tx_blood_gold.dds") return osg::Vec3f(.89f, .65f, .10f);
+            if (color == "tx_blood_orange.dds") return osg::Vec3f(.88f, .24f, .025f);
+            if (color == "tx_blood_white.dds") return osg::Vec3f(.88f, .88f, .88f);
+            if (color == "tx_blood_dark.dds") return osg::Vec3f(.09f, .07f, .08f);
+            return osg::Vec3f(.46f, .025f, .018f);
+        }
+
+        std::optional<MaterialBloodWound> materialBloodWound(const Surface& surface,
+            const std::vector<SceneUtil::SurfaceDecals::Anchor>& anchors, unsigned style, const std::string& color)
+        {
+            const auto* vertices = dynamic_cast<const osg::Vec3Array*>(surface.source->getVertexArray());
+            if (!vertices || color == "none" || color == "tx_blood_energy.dds") return {};
+            float best = 0.f;
+            std::optional<MaterialBloodWound> result;
+            for (std::size_t i = 0; i + 2 < anchors.size(); i += 3)
+            {
+                osg::Vec3f p[3];
+                bool valid = true;
+                for (unsigned j = 0; j < 3; ++j)
+                {
+                    const auto& a = anchors[i+j];
+                    if (a.indices[0] >= vertices->size() || a.indices[1] >= vertices->size()
+                        || a.indices[2] >= vertices->size()) { valid = false; break; }
+                    const auto& x = (*vertices)[a.indices[0]];
+                    p[j] = x + ((*vertices)[a.indices[1]] - x) * a.weights.y()
+                        + ((*vertices)[a.indices[2]] - x) * a.weights.z();
+                }
+                if (!valid) continue;
+                const osg::Vec3f e1 = p[1] - p[0], e2 = p[2] - p[0];
+                osg::Vec3f normal = e1 ^ e2;
+                const float area = normal.normalize();
+                if (!std::isfinite(area) || area <= std::max(best, 1e-5f)) continue;
+                const osg::Vec2f du = anchors[i+1].uv - anchors[i].uv;
+                const osg::Vec2f dv = anchors[i+2].uv - anchors[i].uv;
+                if (std::abs(du.x()*dv.y() - du.y()*dv.x()) < 1e-7f) continue;
+                const osg::Vec3f dual1 = (e2 ^ normal) / area;
+                const osg::Vec3f dual2 = (normal ^ e1) / area;
+                const osg::Vec3f u = dual1 * du.x() + dual2 * dv.x();
+                const osg::Vec3f v = dual1 * du.y() + dual2 * dv.y();
+                const float gradient = std::max(u.length(), v.length());
+                if (!std::isfinite(gradient) || gradient < 1e-6f) continue;
+                const float depth = std::clamp(.30f / gradient, .5f, 8.f);
+                MaterialBloodWound wound;
+                wound.u = osg::Vec4f(u, anchors[i].uv.x() - u*p[0]);
+                wound.v = osg::Vec4f(v, anchors[i].uv.y() - v*p[0]);
+                wound.plane = osg::Vec4f(normal/depth, -(normal*p[0])/depth);
+                wound.colorStyle = osg::Vec4f(meleeBloodPigment(color), static_cast<float>(style));
+                best = area;
+                result = wound;
+            }
+            return result;
+        }
+
+        const osg::Program* bloodBaseProgram(const Surface& surface)
+        {
+            for (auto it = surface.path.rbegin(); it != surface.path.rend(); ++it)
+                if (const auto* state = (*it)->getStateSet())
+                    if (const auto* program = dynamic_cast<const osg::Program*>(state->getAttribute(osg::StateAttribute::PROGRAM)))
+                        return program;
+            return nullptr;
+        }
+
+        osg::Drawable* prepareBloodBindGeometry(Surface& surface)
+        {
+            constexpr unsigned unit = 6;
+            constexpr const char* name = "meleeBloodBindPosition";
+            const auto* vertices = dynamic_cast<const osg::Vec3Array*>(surface.source->getVertexArray());
+            if (!vertices) return nullptr;
+            if (const auto* existing = surface.source->getTexCoordArray(unit))
+            {
+                if (existing->getName() == name) return surface.drawable.get();
+                Log(Debug::Warning) << "[MeleeBlood] Bind coordinate slot 6 already occupied";
+                return nullptr;
+            }
+            osg::ref_ptr<osg::Vec3Array> bind = new osg::Vec3Array(*vertices);
+            bind->setName(name);
+            bind->setVertexBufferObject(new osg::VertexBufferObject);
+            if (auto* rig = dynamic_cast<SceneUtil::RigGeometry*>(surface.drawable.get()))
+                rig->setSharedTexCoordArray(unit, bind);
+            else if (auto* morph = dynamic_cast<SceneUtil::MorphGeometry*>(surface.drawable.get()))
+            {
+                osg::ref_ptr<osg::Geometry> carrier = new osg::Geometry(*surface.source, osg::CopyOp::SHALLOW_COPY);
+                carrier->setTexCoordArray(unit, bind, osg::Array::BIND_PER_VERTEX);
+                morph->setSourceGeometry(carrier);
+                morph->dirty();
+            }
+            else if (surface.drawable->asGeometry() && surface.path.size() >= 2)
+            {
+                auto* parent = surface.path[surface.path.size()-2]->asGroup();
+                if (!parent) return nullptr;
+                osg::ref_ptr<osg::Geometry> copy = new osg::Geometry(*surface.source, osg::CopyOp::SHALLOW_COPY);
+                copy->setTexCoordArray(unit, bind, osg::Array::BIND_PER_VERTEX);
+                if (!parent->replaceChild(surface.drawable, copy)) return nullptr;
+                surface.drawable = copy;
+                surface.source = copy;
+                surface.path.back() = copy.get();
+            }
+            else return nullptr;
+            return surface.drawable.get();
+        }
     }
 
-    osg::StateSet* Animation::getMeleeBloodState(unsigned style, const std::string& color)
+    osg::Texture2D* Animation::getMeleeBloodTexture(unsigned style)
     {
         constexpr const char* paths[] = {
             "textures/brutal_dm/model_blood_slash.png",
@@ -1702,20 +1756,21 @@ namespace MWRender
             "textures/brutal_dm/model_blood_tiny.png"
         };
         if (style >= 4) return nullptr;
-        auto& state = mMeleeBloodStates[{style, color}];
-        if (!state)
+        auto& texture = mMeleeBloodTextures[style];
+        if (!texture)
         {
             const VFS::Path::Normalized path(paths[style]);
             if (!mResourceSystem->getVFS()->exists(path))
             {
-                static std::set<std::string> warned;
-                if (warned.insert(path.value()).second)
-                    Log(Debug::Warning) << "[MeleeBlood] Missing external texture: " << path.value();
+                Log(Debug::Warning) << "[MeleeBlood] Missing external texture: " << path.value();
                 return nullptr;
             }
-            state = createMeleeBloodState(mResourceSystem->getImageManager()->getImage(path), color);
+            texture = new osg::Texture2D(mResourceSystem->getImageManager()->getImage(path));
+            texture->setWrap(osg::Texture::WRAP_S, osg::Texture::CLAMP_TO_EDGE);
+            texture->setWrap(osg::Texture::WRAP_T, osg::Texture::CLAMP_TO_EDGE);
+            mResourceSystem->getSceneManager()->applyFilterSettings(texture);
         }
-        return state.get();
+        return texture.get();
     }
 
     bool Animation::addMeleeBlood(const osg::Vec3f& position, const osg::Vec3f& outward,
@@ -1723,32 +1778,30 @@ namespace MWRender
     {
         try
         {
-            if (!mMeleeBloodRestored && mObjectRoot) restoreMeleeBlood();
-            const unsigned style = kind == "slash" || kind == "chop" ? 0 : power ? 2 : 1;
-            auto* state = getMeleeBloodState(style, mPtr.getRefData().mMeleeBloodTexture);
-            if (!state) return false;
-            const bool added = projectMeleeBlood(position, outward, kind, power, state);
-            Log(Debug::Info) << "[MeleeBlood] " << (added ? "Applied surface decal" : "No suitable surface")
+            const bool added = projectMeleeBlood(position, outward, kind, power);
+            Log(Debug::Info) << "[MeleeBlood] " << (added ? "Applied material wound" : "Material wound rejected")
                 << " actor=" << mPtr.getCellRef().getRefId().serializeText();
             return added;
         }
         catch (const std::exception& error)
         {
-            Log(Debug::Warning) << "Melee blood texture rejected: " << error.what();
+            Log(Debug::Warning) << "[MeleeBlood] Material wound rejected: " << error.what();
             return false;
         }
     }
 
-    void Animation::restoreMeleeBlood()
+    bool Animation::restoreMeleeBlood()
     {
         mMeleeBloodRestored = true;
-        for (const auto& patch : mMeleeBloodPatches)
-            if (osg::ref_ptr<SceneUtil::SurfaceDecals> marks; patch.decals.lock(marks))
-                marks->removePatch(patch.id);
-        mMeleeBloodPatches.clear();
-        if (mPtr.isEmpty() || !mPtr.getClass().isActor()) return;
+        for (const auto& entry : mMeleeBloodMaterials)
+            if (osg::ref_ptr<osg::Drawable> drawable; entry.drawable.lock(drawable)
+                && drawable->getStateSet() == entry.applied.get())
+                drawable->setStateSet(entry.base.get());
+        mMeleeBloodMaterials.clear();
+        if (mPtr.isEmpty() || !mPtr.getClass().isActor() || !mObjectRoot) return false;
         const auto& records = mPtr.getRefData().mMeleeBloodRecords;
-        if (records.empty()) return;
+        if (records.empty()) return false;
+        bool newestApplied = false;
         try
         {
             std::vector<Surface> surfaces;
@@ -1769,10 +1822,11 @@ namespace MWRender
                 SurfacesVisitor visitor(surfaces, 0, {});
                 visitor.collect(mObjectRoot.get());
             }
-            std::size_t total = 0;
-            for (const auto& record : records)
+
+            std::map<Surface*, std::vector<MaterialBloodWound>> grouped;
+            for (std::size_t recordIndex = 0; recordIndex < records.size(); ++recordIndex)
             {
-                std::istringstream in(record);
+                std::istringstream in(records[recordIndex]);
                 in.imbue(std::locale::classic());
                 int part;
                 unsigned ordinal, style;
@@ -1780,43 +1834,94 @@ namespace MWRender
                 std::size_t count;
                 std::string color;
                 if (!(in >> part >> ordinal >> fingerprint >> style >> std::quoted(color) >> count)
-                    || style >= 4 || color.size() > 64 || count == 0 || count > 3072
-                    || count % 3 || total + count > 8192) continue;
+                    || style >= 4 || color.size() > 64 || count == 0 || count > 3072 || count % 3) continue;
                 auto selected = std::find_if(surfaces.begin(), surfaces.end(), [&](const Surface& surface) {
                     return surface.part == part && surface.ordinal == ordinal && surface.fingerprint == fingerprint;
                 });
                 if (selected == surfaces.end()) continue;
                 std::vector<SceneUtil::SurfaceDecals::Anchor> anchors(count);
                 bool valid = true;
-                for (auto& v : anchors)
+                for (auto& a : anchors)
                 {
-                    if (!(in >> v.indices[0] >> v.indices[1] >> v.indices[2]
-                        >> v.weights.x() >> v.weights.y() >> v.weights.z() >> v.uv.x() >> v.uv.y()))
+                    if (!(in >> a.indices[0] >> a.indices[1] >> a.indices[2]
+                        >> a.weights.x() >> a.weights.y() >> a.weights.z() >> a.uv.x() >> a.uv.y()))
                     { valid = false; break; }
-                    for (auto index : v.indices)
-                        if (index >= selected->source->getVertexArray()->getNumElements()) valid = false;
                 }
-                if (!valid) continue;
-                auto* state = getMeleeBloodState(style, color);
-                if (!state) continue;
-                auto* decals = selected->attach();
-                if (!decals) continue;
-                const auto id = decals->addPatch(anchors, state, Mask_Effect);
-                if (!id) continue;
-                mMeleeBloodPatches.push_back({decals, id, count});
-                total += count;
+                if (!valid || !getMeleeBloodTexture(style)) continue;
+                auto wound = materialBloodWound(*selected, anchors, style, color);
+                if (!wound) continue;
+                wound->newest = recordIndex + 1 == records.size();
+                auto& wounds = grouped[&*selected];
+                if (wounds.size() >= 12) wounds.erase(wounds.begin());
+                wounds.push_back(*wound);
+            }
+            if (grouped.empty()) return false;
+            auto& manager = mResourceSystem->getSceneManager()->getShaderManager();
+            const int firstUnit = manager.reserveGlobalTextureUnits(Shader::ShaderManager::Slot::MeleeBloodTextures, 4);
+            for (auto& [surface, wounds] : grouped)
+            {
+                const auto* program = bloodBaseProgram(*surface);
+                if (!program)
+                {
+                    Log(Debug::Warning) << "[MeleeBlood] No base shader on wounded model";
+                    continue;
+                }
+                auto variant = manager.getProgramVariant(program, {{"meleeBloodMaterial", "1"}});
+                if (!variant || variant.get() == program)
+                {
+                    Log(Debug::Warning) << "[MeleeBlood] No distinct material shader variant";
+                    continue;
+                }
+                auto* drawable = prepareBloodBindGeometry(*surface);
+                if (!drawable) continue;
+                osg::ref_ptr<osg::StateSet> base = drawable->getStateSet();
+                osg::ref_ptr<osg::StateSet> state = base ? new osg::StateSet(*base, osg::CopyOp::SHALLOW_COPY)
+                    : new osg::StateSet;
+                const auto flags = osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE | osg::StateAttribute::PROTECTED;
+                state->setAttributeAndModes(variant, flags);
+                osg::ref_ptr<osg::Uniform> u = new osg::Uniform(osg::Uniform::FLOAT_VEC4, "meleeBloodU", 12);
+                osg::ref_ptr<osg::Uniform> v = new osg::Uniform(osg::Uniform::FLOAT_VEC4, "meleeBloodV", 12);
+                osg::ref_ptr<osg::Uniform> plane = new osg::Uniform(osg::Uniform::FLOAT_VEC4, "meleeBloodPlane", 12);
+                osg::ref_ptr<osg::Uniform> colors = new osg::Uniform(osg::Uniform::FLOAT_VEC4, "meleeBloodColorStyle", 12);
+                for (unsigned i = 0; i < 12; ++i)
+                {
+                    const MaterialBloodWound w = i < wounds.size() ? wounds[i] : MaterialBloodWound{};
+                    u->setElement(i, w.u);
+                    v->setElement(i, w.v);
+                    plane->setElement(i, w.plane);
+                    colors->setElement(i, w.colorStyle);
+                }
+                state->addUniform(u, flags);
+                state->addUniform(v, flags);
+                state->addUniform(plane, flags);
+                state->addUniform(colors, flags);
+                state->addUniform(new osg::Uniform("meleeBloodCount", static_cast<int>(wounds.size())), flags);
+                auto* fallback = getMeleeBloodTexture(static_cast<unsigned>(wounds.front().colorStyle.w()));
+                for (unsigned i = 0; i < 4; ++i)
+                {
+                    auto* texture = getMeleeBloodTexture(i);
+                    if (!texture) texture = fallback;
+                    state->setTextureAttributeAndModes(firstUnit + i, texture, flags);
+                    state->addUniform(new osg::Uniform(("meleeBloodTex" + std::to_string(i)).c_str(), firstUnit + static_cast<int>(i)), flags);
+                }
+                drawable->setStateSet(state);
+                mMeleeBloodMaterials.push_back({drawable, base, state});
+                for (const auto& wound : wounds) newestApplied |= wound.newest;
+                Log(Debug::Info) << "[MeleeBlood] Material shader attached: wounds=" << wounds.size()
+                    << " part=" << surface->part << " drawable=" << surface->ordinal;
             }
         }
         catch (const std::exception& error)
         {
-            Log(Debug::Warning) << "Melee blood restore rejected: " << error.what();
+            Log(Debug::Warning) << "[MeleeBlood] Material restore rejected: " << error.what();
         }
+        return newestApplied;
     }
 
     bool Animation::projectMeleeBlood(const osg::Vec3f& position, const osg::Vec3f& outward,
-        std::string_view kind, bool power, osg::StateSet* state)
+        std::string_view kind, bool power)
     {
-        if (!mObjectRoot || !state)
+        if (!mObjectRoot)
             return false;
         try
         {
@@ -1867,11 +1972,6 @@ namespace MWRender
                     << " hit=(" << position.x() << "," << position.y() << "," << position.z() << ")";
                 return false;
             }
-            auto* decals = selected->attach();
-            if (!decals) return false;
-            const auto id = decals->addPatch(best.vertices, state, Mask_Effect);
-            if (!id) return false;
-            mMeleeBloodPatches.push_back({decals, id, best.vertices.size()});
             auto& records = mPtr.getRefData().mMeleeBloodRecords;
             const unsigned style = kind == "slash" || kind == "chop" ? 0 : power ? 2 : 1;
             std::ostringstream saved;
@@ -1886,18 +1986,7 @@ namespace MWRender
             records.push_back(saved.str());
             while (records.size() > 24) records.erase(records.begin());
             mPtr.getRefData().setChanged(true);
-            std::size_t total = 0;
-            for (const auto& patch : mMeleeBloodPatches) total += patch.vertices;
-            while (mMeleeBloodPatches.size() > 24 || total > 8192)
-            {
-                const auto& patch = mMeleeBloodPatches.front();
-                if (osg::ref_ptr<SceneUtil::SurfaceDecals> marks; patch.decals.lock(marks))
-                    marks->removePatch(patch.id);
-                total -= patch.vertices;
-                mMeleeBloodPatches.pop_front();
-                if (records.size() > mMeleeBloodPatches.size()) records.erase(records.begin());
-            }
-            return true;
+            return restoreMeleeBlood();
         }
         catch (const std::exception& error)
         {
@@ -2544,7 +2633,7 @@ namespace MWRender
         }
         mObjectRoot = nullptr;
         mMeleeBloodRestored = false;
-        mMeleeBloodPatches.clear();
+        mMeleeBloodMaterials.clear();
         mSkeleton = nullptr;
 
         mNodeMap.clear();

@@ -19,6 +19,8 @@
 #include <components/vfs/pathutil.hpp>
 
 #include <osg/BoundingBox>
+#include <osg/Texture2D>
+#include <osg/Drawable>
 #include <osg/observer_ptr>
 
 #include <deque>
@@ -228,18 +230,16 @@ namespace MWRender
         // Stuck projectiles: the bone each is attached to, and its node.
         std::deque<std::pair<osg::observer_ptr<osg::Group>, osg::ref_ptr<osg::Node>>> mStuckProjectiles;
 
-        struct MeleeBloodPatch
+        struct MeleeBloodMaterial
         {
-            osg::observer_ptr<SceneUtil::SurfaceDecals> decals;
-            SceneUtil::SurfaceDecals::PatchId id;
-            std::size_t vertices;
+            osg::observer_ptr<osg::Drawable> drawable;
+            osg::ref_ptr<osg::StateSet> base, applied;
         };
-        std::deque<MeleeBloodPatch> mMeleeBloodPatches;
+        std::vector<MeleeBloodMaterial> mMeleeBloodMaterials;
         bool mMeleeBloodRestored = false;
-        void restoreMeleeBlood();
-        osg::StateSet* getMeleeBloodState(unsigned style, const std::string& color);
-        std::map<std::pair<unsigned, std::string>, osg::ref_ptr<osg::StateSet>> mMeleeBloodStates;
-        osg::ref_ptr<osg::StateSet> createMeleeBloodState(osg::Image* image, std::string_view color);
+        bool restoreMeleeBlood();
+        osg::Texture2D* getMeleeBloodTexture(unsigned style);
+        std::map<unsigned, osg::ref_ptr<osg::Texture2D>> mMeleeBloodTextures;
 
         MWWorld::Ptr mPtr;
 
@@ -499,7 +499,7 @@ namespace MWRender
         bool addMeleeBlood(const osg::Vec3f& position, const osg::Vec3f& outward,
             std::string_view kind, bool power);
         bool projectMeleeBlood(const osg::Vec3f& position, const osg::Vec3f& outward,
-            std::string_view kind, bool power, osg::StateSet* state);
+            std::string_view kind, bool power);
         void setBoneWorldMatrix(std::string_view bone, const osg::Matrixf& world);
         /// Stop every animation, leaving the bones as they are.
         void stopAllAnimations();
