@@ -12,8 +12,7 @@ void main()
     // A growing pool uses the same projected geometry throughout.
     float scale = bloodScale > 0.0 ? bloodScale : 1.0;
     vec4 stain = texture2D(diffuseMap, vec2(0.5) + (bloodUV - vec2(0.5)) / scale);
-    stain.a *= clamp(gl_FrontMaterial.diffuse.a,0.0,1.0)
-        * (1.0 - clamp(bloodParameters.r,0.0,1.0)) * bloodParameters.b;
+    stain.a *= (1.0 - clamp(bloodParameters.r,0.0,1.0)) * bloodParameters.b;
     // DecalModulate textures can have an opaque neutral background. Ignore
     // that background (including compression noise) before tinting dry blood.
     vec3 fromNeutral = abs(stain.rgb - vec3(128.0 / 255.0));

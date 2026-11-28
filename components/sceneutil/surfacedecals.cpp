@@ -1,4 +1,6 @@
 #include "surfacedecals.hpp"
+#include <components/debug/debuglog.hpp>
+#include <atomic>
 
 #include <osg/BufferObject>
 #include <osgUtil/CullVisitor>
@@ -177,7 +179,12 @@ namespace SceneUtil
             auto& buffer = patch.buffers[bufferIndex];
             osg::Geometry& geometry = *buffer.geometry;
             if (!patch.data.stateSet || !visitor.validNodeMask(geometry))
+            {
+                static std::atomic_bool warned{false};
+                if (!warned.exchange(true))
+                    Log(Debug::Info) << "[MeleeBlood] Cull mask rejected patch: " << visitor.getTraversalMask();
                 continue;
+            }
             if (buffer.source != source)
             {
                 auto* positions = static_cast<osg::Vec3Array*>(geometry.getVertexArray());
@@ -196,7 +203,12 @@ namespace SceneUtil
             {
                 if (geometry.getStateSet() != patch.data.stateSet)
                     geometry.setStateSet(patch.data.stateSet);
-                geometry.accept(visitor);
+                static std::atomic_bool reported{false};
+                if (!reported.exchange(true))
+                    Log(Debug::Info) << "[MeleeBlood] Submitting decal geometry to renderer";
+                visitor.pushOntoNodePath(&geometry);
+                visitor.apply(geometry);
+                visitor.popFromNodePath();
             }
         }
         if (sourceState)

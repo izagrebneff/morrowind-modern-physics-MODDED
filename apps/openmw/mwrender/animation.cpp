@@ -1678,6 +1678,14 @@ namespace MWRender
         osg::ref_ptr<osg::StateSet> result = geometry->getStateSet();
         if (auto* program = result->getAttribute(osg::StateAttribute::PROGRAM))
             result->setAttributeAndModes(program, flags);
+        // Shader generation can change inherited render state. Reassert the wound pass.
+        result->setMode(GL_BLEND, flags);
+        result->setMode(GL_ALPHA_TEST, osg::StateAttribute::OFF | osg::StateAttribute::OVERRIDE | osg::StateAttribute::PROTECTED);
+        result->setMode(GL_DEPTH_TEST, flags);
+        result->setAttributeAndModes(new osg::BlendFunc(GL_DST_COLOR, GL_SRC_COLOR, GL_ZERO, GL_ONE), flags);
+        result->setAttributeAndModes(new SceneUtil::AutoDepth(osg::Depth::LEQUAL, 0, 1, false), flags);
+        result->setAttributeAndModes(new osg::PolygonOffset(offset * 4.f, offset * 4.f), flags);
+        result->setRenderBinDetails(1, "RenderBin", osg::StateSet::OVERRIDE_PROTECTED_RENDERBIN_DETAILS);
         if (auto* compile = mResourceSystem->getSceneManager()->getIncrementalCompileOperation())
             compile->add(geometry);
         return result;
