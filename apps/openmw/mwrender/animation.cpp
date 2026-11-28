@@ -1645,7 +1645,7 @@ namespace MWRender
         state->setTextureAttributeAndModes(0, texture, flags);
         state->setTextureAttribute(0, new SceneUtil::TextureType("diffuseMap"), flags);
         state->setTextureAttribute(0, new osg::TexMat, flags);
-        state->setAttributeAndModes(new osg::BlendFunc(GL_DST_COLOR, GL_SRC_COLOR, GL_ZERO, GL_ONE), flags);
+        state->setAttributeAndModes(new osg::BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE), flags);
         state->setAttributeAndModes(new SceneUtil::AutoDepth(osg::Depth::LEQUAL, 0, 1, false), flags);
         const bool wound = true;
         const float offset = (SceneUtil::AutoDepth::isReversed() ? 1.f : -1.f) * (wound ? 1.f : 2.f);
@@ -1657,7 +1657,7 @@ namespace MWRender
         // nested bin drawn right after the held weapon.
         state->setRenderBinDetails(1, "RenderBin",
             wound ? osg::StateSet::OVERRIDE_RENDERBIN_DETAILS : osg::StateSet::PROTECTED_RENDERBIN_DETAILS);
-        osg::Vec3f tint(1.f, 0.f, 0.f);
+        osg::Vec3f tint(.34f, .018f, .012f);
         bool recolor = true;
         if (color == "tx_blood_blue.dds") tint.set(.12f, .32f, .95f);
         else if (color == "tx_blood_green.dds") tint.set(.18f, .75f, .12f);
@@ -1665,7 +1665,7 @@ namespace MWRender
         else if (color == "tx_blood_orange.dds") tint.set(.95f, .32f, .04f);
         else if (color == "tx_blood_white.dds") tint.set(.95f, .95f, .95f);
         else if (color == "tx_blood_dark.dds") tint.set(.15f, .12f, .13f);
-        else recolor = false;
+        else recolor = true;
         state->addUniform(new osg::Uniform("bloodRecolor", recolor), flags);
         state->addUniform(new osg::Uniform("bloodTint", tint), flags);
         state->addUniform(new osg::Uniform("bloodFade", 0.f), flags);
@@ -1680,9 +1680,11 @@ namespace MWRender
             result->setAttributeAndModes(program, flags);
         // Shader generation can change inherited render state. Reassert the wound pass.
         result->setMode(GL_BLEND, flags);
+        result->addUniform(new osg::Uniform("diffuseMap", 0), flags);
+        result->addUniform(new osg::Uniform("bloodDepthBias", SceneUtil::AutoDepth::isReversed() ? 0.00003f : -0.00003f), flags);
         result->setMode(GL_ALPHA_TEST, osg::StateAttribute::OFF | osg::StateAttribute::OVERRIDE | osg::StateAttribute::PROTECTED);
         result->setMode(GL_DEPTH_TEST, flags);
-        result->setAttributeAndModes(new osg::BlendFunc(GL_DST_COLOR, GL_SRC_COLOR, GL_ZERO, GL_ONE), flags);
+        result->setAttributeAndModes(new osg::BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE), flags);
         result->setAttributeAndModes(new SceneUtil::AutoDepth(osg::Depth::LEQUAL, 0, 1, false), flags);
         result->setAttributeAndModes(new osg::PolygonOffset(offset * 4.f, offset * 4.f), flags);
         result->setRenderBinDetails(1, "RenderBin", osg::StateSet::OVERRIDE_PROTECTED_RENDERBIN_DETAILS);
