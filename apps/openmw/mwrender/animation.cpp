@@ -1696,7 +1696,13 @@ namespace MWRender
         if (!state)
         {
             const VFS::Path::Normalized path(paths[style]);
-            if (!mResourceSystem->getVFS()->exists(path)) return nullptr;
+            if (!mResourceSystem->getVFS()->exists(path))
+            {
+                static std::set<std::string> warned;
+                if (warned.insert(path.value()).second)
+                    Log(Debug::Warning) << "[MeleeBlood] Missing external texture: " << path.value();
+                return nullptr;
+            }
             state = createMeleeBloodState(mResourceSystem->getImageManager()->getImage(path), color);
         }
         return state.get();
@@ -1709,8 +1715,12 @@ namespace MWRender
         {
             if (!mMeleeBloodRestored && mObjectRoot) restoreMeleeBlood();
             const unsigned style = kind == "slash" || kind == "chop" ? 0 : power ? 2 : 1;
-            return projectMeleeBlood(position, outward, kind, power,
-                getMeleeBloodState(style, mPtr.getRefData().mMeleeBloodTexture));
+            auto* state = getMeleeBloodState(style, mPtr.getRefData().mMeleeBloodTexture);
+            if (!state) return false;
+            const bool added = projectMeleeBlood(position, outward, kind, power, state);
+            Log(Debug::Info) << "[MeleeBlood] " << (added ? "Applied surface decal" : "No suitable surface")
+                << " actor=" << mPtr.getCellRef().getRefId().serializeText();
+            return added;
         }
         catch (const std::exception& error)
         {
@@ -1841,7 +1851,12 @@ namespace MWRender
                     selected = &surface;
                 }
             }
-            if (!selected) return false;
+            if (!selected)
+            {
+                Log(Debug::Info) << "[MeleeBlood] Projection rejected: candidate surfaces=" << surfaces.size()
+                    << " hit=(" << position.x() << "," << position.y() << "," << position.z() << ")";
+                return false;
+            }
             auto* decals = selected->attach();
             if (!decals) return false;
             const auto id = decals->addPatch(best.vertices, state, Mask_Effect);

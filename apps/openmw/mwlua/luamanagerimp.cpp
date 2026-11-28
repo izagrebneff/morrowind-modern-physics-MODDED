@@ -740,6 +740,9 @@ namespace MWLua
         const osg::Vec3f& hitPos, bool successful, MWMechanics::DamageSourceType sourceType)
     {
         // Cosmetic only; never change the vanilla Lua Hit event.
+        if (sourceType == MWMechanics::DamageSourceType::Melee && successful && damage > 0.f)
+            Log(Debug::Info) << "[MeleeBlood] Melee event health=" << isHealth
+                << " weapon=" << !weapon.isEmpty() << " damage=" << damage;
         if (sourceType == MWMechanics::DamageSourceType::Melee && successful && isHealth
             && damage > 0.f && !weapon.isEmpty() && weapon.getType() == ESM::Weapon::sRecordId
             && !attacker.isEmpty() && allowsMeleeBloodDecal(victim))
